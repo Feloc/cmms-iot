@@ -1,0 +1,123 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  TECH
+  VIEWER
+}
+
+model Tenant {
+  id         String   @id @default(cuid())
+  slug       String   @unique
+  name       String
+  users      User[]
+  assets     Asset[]
+  rules      Rule[]
+  alerts     Alert[]
+  notices    Notice[]
+  workOrders WorkOrder[]
+  inventory  InventoryItem[]
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+model User {
+  id        String   @id @default(cuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id])
+  email     String
+  password  String
+  role      Role     @default(ADMIN)
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@unique([tenantId, email])
+}
+
+model Asset {
+  id        String   @id @default(cuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id])
+  code      String
+  name      String
+  location  String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@unique([tenantId, code])
+}
+
+model Rule {
+  id        String   @id @default(cuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id])
+  assetCode String
+  sensor    String
+  type      String   // THRESHOLD | ROC
+  operator  String?  // >, <, >=, <= (para THRESHOLD)
+  value     Float?   // umbral
+  windowSec Int?     // para ROC
+  rocValue  Float?   // delta permitido
+  enabled   Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([tenantId, assetCode, sensor])
+}
+
+model Alert {
+  id        String   @id @default(cuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id])
+  assetCode String
+  sensor    String
+  kind      String   // THRESHOLD | ROC
+  message   String
+  status    String   @default("OPEN")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  notices   Notice[]
+  @@index([tenantId, assetCode, sensor])
+}
+
+model Notice {
+  id        String   @id @default(cuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id])
+  alertId   String
+  alert     Alert    @relation(fields: [alertId], references: [id])
+  title     String
+  status    String   @default("OPEN")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model WorkOrder {
+  id        String   @id @default(cuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id])
+  code      String
+  title     String
+  type      String   // PM | CM
+  status    String   @default("OPEN")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@unique([tenantId, code])
+}
+
+model InventoryItem {
+  id        String   @id @default(cuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id])
+  sku       String
+  name      String
+  qty       Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@unique([tenantId, sku])
+}

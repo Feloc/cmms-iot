@@ -1,0 +1,3 @@
+-- Ejemplo de RLS para tablas OLTP (no habilitado por defecto)
+-- ALTER TABLE "User" ENABLE ROW LEVEL SECURITY;
+-- CREATE POLICY user_tenant_isolation ON "User" USING ("tenantId" = current_setting('cmms.tenant', true));
