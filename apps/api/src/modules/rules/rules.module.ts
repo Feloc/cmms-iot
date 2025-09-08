@@ -2,5 +2,9 @@ import { Module } from '@nestjs/common';
 import { RulesService } from './rules.service';
 import { PrismaService } from '../../prisma.service';
 
-@Module({ providers: [RulesService, PrismaService], exports: [RulesService] })
+@Module({
+  imports: [],
+  providers: [RulesService, PrismaService],
+  exports: [RulesService],
+})
 export class RulesModule {}

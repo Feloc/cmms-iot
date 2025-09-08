@@ -8,3 +8,4 @@ apps/*/dist/
 **/.env
 .env
 .env.local
+.env.example

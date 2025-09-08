@@ -1,8 +1,13 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { MqttService } from './mqtt.service';
-import { TelemetryService } from '../telemetry/telemetry.service';
-import { RulesService } from '../rules/rules.service';
+import { RulesModule } from '../rules/rules.module';
 import { PrismaService } from '../../prisma.service';
 
-@Module({ providers: [MqttService, TelemetryService, RulesService, PrismaService] })
+@Module({
+  imports: [
+    forwardRef(() => RulesModule), // solo aquí usamos forwardRef en el módulo
+  ],
+  providers: [MqttService, PrismaService],
+  exports: [MqttService],
+})
 export class MqttModule {}

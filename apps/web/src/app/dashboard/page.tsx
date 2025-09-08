@@ -1,39 +1,122 @@
 'use client';
-import useSWR from 'swr';
-import { useSession } from 'next-auth/react';
 
-const fetcher = (url: string, token?: string, tenant?: string) => fetch(url, { headers: { 'Authorization': token ? `Bearer ${token}` : '', 'x-tenant': tenant || '' } }).then(r=>r.json());
+import useSWR from 'swr';
+import Link from 'next/link';
+import { useSession } from 'next-auth/react';
+import { apiFetch, sessionParts } from '@/lib/api';
+
+type KPI = {
+  availability: number;
+  mtbf: number;
+  mttr: number;
+  backlog: number;
+  preventiveRate: number;
+};
+
+type Alert = {
+  id: string;
+  assetCode: string;
+  sensor: string;
+  message: string;
+  status: string;
+  createdAt?: string;
+  ts?: string | null;
+  kind?: string | null;
+  type?: string | null;
+};
 
 export default function Dashboard() {
   const { data: session } = useSession();
-  const token = (session as any)?.accessToken;
-  const tenant = (session as any)?.user?.tenant;
-  const { data: kpis } = useSWR(session ? [`${process.env.NEXT_PUBLIC_API_URL}/dashboard`, token, tenant] : null, ([url, t, te]) => fetcher(url, t, te));
-  const { data: alerts } = useSWR(session ? [`${process.env.NEXT_PUBLIC_API_URL}/alerts/recent`, token, tenant] : null, ([url, t, te]) => fetcher(url, t, te));
+  const { token, tenant } = sessionParts(session);
 
-  if (!session) return <div style={{ padding: 24 }}><a href="/">Inicia sesión</a></div>
+  const { data: kpi, error: kpiErr } = useSWR<KPI>(
+    token && tenant ? ['/dashboard', token, tenant] : null,
+    ([url, t, ten]) => apiFetch(url, { token: t, tenant: ten }),
+  );
+
+  const { data: alerts, error: alertsErr } = useSWR<Alert[]>(
+    token && tenant ? ['/alerts/recent?take=6', token, tenant] : null,
+    ([url, t, ten]) => apiFetch(url, { token: t, tenant: ten }),
+  );
 
   return (
-    <div style={{ padding: 24 }}>
-      <h1>Dashboard</h1>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12 }}>
-        <Card title="Disponibilidad" value={kpis?.availability + '%'} />
-        <Card title="MTBF (h)" value={kpis?.mtbf} />
-        <Card title="MTTR (h)" value={kpis?.mttr} />
-        <Card title="Backlog WO" value={kpis?.backlog} />
-        <Card title="% Preventivo" value={kpis?.preventivePct + '%'} />
+    <div className="max-w-6xl mx-auto p-6 space-y-6">
+      <h1 className="text-2xl font-semibold">Dashboard</h1>
+
+      {/* KPIs */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+        <KpiCard label="Disponibilidad" value={fmtPct(kpi?.availability)} />
+        <KpiCard label="MTBF" value={fmtHours(kpi?.mtbf)} />
+        <KpiCard label="MTTR" value={fmtHours(kpi?.mttr)} />
+        <KpiCard label="Backlog (WO)" value={kpi?.backlog ?? '—'} />
+        <KpiCard label="% Preventivo" value={fmtPct(kpi?.preventiveRate)} />
       </div>
-      <h2 style={{ marginTop: 24 }}>Alertas recientes</h2>
-      <ul>
-        {alerts?.map((a: any) => <li key={a.id}>[{a.kind}] {a.assetCode}/{a.sensor} – {a.message} – {new Date(a.createdAt).toLocaleString()}</li>)}
-      </ul>
+
+      {/* Alertas recientes */}
+      <div className="rounded-xl border bg-white">
+        <div className="flex items-center justify-between p-4 border-b">
+          <h2 className="font-semibold">Alertas recientes</h2>
+          <Link href="/alerts" className="text-sm underline">
+            Ver todas
+          </Link>
+        </div>
+        {alertsErr ? (
+          <div className="p-4 text-sm text-red-600">
+            {(alertsErr as Error).message}
+          </div>
+        ) : (
+          <ul className="divide-y">
+            {(alerts ?? []).map((a) => {
+              const when = a.ts ?? a.createdAt;
+              const kind = a.kind ?? a.type ?? '';
+              return (
+                <li
+                  key={a.id}
+                  className="p-3 flex items-center justify-between gap-3"
+                >
+                  <div className="min-w-0">
+                    <div className="truncate font-medium">{a.message}</div>
+                    <div className="text-xs text-gray-600">
+                      {kind} · {a.assetCode}/{a.sensor}{' '}
+                      {when ? '· ' + new Date(when).toLocaleString() : ''}
+                    </div>
+                  </div>
+                  <span
+                    className={`text-[10px] px-2 py-0.5 rounded-full border shrink-0 ${
+                      a.status === 'OPEN'
+                        ? 'bg-red-50 border-red-300 text-red-700'
+                        : 'bg-green-50 border-green-300 text-green-700'
+                    }`}
+                  >
+                    {a.status}
+                  </span>
+                </li>
+              );
+            })}
+            {!alerts?.length && (
+              <li className="p-4 text-sm text-gray-500">No hay alertas.</li>
+            )}
+          </ul>
+        )}
+      </div>
     </div>
   );
 }
 
-function Card({ title, value }: { title: string, value: any }) {
-  return <div style={{ border: '1px solid #eee', borderRadius: 12, padding: 16 }}>
-    <div style={{ fontSize: 12, color: '#666' }}>{title}</div>
-    <div style={{ fontSize: 24, fontWeight: 700 }}>{value ?? '—'}</div>
-  </div>
+function KpiCard({ label, value }: { label: string; value?: string | number }) {
+  return (
+    <div className="rounded-xl border p-4 bg-white">
+      <div className="text-xs text-gray-500">{label}</div>
+      <div className="text-xl font-semibold">{value ?? '—'}</div>
+    </div>
+  );
+}
+
+function fmtPct(n?: number) {
+  if (typeof n !== 'number') return '—';
+  return `${(n * 100).toFixed(1)}%`;
+}
+function fmtHours(n?: number) {
+  if (typeof n !== 'number') return '—';
+  return `${n.toFixed(1)} h`;
 }
