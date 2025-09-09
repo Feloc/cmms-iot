@@ -11,6 +11,30 @@ import { RulesService } from '../rules/rules.service';
 import { PrismaService } from '../../prisma.service';
 import { Prisma } from '@prisma/client';
 
+function normalizeTs(input: unknown): Date {
+  if (input == null) return new Date();
+
+  // numérico: podría venir en segundos
+  const n = Number(input);
+  if (Number.isFinite(n)) {
+    const ms = n < 1e12 ? n * 1000 : n; // si es < 1e12, asumimos epoch en segundos
+    const d = new Date(ms);
+    if (!Number.isNaN(d.getTime())) return d;
+  }
+
+  // string ISO u otra representación válida
+  const d = new Date(String(input));
+  if (!Number.isNaN(d.getTime())) return d;
+
+  // fallback
+  return new Date();
+}
+
+function safeMeta(input: unknown): Prisma.JsonValue {
+  if (input && typeof input === 'object') return input as Prisma.JsonValue;
+  return {}; // siempre jsonb válido
+}
+
 @Injectable()
 export class MqttService implements OnModuleInit, OnModuleDestroy {
   private client!: MqttClient;
@@ -39,6 +63,7 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
     this.client.on('message', async (topicBuf, payloadBuf) => {
       const topic = topicBuf.toString();
       const payloadStr = payloadBuf.toString();
+
       try {
         // --- Topic
         const parts = topic.split('/');
@@ -61,18 +86,13 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
           return;
         }
 
-        const ts = payload?.ts ? new Date(payload.ts) : new Date();
-        if (Number.isNaN(ts.getTime())) {
-          this.logger.warn(`Timestamp inválido, usando now(): ${payload?.ts}`);
-        }
-
+        const ts = normalizeTs(payload?.ts);
         const value = Number(payload?.value);
         if (!Number.isFinite(value)) {
           this.logger.warn(`Valor inválido en payload: ${payload?.value}`);
           return;
         }
-
-        const meta: Prisma.JsonValue = payload?.meta ?? {};
+        const meta = safeMeta(payload?.meta);
 
         // --- Tenant
         const tenant = await this.prisma.tenant.findUnique({

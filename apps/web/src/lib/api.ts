@@ -1,41 +1,25 @@
-// apps/web/src/lib/api.ts
-export function sessionParts(session: any) {
-  const token =
-    (session as any)?.accessToken ??
-    (session as any)?.user?.token ??
-    (session as any)?.token ??
-    null;
-
-  const tenant =
-    (session as any)?.user?.tenant?.slug ??
-    (session as any)?.tenant?.slug ??
-    (session as any)?.tenant ??
-    null;
-
-  return { token, tenant };
-}
+export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
 
 export async function apiFetch(
   path: string,
-  opts: { token?: string; tenant?: string } = {},
+  token?: string,
+  tenant?: string,
+  init?: RequestInit
 ) {
-  const base =
-    process.env.NEXT_PUBLIC_API_URL?.replace(/\/+$/, '') ||
-    'http://localhost:3001';
-  const url = `${base}${path.startsWith('/') ? path : `/${path}`}`;
-
+  const url = `${API_URL}${path.startsWith('/') ? path : '/' + path}`;
   const res = await fetch(url, {
+    ...init,
     headers: {
+      ...(init?.headers || {}),
       'Content-Type': 'application/json',
-      ...(opts.token ? { Authorization: `Bearer ${opts.token}` } : {}),
-      ...(opts.tenant ? { 'x-tenant': opts.tenant } : {}),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(tenant ? { 'x-tenant': tenant } : {}),
     },
     cache: 'no-store',
   });
-
   if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    throw new Error(`API ${res.status} ${res.statusText} – ${body}`);
+    const msg = await res.text().catch(() => res.statusText);
+    throw new Error(`${res.status} ${msg}`);
   }
   return res.json();
 }

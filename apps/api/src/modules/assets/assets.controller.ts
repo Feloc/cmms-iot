@@ -1,18 +1,35 @@
-import { Controller, Get, Post, Put, Delete, Body, Param /*, UseGuards*/ } from '@nestjs/common';
-import { AssetsService, CreateAssetDto, UpdateAssetDto } from './assets.service';
-// Si tienes guardia JWT en modules/auth:
-// import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { Body, Controller, Delete, Get, Param, Post, Put, UsePipes, ValidationPipe } from '@nestjs/common';
+import { AssetsService } from './assets.service';
+import { CreateAssetDto } from './dto/create-asset.dto';
+import { UpdateAssetDto } from './dto/update-asset.dto';
 
 @Controller('assets')
-// @UseGuards(JwtAuthGuard)
+@UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
 export class AssetsController {
   constructor(private readonly assets: AssetsService) {}
 
-  @Get() findAll() { return this.assets.findAll(); }
+  @Get()
+  findAll() {
+    return this.assets.findAll();
+  }
 
-  @Post() create(@Body() dto: CreateAssetDto) { return this.assets.create(dto); }
+  @Get(':id')
+  findOne(@Param('id') id: string) {
+    return this.assets.findOne(id);
+  }
 
-  @Put(':id') update(@Param('id') id: string, @Body() dto: UpdateAssetDto) { return this.assets.update(id, dto); }
+  @Post()
+  create(@Body() dto: CreateAssetDto) {
+    return this.assets.create(dto);
+  }
 
-  @Delete(':id') remove(@Param('id') id: string) { return this.assets.remove(id); }
+  @Put(':id')
+  update(@Param('id') id: string, @Body() dto: UpdateAssetDto) {
+    return this.assets.update(id, dto);
+  }
+
+  @Delete(':id')
+  remove(@Param('id') id: string) {
+    return this.assets.remove(id);
+  }
 }

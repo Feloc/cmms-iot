@@ -1,81 +1,90 @@
-import NextAuth from "next-auth";
+import NextAuth, { NextAuthOptions } from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 
-const INTERNAL_API = "http://api:3001"; // servicio docker accesible desde el contenedor "web"
+const apiBase =
+  process.env.API_INTERNAL_URL ??
+  process.env.NEXT_PUBLIC_API_BASE ?? // fallback
+  "http://api:3001"; // último fallback dentro de docker
 
-const handler = NextAuth({
-  debug: true, // logs extra en el contenedor web
+export const authOptions: NextAuthOptions = {
   providers: [
     Credentials({
       name: "Credentials",
-      credentials: { tenant: {}, email: {}, password: {} },
-      async authorize(creds, req) {
+      credentials: {
+        tenant: { label: "Tenant", type: "text" },
+        email: { label: "Email", type: "email" },
+        password: { label: "Password", type: "password" },
+      },
+      async authorize(creds) {
+        if (!creds) return null;
+
         try {
-          // Toma campos desde el form (creds) o, si vienen vacíos, desde el body crudo
-          let body: any = {};
-          if (creds && (creds as any).email) body = creds;
-          else {
-            try { body = await (req as any).json(); } catch { body = {}; }
-          }
-
-          const tenant   = (body.tenant   ?? (creds as any)?.tenant   ?? "").toString();
-          const email    = (body.email    ?? (creds as any)?.email    ?? "").toString();
-          const password = (body.password ?? (creds as any)?.password ?? "").toString();
-
-          if (!tenant || !email || !password) {
-            console.error("AUTH_MISSING_FIELDS", { tenant, email, hasPassword: !!password });
-            return null;
-          }
-
-          const res = await fetch(`${INTERNAL_API}/auth/login`, {
+          const res = await fetch(`${apiBase}/auth/login`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ tenant, email, password }),
-            cache: "no-store"
+            headers: {
+              "Content-Type": "application/json",
+              // algunos backends leen el tenant por header también:
+              "x-tenant": String(creds.tenant || ""),
+            },
+            body: JSON.stringify({
+              tenant: creds.tenant,
+              email: creds.email,
+              password: creds.password,
+            }),
+            cache: "no-store",
           });
 
-          const text = await res.text();
           if (!res.ok) {
-            console.error("AUTH_LOGIN_FAIL", res.status, text);
+            // imprime error del backend para depurar
+            const txt = await res.text().catch(() => "");
+            console.error(
+              `[nextauth] /auth/login ${res.status} ${res.statusText} :: ${txt}`
+            );
             return null;
           }
 
-          let data: any = {};
-          try { data = JSON.parse(text); } catch {
-            console.error("AUTH_PARSE_FAIL", text);
-            return null;
-          }
+          const data = await res.json(); // { token, tenant, user }
+          if (!data?.token || !data?.user || !data?.tenant) return null;
 
           return {
             id: data.user.id,
             email: data.user.email,
+            name: data.user.name,
+            tenantId: data.tenant.id,
+            tenantSlug: data.tenant.slug,
+            accessToken: data.token,
             role: data.user.role,
-            tenant: data.tenant.slug,
-            accessToken: data.token
           } as any;
         } catch (e) {
-          console.error("AUTH_LOGIN_ERROR", e);
+          console.error("[nextauth] fetch failed:", e);
           return null;
         }
-      }
-    })
+      },
+    }),
   ],
   session: { strategy: "jwt" },
   callbacks: {
     async jwt({ token, user }) {
       if (user) {
-        (token as any).accessToken = (user as any).accessToken;
-        (token as any).tenant = (user as any).tenant;
+        token.accessToken = (user as any).accessToken;
+        token.tenantId = (user as any).tenantId;
+        token.tenantSlug = (user as any).tenantSlug;
+        token.role = (user as any).role;
       }
-      return token as any;
+      return token;
     },
     async session({ session, token }) {
-      (session as any).accessToken = (token as any).accessToken;
-      (session.user as any).tenant = (token as any).tenant;
+      (session as any).accessToken = token.accessToken;
+      (session as any).tenantId = token.tenantId;
+      (session as any).tenantSlug = token.tenantSlug;
+      (session as any).role = token.role;
       return session;
-    }
+    },
   },
-  secret: process.env.NEXTAUTH_SECRET || "dev_secret"
-});
+  pages: { signIn: "/login" },
+  debug: true,
+  // Si estás en Docker, asegúrate de tener NEXTAUTH_URL en .env.local
+};
 
+const handler = NextAuth(authOptions);
 export { handler as GET, handler as POST };
