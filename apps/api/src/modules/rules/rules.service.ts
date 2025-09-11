@@ -33,16 +33,35 @@ export class RulesService {
 
     if (!rules.length) return;
 
+    this.logger.debug(`Rules:\n${JSON.stringify(rules, null, 2)}`);
+
     for (const rule of rules) {
       try {
-        if (rule.kind === 'THRESHOLD') {
-          await this.checkThreshold(rule as any, tenantId, assetCode, sensor, ts, value);
-        } else if (rule.kind === 'ROC') {
-          await this.checkRoc(rule as any, tenantId, assetCode, sensor, ts, value);
+        if (rule.type === 'THRESHOLD') {
+          await this.checkThreshold(
+            {
+              id: rule.id,
+              operator: rule.operator as any,
+              // En tu schema el umbral está en "value"
+              threshold: rule.value ?? undefined
+            },
+            tenantId, assetCode, sensor, ts, value
+          );
+        } else if (rule.type === 'ROC') {
+          await this.checkRoc(
+            {
+              id: rule.id,
+              operator: (rule.operator as any) ?? '>',
+              // En schema vi campos: rocValue y windowSec (por los hints de Prisma en tu log)
+              rocDelta: (rule as any).rocValue ?? undefined,
+              rocWindowSec: (rule as any).windowSec ?? undefined
+            },
+            tenantId, assetCode, sensor, ts, value
+          );
         }
       } catch (err) {
         this.logger.error(
-          `Error evaluando regla ${rule.id} (${rule.kind}) ${assetCode}/${sensor}: ${
+          `Error evaluando regla ${rule.id} (${(rule as any).type}) ${assetCode}/${sensor}: ${
             err instanceof Error ? err.message : String(err)
           }`,
         );
@@ -68,7 +87,7 @@ export class RulesService {
     value: number,
   ) {
     const op: Operator = (rule.operator as Operator) ?? '>';
-    const threshold = Number(rule.threshold);
+    const threshold = Number((rule as any).threshold ?? (rule as any).value);
     if (!Number.isFinite(threshold)) return;
 
     const fired = this.compare(op, value, threshold);
@@ -86,7 +105,7 @@ export class RulesService {
       ts,
       value,
       delta: null,
-      kind: 'THRESHOLD',
+      type: 'THRESHOLD',
       message: msg,
       severity: rule.severity ?? 'MEDIUM',
     });
@@ -115,9 +134,18 @@ export class RulesService {
     value: number,
   ) {
     const op: Operator = (rule.operator as Operator) ?? '>';
-    const limit = this.firstNumber(rule.rocDelta, rule.delta, rule.threshold, 0);
+    const limit = this.firstNumber(
+      rule.rocDelta,
+      (rule as any).rocValue,
+      (rule as any).value,
+      (rule as any).threshold,
+    );
     const useAbs = rule.absolute !== false; // default: true
-    const windowSec = this.firstNumber(rule.rocWindowSec, rule.windowSec, 300);
+    const windowSec = this.firstNumber(
+      rule.rocWindowSec,
+      (rule as any).windowSec, 
+      300
+    );
 
     // Trae 2 muestras en la ventana [ts-window, ts] (ts incluida), ordenadas DESC
     const since = new Date(ts.getTime() - windowSec * 1000);
@@ -160,7 +188,7 @@ export class RulesService {
       ts,
       value,
       delta,
-      kind: 'ROC',
+      type: 'ROC',
       message: msg,
       severity: rule.severity ?? 'HIGH',
     });
@@ -201,23 +229,23 @@ export class RulesService {
     ts: Date;
     value: number;
     delta: number | null;
-    kind: 'THRESHOLD' | 'ROC';
+    type: 'THRESHOLD' | 'ROC';
     message: string;
     severity?: string;
   }) {
-    const { tenantId, ruleId, assetCode, sensor, ts, value, delta, kind, message, severity } = params;
+    const { tenantId, ruleId, assetCode, sensor, ts, value, delta, type, message, severity } = params;
 
     // ALERT
     try {
       // Ajusta los nombres de campos a tu prisma.schema:
-      // tenantId, ruleId, assetCode, sensor, kind, message, value, delta, ts, status, severity
+      // tenantId, ruleId, assetCode, sensor, type, message, value, delta, ts, status, severity
       await this.prisma.alert.create({
         data: {
           tenantId,
           ruleId,
           assetCode,
           sensor,
-          kind: kind as any,
+          type: type as any,
           message,
           value,
           // @ts-ignore por si tu modelo no tiene delta/ts/severity:

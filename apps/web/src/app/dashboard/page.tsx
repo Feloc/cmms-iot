@@ -16,7 +16,7 @@ type Alert = {
 
 export default function Dashboard() {
   const { data: session } = useSession();
-  const token = (session as any)?.backendToken as string | undefined;
+  const token = (session as any)?.backendToken as string | undefined;  
   const tenantSlug = (session as any)?.tenant?.slug as string | undefined;
 
   const { data: alerts } = useSWR<Alert[]>(

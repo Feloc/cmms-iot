@@ -1,25 +1,45 @@
-export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
+const baseFromEnv = (v?: string) => (v ? v.replace(/\/$/, "") : undefined);
 
-export async function apiFetch(
+const apiBase =
+  typeof window === "undefined"
+    ? baseFromEnv(process.env.API_INTERNAL_URL) ?? "http://api:3001"
+    : baseFromEnv(process.env.NEXT_PUBLIC_API_URL) ?? "http://localhost:3001";
+
+/**
+ * Llama a la API externa (apps/api) y agrega headers de auth y tenant.
+ * `path` puede ser "assets" o "/assets".
+ */
+export async function apiFetch<T>(
   path: string,
-  token?: string,
-  tenant?: string,
-  init?: RequestInit
-) {
-  const url = `${API_URL}${path.startsWith('/') ? path : '/' + path}`;
+  opts: {
+    method?: string;
+    token?: string;
+    tenantSlug?: string;
+    body?: any;
+  } = {},
+): Promise<T> {
+  const { method = "GET", token, tenantSlug, body } = opts;
+  const url = `${apiBase}${path.startsWith("/") ? path : `/${path}`}`;
+
   const res = await fetch(url, {
-    ...init,
+    method,
     headers: {
-      ...(init?.headers || {}),
-      'Content-Type': 'application/json',
+      "Content-Type": "application/json",
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(tenant ? { 'x-tenant': tenant } : {}),
+      ...(tenantSlug ? { "x-tenant": tenantSlug } : {}),
     },
-    cache: 'no-store',
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
   });
+
   if (!res.ok) {
-    const msg = await res.text().catch(() => res.statusText);
-    throw new Error(`${res.status} ${msg}`);
+    const text = await res.text().catch(() => "");
+    throw new Error(`API ${method} ${url} -> ${res.status} ${text}`);
   }
-  return res.json();
+
+  // Si no hay body (204), devuelve undefined
+  if (res.status === 204) return undefined as unknown as T;
+
+  return res.json() as Promise<T>;
 }
+
+export { apiBase };

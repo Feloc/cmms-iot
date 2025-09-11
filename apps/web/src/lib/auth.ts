@@ -1,18 +1,33 @@
-// Extractor tolerante a diferentes formas de session
-export function getAuthFromSession(session: any) {
+import type { Session } from "next-auth";
+
+/**
+ * Extrae token y tenantSlug exclusivamente desde la sesión de NextAuth.
+ * Si opts.require === true y falta alguno, lanza Error.
+ */
+export function getAuthFromSession(
+  session: Session | null | undefined,
+  opts?: { require?: boolean }
+) {
+  const s: any = session ?? {};
+
   const token =
-    session?.accessToken ??
-    session?.token ??
-    session?.user?.token ??
-    session?.user?.accessToken ??
-    // fallback dev opcional
-    process.env.NEXT_PUBLIC_STATIC_TOKEN ?? null;
+    s.accessToken ??
+    s.token ??
+    s.user?.token ??
+    s.user?.accessToken;
 
-  const tenant =
-    session?.user?.tenant?.slug ??
-    session?.tenant?.slug ??
-    process.env.NEXT_PUBLIC_DEFAULT_TENANT ??
-    null;
+  const tenantSlug =
+    s.tenantSlug ??
+    s.user?.tenantSlug ??
+    s.user?.tenant?.slug ??
+    s.tenant?.slug;
 
-  return { token, tenant };
+  if (opts?.require && (!token || !tenantSlug)) {
+    throw new Error("No hay credenciales disponibles. Inicia sesión.");
+  }
+
+  return {
+    token: token ?? undefined,
+    tenantSlug: tenantSlug ?? undefined,
+  };
 }

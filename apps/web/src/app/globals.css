@@ -1,2 +1,25 @@
-* { box-sizing: border-box; }
-body { background: #fafafa; }
+@import "tailwindcss";
+
+/* Tokens mínimos para que los componentes de shadcn no “griten” */
+@theme {
+  --radius: 0.75rem;
+
+  /* Colores base (ajústalos a tu paleta) */
+  --color-background: 255 255 255;
+  --color-foreground: 10 10 10;
+
+  --color-muted: 245 245 247;
+  --color-muted-foreground: 113 113 122;
+
+  --color-border: 228 228 231;
+}
+
+/* Reseteo y fondo/texto por defecto */
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}

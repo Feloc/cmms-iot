@@ -45,7 +45,16 @@ services:
   web:
     build: ./apps/web
     container_name: cmms_web
-    env_file: .env
+    environment:
+      NEXTAUTH_URL: "http://localhost:3000"
+      NEXTAUTH_SECRET: "supersecret_local_123"
+      # Para llamadas del servidor (dentro del contenedor web) al API
+      API_INTERNAL_URL: "http://api:3001"
+      # Para el navegador del usuario hacia el API (cuando hagas fetch desde el cliente)
+      NEXT_PUBLIC_API_URL: "http://localhost:3001"
+    env_file: 
+      - .env
+      - ./apps/web/.env.local
     ports:
       - "3000:3000"
     depends_on:

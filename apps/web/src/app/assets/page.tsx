@@ -1,79 +1,97 @@
-'use client';
-
-import useSWR from 'swr';
-import Link from 'next/link';
-import { useSession } from 'next-auth/react';
-import { apiFetch } from '../../lib/api';
-import { getAuthFromSession } from '../../lib/auth';
+"use client";
+import { Logger } from "@nestjs/common";
+import Link from "next/link";
+import { useSession } from "next-auth/react";
+import { useApiSWR } from "@/lib/swr";
 
 type Asset = {
-  id: string; code: string; name: string; type?: string; location?: string;
-  createdAt: string; updatedAt: string;
+  id: string;
+  code: string;
+  name: string;
+  type?: string | null;
+  location?: string | null;
 };
+
+function getTenantSlugFromSession(session: any): string | undefined {
+  return (
+    session?.tenant?.slug ||
+    session?.user?.tenant?.slug ||
+    session?.user?.tenantSlug ||
+    process.env.NEXT_PUBLIC_TENANT_SLUG
+  );
+}
 
 export default function AssetsPage() {
   const { data: session, status } = useSession();
-  const { token, tenant } = getAuthFromSession(session);
 
-  const canFetch = !!token && !!tenant;
-  const { data, error, mutate, isLoading } = useSWR<Asset[]>(
-    canFetch ? ['/assets', token, tenant] : null,
-    ([path, t, ten]) => apiFetch(path as string, t as string, ten as string),
-    { revalidateOnFocus: true }
+  // SIEMPRE define token/tenant y llama al hook:
+  const token = (session as any)?.token as string | undefined;
+  const tenantSlug = getTenantSlugFromSession(session);
+  const { data, error, isLoading } = useApiSWR<Asset[]>(
+    "assets",
+    token,
+    tenantSlug
   );
 
-  async function del(id: string) {
-    if (!confirm('¿Eliminar asset?')) return;
-    await apiFetch(`/assets/${id}`, token!, tenant!, { method: 'DELETE' });
-    mutate();
+  if (status === "loading") return <p className="p-4">Cargando sesión…</p>;
+  if (status !== "authenticated") {
+    return (
+      <div className="p-4 space-y-2">
+        <h1 className="text-xl font-semibold">Assets</h1>
+        <p>
+          No autenticado.{" "}
+          <Link href="/login" className="text-blue-600 underline">
+            Inicia sesión
+          </Link>.
+        </p>
+      </div>
+    );
   }
 
   return (
-    <main className="p-6 space-y-4">
+    <div className="p-4 space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Assets</h1>
-        <Link href="/assets/new" className="rounded-xl px-3 py-2 border">Nuevo</Link>
+        <Link href="/assets/new" className="px-3 py-2 rounded bg-blue-600 text-white">
+          Nuevo
+        </Link>
       </div>
 
-      {status === 'loading' && <div>Cargando sesión…</div>}
-
-      {!canFetch && status !== 'loading' && (
-        <div className="text-amber-600 text-sm">
-          No hay credenciales disponibles. Inicia sesión o define NEXT_PUBLIC_STATIC_TOKEN para desarrollo.
+      {!tenantSlug && (
+        <div className="rounded border p-3 text-sm">
+          <b>Atención:</b> no encuentro el <code>tenantSlug</code> en la sesión.
+          En desarrollo puedes definir <code>NEXT_PUBLIC_TENANT_SLUG=acme</code> en <code>apps/web/.env.local</code>.
         </div>
       )}
 
-      {isLoading && canFetch && <div>Cargando…</div>}
-      {error && canFetch && <div className="text-red-500 text-sm">Error cargando assets</div>}
-      {canFetch && data && data.length === 0 && <div>No hay assets</div>}
-
-      {canFetch && !!data?.length && (
-        <table className="w-full border rounded overflow-hidden">
-          <thead className="bg-gray-50">
-            <tr>
-              <th className="p-2 text-left">Código</th>
-              <th className="p-2 text-left">Nombre</th>
-              <th className="p-2 text-left">Tipo</th>
-              <th className="p-2 text-left">Ubicación</th>
-              <th className="p-2 text-right">Acciones</th>
-            </tr>
-          </thead>
-          <tbody>
-            {data.map((a) => (
-              <tr key={a.id} className="border-t">
-                <td className="p-2">{a.code}</td>
-                <td className="p-2">{a.name}</td>
-                <td className="p-2">{a.type ?? '—'}</td>
-                <td className="p-2">{a.location ?? '—'}</td>
-                <td className="p-2 text-right space-x-2">
-                  <Link href={`/assets/${a.id}/edit`} className="px-2 py-1 border rounded">Editar</Link>
-                  <button onClick={() => del(a.id)} className="px-2 py-1 border rounded">Eliminar</button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      {isLoading && <p>Cargando…</p>}
+      {error && (
+        <div className="rounded border border-red-300 bg-red-50 p-3 text-sm">
+          Error cargando assets: {(error as Error).message}
+        </div>
       )}
-    </main>
+
+      {!!data && data.length === 0 && <p>No hay assets.</p>}
+
+      {!!data && data.length > 0 && (
+        <ul className="divide-y border rounded">
+          {data.map((a) => (
+            <li key={a.id} className="p-3 flex items-center justify-between">
+              <div>
+                <div className="font-medium">{a.name}</div>
+                <div className="text-sm text-gray-500">
+                  {a.code}
+                  {a.type ? ` • ${a.type}` : ""}
+                  {a.location ? ` • ${a.location}` : ""}
+                </div>
+              </div>
+              <Link className="text-blue-600 hover:underline" href={`/assets/${a.id}/edit`}>
+                Editar
+              </Link>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }

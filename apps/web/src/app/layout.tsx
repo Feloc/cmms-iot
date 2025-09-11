@@ -1,8 +1,5 @@
+import "./globals.css";
 import Providers from "./providers";
-
-export const metadata = {
-  title: "CMMS IoT",
-};
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
