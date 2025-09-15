@@ -34,6 +34,7 @@ async function bootstrap() {
       hdr['x-org'];
 
     let tenantId: string | undefined;
+    let userId: string | undefined;
 
     if (headerTenant) {
       const slug = Array.isArray(headerTenant)
@@ -41,19 +42,22 @@ async function bootstrap() {
         : String(headerTenant);
       const t = await prisma.tenant.findUnique({ where: { slug } });
       tenantId = t?.id;
-    } else if (hdr.authorization && typeof hdr.authorization === 'string' && hdr.authorization.startsWith('Bearer ')) {
+    }
+    
+    if (hdr.authorization && typeof hdr.authorization === 'string' && hdr.authorization.startsWith('Bearer ')) {
       try {
         const token = hdr.authorization.substring(7);
         const decoded = jwt.decode(token) as null | string | { [k: string]: any };
         if (decoded && typeof decoded === 'object') {
-          tenantId = decoded.tenantId as string | undefined;
+          tenantId = tenantId ?? (decoded.tenantId as string | undefined);
+          userId = decoded.sub as string | undefined;  // típico campo userId
         }
       } catch {
         // no-op: si el token no se puede decodificar, seguimos sin tenantId
       }
     }
 
-    tenantStorage.run({ tenantId }, () => next());
+    tenantStorage.run({ tenantId, userId }, () => next());
   });
 
   // Graceful shutdown (sin $on('beforeExit'))

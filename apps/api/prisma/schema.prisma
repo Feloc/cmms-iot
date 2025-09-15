@@ -13,6 +13,7 @@ enum Role {
   VIEWER
 }
 
+
 model Tenant {
   id         String   @id @default(cuid())
   slug       String   @unique
@@ -87,29 +88,107 @@ model Alert {
 }
 
 model Notice {
-  id        String   @id @default(cuid())
-  tenantId  String
-  tenant    Tenant   @relation(fields: [tenantId], references: [id])
-  alertId   String
-  alert     Alert    @relation(fields: [alertId], references: [id])
-  title     String
-  status    String   @default("OPEN")
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id               String         @id @default(cuid())
+  tenantId         String
+  tenant           Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  source           NoticeSource
+  alertId          String?
+  alert            Alert?         @relation(fields: [alertId], references: [id])
+
+  assetCode        String
+  title            String
+  body             String?
+  category         NoticeCategory?
+  severity         Severity?
+  status           NoticeStatus   @default(OPEN)
+
+  createdByUserId  String
+  assignedToUserId String?
+  dueDate          DateTime?
+  startedAt        DateTime?
+  resolvedAt       DateTime?
+  downtimeMin      Int?
+  tags             String[]       @default([])
+  attachments      Json?
+
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  workOrders       WorkOrder[]
+
+  @@index([tenantId, status])
+  @@index([tenantId, assetCode, status])
+  @@index([tenantId, createdAt])
 }
 
-model WorkOrder {
-  id        String   @id @default(cuid())
-  tenantId  String
-  tenant    Tenant   @relation(fields: [tenantId], references: [id])
-  code      String
-  title     String
-  type      String   // PM | CM
-  status    String   @default("OPEN")
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  @@unique([tenantId, code])
+enum NoticeSource { 
+  RULE
+  MANUAL
+  IMPORT 
 }
+enum NoticeCategory { 
+  INCIDENT
+  MAINT_LOG
+  CONSUMABLE_CHANGE
+  INSPECTION
+  OTHER 
+}
+enum NoticeStatus {
+  OPEN
+  IN_PROGRESS 
+  RESOLVED 
+  CLOSED 
+}
+enum Severity { 
+  LOW 
+  MEDIUM 
+  HIGH 
+  CRITICAL 
+}
+
+
+model WorkOrder {
+  id          String   @id @default(cuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id])
+
+  noticeId    String?
+  notice      Notice?  @relation(fields: [noticeId], references: [id])
+
+  assetCode   String
+  title       String
+  description String?
+  status      WorkOrderStatus  @default(OPEN)
+  priority    WorkOrderPriority?
+  assignedToUserIds String[]        @default([])
+
+  dueDate     DateTime?
+  startedAt   DateTime?
+  completedAt DateTime?
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([tenantId, status])
+  @@index([tenantId, assetCode, status])
+}
+
+enum WorkOrderStatus {
+  OPEN
+  IN_PROGRESS
+  ON_HOLD
+  COMPLETED
+  CANCELED
+}
+
+enum WorkOrderPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
 
 model InventoryItem {
   id        String   @id @default(cuid())

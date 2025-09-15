@@ -1,6 +1,9 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 
-type Store = { tenantId?: string };
+type Store = { 
+  tenantId?: string;
+  userId?: string;
+};
 
 export const tenantStorage = new AsyncLocalStorage<Store>();
 

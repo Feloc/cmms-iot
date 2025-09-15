@@ -10,7 +10,7 @@ export class AssetsService {
 
   private getTenantId(): string {
     const { tenantId } = tenantStorage.getStore() || {};
-    if (!tenantId) throw new Error('No tenant in context');
+    if (!tenantId) throw new Error('No tenant in context...');
     return tenantId;
   }
 
