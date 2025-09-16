@@ -4,6 +4,5 @@ export class CreateWorkOrderDto {
   assetCode!: string;
   priority?: 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
   dueDate?: Date | string;
-  assignedToUserIds?: string[];
   noticeId?: string;
 }

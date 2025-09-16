@@ -7,8 +7,14 @@ export class NoticesController {
   constructor(private readonly service: NoticesService) {}
 
   @Get()
-  findAll(@Query('status') status?: string, @Query('asset') assetCode?: string) {
-    return this.service.findAll({ status, assetCode });
+  findAll(
+    @Query('q') q?: string,
+    @Query('status') status?: string,
+    @Query('assetCode') assetCode?: string,
+    @Query('limit') limit = '20',
+    @Query('cursor') cursor?: string,
+  ) {
+    return this.service.findAll({ q, status, assetCode, limit: Number(limit), cursor });
   }
 
   @Get(':id')

@@ -24,6 +24,8 @@ model Tenant {
   alerts     Alert[]
   notices    Notice[]
   workOrders WorkOrder[]
+  assignments WOAssignment[]
+  workLog    WorkLog[]
   inventory  InventoryItem[]
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
@@ -161,7 +163,6 @@ model WorkOrder {
   description String?
   status      WorkOrderStatus  @default(OPEN)
   priority    WorkOrderPriority?
-  assignedToUserIds String[]        @default([])
 
   dueDate     DateTime?
   startedAt   DateTime?
@@ -169,6 +170,9 @@ model WorkOrder {
 
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+
+  assignments WOAssignment[]
+  workLog     WorkLog[]
 
   @@index([tenantId, status])
   @@index([tenantId, assetCode, status])
@@ -179,6 +183,7 @@ enum WorkOrderStatus {
   IN_PROGRESS
   ON_HOLD
   COMPLETED
+  CLOSED
   CANCELED
 }
 
@@ -189,6 +194,69 @@ enum WorkOrderPriority {
   URGENT
 }
 
+model WOAssignment {
+  id           String           @id @default(cuid())
+  tenantId     String
+  tenant       Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  workOrderId  String
+  workOrder    WorkOrder        @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+
+  userId       String
+  role         AssignmentRole   @default(TECHNICIAN)
+  state        AssignmentState  @default(ACTIVE)
+  note         String?
+  
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  workLog      WorkLog[]
+
+
+  @@index([tenantId, workOrderId, state])
+  @@index([tenantId, userId, state])
+}
+
+enum AssignmentRole {
+  TECHNICIAN
+  SUPERVISOR
+}
+
+enum AssignmentState {
+  ACTIVE
+  REMOVED
+}
+
+model WorkLog {
+  id             String         @id @default(cuid())
+  tenantId       String
+  tenant         Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  workOrderId    String
+  workOrder      WorkOrder      @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+
+  assignmentId   String?
+  assignment     WOAssignment?  @relation(fields: [assignmentId], references: [id])
+
+  userId         String
+  source         WorkLogSource  @default(MANUAL)
+  note           String?
+
+  startedAt      DateTime
+  endedAt        DateTime?
+
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  @@index([tenantId, workOrderId])
+  @@index([tenantId, userId, startedAt])
+}
+
+enum WorkLogSource {
+  MANUAL
+  IMPORT
+  IOT
+}
 
 model InventoryItem {
   id        String   @id @default(cuid())

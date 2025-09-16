@@ -7,6 +7,14 @@ import { useApiSWR } from "@/lib/swr";
 import { apiFetch } from '@/lib/api';
 import { useRouter } from 'next/navigation';
 
+async function fetchNotices(searchParams: Record<string, string | string[] | undefined>) {
+  const qs = new URLSearchParams();
+  if (searchParams.q) qs.set("q", String(searchParams.q));
+  if (searchParams.status) qs.set("status", String(searchParams.status));
+  if (searchParams.assetCode) qs.set("assetCode", String(searchParams.assetCode));
+  return apiFetch<any[]>(`/notices?${qs.toString()}`, { method: "GET", cache: "no-store" });
+}
+
 type Notice = {
   id: string;
   title: string;

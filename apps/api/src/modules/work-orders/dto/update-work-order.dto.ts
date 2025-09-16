@@ -6,5 +6,4 @@ export class UpdateWorkOrderDto {
   dueDate?: Date | string;
   startedAt?: Date | string;
   completedAt?: Date | string;
-  assignedToUserIds?: string[];
 }

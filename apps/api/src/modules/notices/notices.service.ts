@@ -14,15 +14,27 @@ export class NoticesService {
     return {tenantId, userId};
   }
 
-  async findAll(params?: { status?: string; assetCode?: string }) {
-    const {tenantId} = this.getContext();
-    const { status, assetCode } = params || {};    
+  async findAll(params: { q?: string; status?: string; assetCode?: string; limit: number; cursor?: string }) {
+    const { tenantId } = this.getContext();
+    const { q, status, assetCode, limit, cursor } = params;
     return this.prisma.notice.findMany({
       where: {
         tenantId,
-        ...(status ? { status } : {}),
+        ...(status ? { status: status as any } : {}),
         ...(assetCode ? { assetCode } : {}),
+        ...(q
+          ? {
+              OR: [
+                { title: { contains: q, mode: 'insensitive' } },
+                { body: { contains: q, mode: 'insensitive' } },
+                { tags: { hasSome: q.split(/\s+/).filter(Boolean) } },
+              ],
+            }
+          : {}),
       },
+      take: limit,
+      skip: cursor ? 1 : 0,
+      cursor: cursor ? { id: cursor } : undefined,
       orderBy: { createdAt: 'desc' },
     });
   }
@@ -112,7 +124,7 @@ export class NoticesService {
 
   async createWorkOrderFromNotice(
     noticeId: string,
-    body: { title?: string; description?: string; priority?: 'LOW'|'MEDIUM'|'HIGH'|'URGENT'; dueDate?: string; assignedToUserIds?: string[] }
+    body: { title?: string; description?: string; priority?: 'LOW'|'MEDIUM'|'HIGH'|'URGENT'; dueDate?: string}
   ) {
     const {tenantId} = this.getContext();
 
@@ -130,7 +142,6 @@ export class NoticesService {
         description: body.description ?? notice.body ?? undefined,
         priority: body.priority as any,
         dueDate: body.dueDate ? new Date(body.dueDate) : undefined,
-        assignedToUserIds: body.assignedToUserIds ?? [],
       },
     });
 
