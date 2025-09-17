@@ -17,19 +17,16 @@ export class WorkOrdersService {
     return t.tenantId;
   }
 
-  async create(dto: CreateWorkOrderDto) {
-    const tenantId = this.getTenantId();
-    return this.prisma.workOrder.create({
-      data: {
-        tenantId,
-        title: dto.title,
-        description: dto.description,
-        assetCode: dto.assetCode,
-        priority: dto.priority as any,
-        dueDate: dto.dueDate ? new Date(dto.dueDate) : undefined,
-        ...(dto.noticeId ? { noticeId: dto.noticeId } : {}),
-      },
-    });
+  private getUserId(): string {
+    const t = tenantStorage.getStore();
+    if (!t?.userId) throw new Error('No user in context');
+    return t.userId;
+  }
+
+  private async ensureWO(id: string, tenantId: string) {
+    const wo = await this.prisma.workOrder.findFirst({ where: { id, tenantId } });
+    if (!wo) throw new Error('WO not found');
+    return wo;
   }
 
   async findAll() {
@@ -46,7 +43,22 @@ export class WorkOrdersService {
       where: { id, tenantId },
       include: {
         assignments: true, // si quieres incluir user info, debes tener relación User; si no, deja IDs
-        workLog: true,
+        workLogs: true,
+      },
+    });
+  }
+
+  async create(dto: CreateWorkOrderDto) {
+    const tenantId = this.getTenantId();
+    return this.prisma.workOrder.create({
+      data: {
+        tenantId,
+        title: dto.title,
+        description: dto.description,
+        assetCode: dto.assetCode,
+        priority: dto.priority as any,
+        dueDate: dto.dueDate ? new Date(dto.dueDate) : undefined,
+        ...(dto.noticeId ? { noticeId: dto.noticeId } : {}),
       },
     });
   }
@@ -68,21 +80,23 @@ export class WorkOrdersService {
     });
   }
 
-  private async ensureWO(id: string, tenantId: string) {
-    const wo = await this.prisma.workOrder.findFirst({ where: { id, tenantId } });
-    if (!wo) throw new Error('WO not found');
-    return wo;
-  }
-
   async addAssignment(woId: string, dto: AddAssignmentDto) {
     const tenantId = this.getTenantId();
     await this.ensureWO(woId, tenantId);
+
     const existing = await this.prisma.wOAssignment.findFirst({
-      where: { workOrderId: woId, userId: dto.userId, state: 'ACTIVE', tenantId },
+      where: { tenantId, workOrderId: woId, userId: dto.userId, state: 'ACTIVE' },
     });
     if (existing) return existing; // idempotente
+
     return this.prisma.wOAssignment.create({
-      data: { tenantId, workOrderId: woId, userId: dto.userId, role: dto.role, state: 'ACTIVE' },
+      data: {
+        tenantId,
+        workOrderId: woId,
+        userId: dto.userId,
+        role: dto.role,
+        state: 'ACTIVE',
+      },
     });
   }
 
@@ -96,18 +110,16 @@ export class WorkOrdersService {
     });
   }
 
-   private getUserId(): string {
-    const s = tenantStorage.getStore();
-    if (!s?.userId) throw new Error('No user in context');
-    return s.userId;
-  }
-
   async startWork(woId: string, dto: StartWorkDto) {
     const tenantId = this.getTenantId();
     const userId = this.getUserId();
     await this.ensureWO(woId, tenantId);
-    const open = await this.prisma.workLog.findFirst({ where: { tenantId, workOrderId: woId, userId, endedAt: null } });
+
+    const open = await this.prisma.workLog.findFirst({ 
+        where: { tenantId, workOrderId: woId, userId, endedAt: null },
+    });
     if (open) return open; // idempotente
+
     return this.prisma.workLog.create({
       data: { tenantId, workOrderId: woId, userId, startedAt: new Date(), note: dto.note, source: 'MANUAL' },
     });
@@ -117,11 +129,13 @@ export class WorkOrdersService {
     const tenantId = this.getTenantId();
     const userId = this.getUserId();
     await this.ensureWO(woId, tenantId);
+
     const open = await this.prisma.workLog.findFirst({
       where: { tenantId, workOrderId: woId, userId, endedAt: null },
       orderBy: { startedAt: 'desc' },
     });
     if (!open) throw new Error('No open work log');
+
     return this.prisma.workLog.update({
       where: { id: open.id },
       data: { endedAt: new Date(), note: dto.note ?? open.note },
@@ -132,10 +146,12 @@ export class WorkOrdersService {
     const tenantId = this.getTenantId();
     const userId = this.getUserId();
     await this.ensureWO(woId, tenantId);
+
     const open = await this.prisma.workLog.findFirst({
       where: { tenantId, workOrderId: woId, userId, endedAt: null },
       orderBy: { startedAt: 'desc' },
     });
+    
     if (open) {
       return this.prisma.workLog.update({
         where: { id: open.id },

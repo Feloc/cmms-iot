@@ -172,7 +172,7 @@ model WorkOrder {
   updatedAt   DateTime @updatedAt
 
   assignments WOAssignment[]
-  workLog     WorkLog[]
+  workLogs    WorkLog[]
 
   @@index([tenantId, status])
   @@index([tenantId, assetCode, status])
@@ -210,9 +210,6 @@ model WOAssignment {
   createdAt    DateTime         @default(now())
   updatedAt    DateTime         @updatedAt
 
-  workLog      WorkLog[]
-
-
   @@index([tenantId, workOrderId, state])
   @@index([tenantId, userId, state])
 }
@@ -234,9 +231,6 @@ model WorkLog {
 
   workOrderId    String
   workOrder      WorkOrder      @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
-
-  assignmentId   String?
-  assignment     WOAssignment?  @relation(fields: [assignmentId], references: [id])
 
   userId         String
   source         WorkLogSource  @default(MANUAL)

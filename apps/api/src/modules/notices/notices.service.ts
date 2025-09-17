@@ -14,10 +14,11 @@ export class NoticesService {
     return {tenantId, userId};
   }
 
-  async findAll(params: { q?: string; status?: string; assetCode?: string; limit: number; cursor?: string }) {
+  async findAll(params: { q?: string; status?: string; assetCode?: string; limit?: number; cursor?: string } = {}) {
     const { tenantId } = this.getContext();
-    const { q, status, assetCode, limit, cursor } = params;
-    return this.prisma.notice.findMany({
+    const { q, status, assetCode, limit = 20, cursor } = params;
+
+    const items = await this.prisma.notice.findMany({
       where: {
         tenantId,
         ...(status ? { status: status as any } : {}),
@@ -37,12 +38,17 @@ export class NoticesService {
       cursor: cursor ? { id: cursor } : undefined,
       orderBy: { createdAt: 'desc' },
     });
+    return {
+      items,
+      nextCursor: items.length === limit ? items[items.length - 1].id : undefined,
+    };
   }
 
   async findOne(id: string) {
     const { tenantId } = this.getContext();
     return this.prisma.notice.findFirstOrThrow({
       where: { id, tenantId },
+      include: { alert: true },
     });
   }
 
@@ -56,15 +62,15 @@ export class NoticesService {
       data: {
         tenantId,
         createdByUserId: userId,
-        source: dto.source ?? NoticeSource.MANUAL,
+        source: (dto.source ?? NoticeSource.MANUAL) as NoticeSource,
         alertId: dto.alertId,
 
         assetCode: dto.assetCode,
         title: dto.title,
         body: dto.body,
-        category: dto.category,
-        severity: dto.severity,
-        status: dto.status ?? NoticeStatus.OPEN,
+        category: dto.category as any,
+        severity: dto.severity as any,
+        status: (dto.status ?? NoticeStatus.OPEN) as NoticeStatus ,
 
         assignedToUserId: dto.assignedToUserId,
         dueDate: toDate(dto.dueDate),
@@ -82,12 +88,11 @@ export class NoticesService {
     const { tenantId } = this.getContext();
     const toDate = (s?: string) => (s ? new Date(s) : undefined);
 
-    // Ojo: si actualizas arrays, Prisma reemplaza el contenido completo
+    // asegura pertenencia
+    await this.prisma.notice.findFirstOrThrow({ where: { id, tenantId } });
     return this.prisma.notice.update({
       where: { id },
       data: {
-        // proteger pertenencia por tenant
-        tenant: { connect: { id: tenantId } },
 
         ...(dto.source ? { source: dto.source } : {}),
         ...(dto.alertId !== undefined ? { alertId: dto.alertId } : {}),
@@ -146,10 +151,10 @@ export class NoticesService {
     });
 
     // Opcional: mover Notice a IN_PROGRESS si aún está OPEN
-    if (notice.status === 'OPEN') {
+    if (notice.status === NoticeStatus.OPEN) {
       await this.prisma.notice.update({
         where: { id: notice.id },
-        data: { status: 'IN_PROGRESS' as any },
+        data: { status: NoticeStatus.IN_PROGRESS },
       });
     }
 

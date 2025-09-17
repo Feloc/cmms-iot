@@ -5,20 +5,13 @@ import { useSession } from "next-auth/react";
 import { getAuthFromSession } from "@/lib/auth";
 import { useApiSWR } from "@/lib/swr";
 import { apiFetch } from '@/lib/api';
-import { useRouter } from 'next/navigation';
-
-async function fetchNotices(searchParams: Record<string, string | string[] | undefined>) {
-  const qs = new URLSearchParams();
-  if (searchParams.q) qs.set("q", String(searchParams.q));
-  if (searchParams.status) qs.set("status", String(searchParams.status));
-  if (searchParams.assetCode) qs.set("assetCode", String(searchParams.assetCode));
-  return apiFetch<any[]>(`/notices?${qs.toString()}`, { method: "GET", cache: "no-store" });
-}
+import { useRouter, useSearchParams } from 'next/navigation';
+import { useMemo } from "react";
 
 type Notice = {
   id: string;
   title: string;
-  status: string;
+  status: 'OPEN' | 'IN_PROGRESS' | 'RESOLVED';
   assetCode?: string | null;
   source?: string | null;
   createdAt?: string;
@@ -28,16 +21,37 @@ export default function NoticesPage() {
   const { data: session } = useSession();
   const { token, tenantSlug } = getAuthFromSession(session);
   const router = useRouter();
+  const sp = useSearchParams();
 
-  const { data, error, isLoading, mutate } = useApiSWR<Notice[]>("notices", token, tenantSlug);
+  // Construir querystring (server-side filtering)
+  const qs = useMemo(() => {
+    const q = new URLSearchParams();
+    const qs_q = sp.get('q');
+    const qs_status = sp.get('status');
+    const qs_asset = sp.get('assetCode');
+    if (qs_q) q.set('q', qs_q);
+    if (qs_status) q.set('status', qs_status);
+    if (qs_asset) q.set('assetCode', qs_asset);
+    return q.toString();
+  }, [sp]);
+
+  const path = useMemo(() => `/notices${qs ? `?${qs}` : ''}`, [qs]);
+
+  const { data, error, isLoading, mutate } = useApiSWR<Notice[]>(
+    token && tenantSlug ? path : null,
+    token,
+    tenantSlug
+  );
 
   const createWO = async (noticeId: string) => {
     const wo = await apiFetch<{ id: string }>(`/notices/${noticeId}/work-orders`, {
       method: 'POST',
       token,
       tenantSlug,
-      body: {}, // opcionalmente priority/dueDate/etc
+      body: {}, // opcional: { priority, dueDate, ... }
     });
+    // refresca la lista por si cambió el status del notice
+    mutate();
     router.push(`/work-orders/${wo.id}`);
   };
 
@@ -50,18 +64,59 @@ export default function NoticesPage() {
     );
   }
 
-  if (isLoading) return <div>Cargando...</div>;
-  if (error) return <div>Error: {(error as any).message}</div>;
-  const notices = data ?? [];
+  if (isLoading) return <div className="p-6">Cargando...</div>;
+  if (error) return <div className="p-6 text-red-600">Error: {(error as any).message}</div>;
+
+  const notices = data?.items ?? [];
 
   return (
-    <div className="p-4 space-y-3">
-        <div className="flex items-center justify-between">
-            <h1 className="text-xl font-semibold">Notices</h1>
-            <Link href="/notices/new" className="px-3 py-2 rounded bg-black text-white text-sm">
-                Nuevo
-            </Link>
-        </div>
+    <div className="p-4 space-y-4">
+      <div className="flex items-center justify-between">
+        <h1 className="text-xl font-semibold">Notices</h1>
+        <Link href="/notices/new" className="px-3 py-2 rounded bg-black text-white text-sm">
+          Nuevo
+        </Link>
+      </div>
+
+      {/* Filtros */}
+      <form
+        className="flex flex-wrap gap-2"
+        action={(formData) => {
+          const q = formData.get('q')?.toString() ?? '';
+          const status = formData.get('status')?.toString() ?? '';
+          const assetCode = formData.get('assetCode')?.toString() ?? '';
+          const next = new URLSearchParams();
+          if (q) next.set('q', q);
+          if (status) next.set('status', status);
+          if (assetCode) next.set('assetCode', assetCode);
+          router.push(`/notices${next.toString() ? `?${next.toString()}` : ''}`);
+        }}
+      >
+        <input
+          name="q"
+          placeholder="Buscar..."
+          className="border rounded px-3 py-2"
+          defaultValue={sp.get('q') ?? ''}
+        />
+        <select
+          name="status"
+          className="border rounded px-3 py-2"
+          defaultValue={sp.get('status') ?? ''}
+        >
+          <option value="">Todos</option>
+          <option value="OPEN">OPEN</option>
+          <option value="IN_PROGRESS">IN_PROGRESS</option>
+          <option value="RESOLVED">RESOLVED</option>
+        </select>
+        <input
+          name="assetCode"
+          placeholder="Asset code"
+          className="border rounded px-3 py-2"
+          defaultValue={sp.get('assetCode') ?? ''}
+        />
+        <button className="px-3 py-2 rounded border">Filtrar</button>
+      </form>
+
       <table className="w-full text-sm">
         <thead>
           <tr className="text-left border-b">
@@ -74,14 +129,17 @@ export default function NoticesPage() {
         <tbody>
           {notices.map(n => (
             <tr key={n.id} className="border-b">
-              <td className="py-2">{n.title}</td>
-              <td className="py-2">{n.assetCode}</td>
+              <td className="py-2">
+                <Link className="underline" href={`/notices/${n.id}`}>{n.title}</Link>
+              </td>
+              <td className="py-2">{n.assetCode ?? '—'}</td>
               <td className="py-2">{n.status}</td>
               <td className="py-2">
                 <button
                   onClick={() => createWO(n.id)}
-                  className="px-3 py-1 rounded bg-blue-600 text-white hover:bg-blue-700"
-                  disabled={n.status === 'CLOSED'}
+                  className="px-3 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+                  // Deshabilita si ya está RESOLVED (o si prefieres cuando no esté OPEN)
+                  disabled={n.status === 'RESOLVED'}
                 >
                   Crear OT
                 </button>
