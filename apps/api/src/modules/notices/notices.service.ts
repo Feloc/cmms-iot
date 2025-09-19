@@ -16,9 +16,11 @@ export class NoticesService {
 
   async findAll(params: { q?: string; status?: string; assetCode?: string; limit?: number; cursor?: string } = {}) {
     const { tenantId } = this.getContext();
-    const { q, status, assetCode, limit = 20, cursor } = params;
+    let { q, status, assetCode, limit = 20, cursor } = params;
 
-    const items = await this.prisma.notice.findMany({
+    if (!status || status === '' || status === 'ALL') status = undefined;
+
+    const itemsRaw = await this.prisma.notice.findMany({
       where: {
         tenantId,
         ...(status ? { status: status as any } : {}),
@@ -27,8 +29,8 @@ export class NoticesService {
           ? {
               OR: [
                 { title: { contains: q, mode: 'insensitive' } },
-                { body: { contains: q, mode: 'insensitive' } },
-                { tags: { hasSome: q.split(/\s+/).filter(Boolean) } },
+                { body:  { contains: q, mode: 'insensitive' } },
+                { tags:  { hasSome: q.split(/\s+/).filter(Boolean) } },
               ],
             }
           : {}),
@@ -37,19 +39,37 @@ export class NoticesService {
       skip: cursor ? 1 : 0,
       cursor: cursor ? { id: cursor } : undefined,
       orderBy: { createdAt: 'desc' },
+
+      // Traemos solo el id de UNA work order (la más reciente) para saber si ya tiene OT
+      include: {
+        workOrders: {
+          select: { id: true },
+          take: 1,
+          orderBy: { createdAt: 'desc' },
+        },
+      },
     });
+
+    // Enriquecemos con workOrderId (o null)
+    const items = itemsRaw.map(n => ({
+      ...n,
+      workOrderId: n.workOrders?.[0]?.id ?? null,
+    }));
+
     return {
       items,
-      nextCursor: items.length === limit ? items[items.length - 1].id : undefined,
+      nextCursor: itemsRaw.length === limit ? itemsRaw[itemsRaw.length - 1].id : undefined,
     };
   }
 
-  async findOne(id: string) {
-    const { tenantId } = this.getContext();
-    return this.prisma.notice.findFirstOrThrow({
-      where: { id, tenantId },
-      include: { alert: true },
-    });
+
+
+    async findOne(id: string) {
+      const { tenantId } = this.getContext();
+      return this.prisma.notice.findFirstOrThrow({
+        where: { id, tenantId },
+        include: { alert: true },
+      });
   }
 
   async create(dto: CreateNoticeDto) {
@@ -149,14 +169,6 @@ export class NoticesService {
         dueDate: body.dueDate ? new Date(body.dueDate) : undefined,
       },
     });
-
-    // Opcional: mover Notice a IN_PROGRESS si aún está OPEN
-    if (notice.status === NoticeStatus.OPEN) {
-      await this.prisma.notice.update({
-        where: { id: notice.id },
-        data: { status: NoticeStatus.IN_PROGRESS },
-      });
-    }
 
     return wo;
   }

@@ -9,6 +9,8 @@ export default function WorkPanel({ wo }: { wo: any }) {
   const { token, tenantSlug } = getAuthFromSession(session);
   const [note, setNote] = useState('');
 
+  const allowed = wo.status === 'OPEN' || wo.status === 'IN_PROGRESS' || wo.status === 'ON_HOLD'; // ajusta según tus ALLOWED
+
   const call = async (action: 'start'|'pause'|'stop') => {
     try {
       await apiFetch(`/work-orders/${wo.id}/work/${action}`, {
@@ -33,7 +35,14 @@ export default function WorkPanel({ wo }: { wo: any }) {
       <h2 className="font-semibold mb-3">Trabajo</h2>
       <div className="flex gap-2 mb-3">
         <input className="border rounded px-3 py-2 flex-1" placeholder="Nota (opcional)" value={note} onChange={e=>setNote(e.target.value)}/>
-        <button onClick={()=>call('start')} className="px-3 py-2 border rounded">Iniciar</button>
+        <button
+            onClick={()=>call("start")}
+            className="px-3 py-2 border rounded disabled:opacity-50"
+            disabled={!allowed}
+            title={allowed ? "Iniciar" : "No permitido en este estado"}
+        >
+            Iniciar
+        </button>
         <button onClick={()=>call('pause')} className="px-3 py-2 border rounded">Pausar</button>
         <button onClick={()=>call('stop')} className="px-3 py-2 rounded bg-black text-white">Detener</button>
       </div>

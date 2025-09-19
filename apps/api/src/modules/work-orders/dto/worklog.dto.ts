@@ -1,7 +1,8 @@
-import { IsOptional, IsString } from 'class-validator';
+import { IsOptional, IsString, IsBoolean } from 'class-validator';
 
 export class StartWorkDto {
   @IsOptional() @IsString() note?: string;
+  @IsOptional() @IsBoolean() force?: boolean;  // <- permite “forzar” nuevo tramo
 }
 export class PauseWorkDto {
   @IsOptional() @IsString() note?: string;

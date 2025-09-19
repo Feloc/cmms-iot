@@ -11,10 +11,16 @@ import { useMemo } from "react";
 type Notice = {
   id: string;
   title: string;
-  status: 'OPEN' | 'IN_PROGRESS' | 'RESOLVED';
+  status: 'OPEN' | 'IN_PROGRESS' | 'RESOLVED' | 'CLOSED';
   assetCode?: string | null;
   source?: string | null;
   createdAt?: string;
+  workOrderId?: string | null;  // <-- nuevo
+};
+
+type NoticeListResponse = {
+  items: Notice[];
+  nextCursor?: string;
 };
 
 export default function NoticesPage() {
@@ -23,21 +29,21 @@ export default function NoticesPage() {
   const router = useRouter();
   const sp = useSearchParams();
 
-  // Construir querystring (server-side filtering)
+  // Filtros: si no hay "status" en la URL, por defecto OPEN
   const qs = useMemo(() => {
     const q = new URLSearchParams();
     const qs_q = sp.get('q');
-    const qs_status = sp.get('status');
+    const qs_status = sp.get('status') ?? 'OPEN'; // default OPEN
     const qs_asset = sp.get('assetCode');
     if (qs_q) q.set('q', qs_q);
-    if (qs_status) q.set('status', qs_status);
+    if (qs_status) q.set('status', qs_status); // puede ser OPEN/IN_PROGRESS/... o ALL
     if (qs_asset) q.set('assetCode', qs_asset);
     return q.toString();
   }, [sp]);
 
   const path = useMemo(() => `/notices${qs ? `?${qs}` : ''}`, [qs]);
 
-  const { data, error, isLoading, mutate } = useApiSWR<Notice[]>(
+  const { data, error, isLoading, mutate } = useApiSWR<NoticeListResponse>(
     token && tenantSlug ? path : null,
     token,
     tenantSlug
@@ -50,7 +56,7 @@ export default function NoticesPage() {
       tenantSlug,
       body: {}, // opcional: { priority, dueDate, ... }
     });
-    // refresca la lista por si cambió el status del notice
+    // refresca la lista: ahora el notice tendrá workOrderId
     mutate();
     router.push(`/work-orders/${wo.id}`);
   };
@@ -82,14 +88,14 @@ export default function NoticesPage() {
       <form
         className="flex flex-wrap gap-2"
         action={(formData) => {
-          const q = formData.get('q')?.toString() ?? '';
-          const status = formData.get('status')?.toString() ?? '';
-          const assetCode = formData.get('assetCode')?.toString() ?? '';
-          const next = new URLSearchParams();
-          if (q) next.set('q', q);
-          if (status) next.set('status', status);
-          if (assetCode) next.set('assetCode', assetCode);
-          router.push(`/notices${next.toString() ? `?${next.toString()}` : ''}`);
+            const q = formData.get('q')?.toString() ?? '';
+            const status = formData.get('status')?.toString() ?? 'OPEN';
+            const assetCode = formData.get('assetCode')?.toString() ?? '';
+            const next = new URLSearchParams();
+            if (q) next.set('q', q);
+            if (status) next.set('status', status); // "ALL" viajará en la URL
+            if (assetCode) next.set('assetCode', assetCode);
+            router.push(`/notices${next.toString() ? `?${next.toString()}` : ''}`);
         }}
       >
         <input
@@ -101,12 +107,12 @@ export default function NoticesPage() {
         <select
           name="status"
           className="border rounded px-3 py-2"
-          defaultValue={sp.get('status') ?? ''}
+          defaultValue={sp.get('status') ?? 'OPEN'}
         >
-          <option value="">Todos</option>
+          <option value="ALL">Todos</option>
           <option value="OPEN">OPEN</option>
           <option value="IN_PROGRESS">IN_PROGRESS</option>
-          <option value="RESOLVED">RESOLVED</option>
+          <option value="CLOSED">CLOSED</option>
         </select>
         <input
           name="assetCode"
@@ -123,29 +129,42 @@ export default function NoticesPage() {
             <th className="py-2">Título</th>
             <th className="py-2">Asset</th>
             <th className="py-2">Estado</th>
-            <th className="py-2"></th>
+            <th className="py-2 w-40"></th>
           </tr>
         </thead>
         <tbody>
-          {notices.map(n => (
-            <tr key={n.id} className="border-b">
-              <td className="py-2">
-                <Link className="underline" href={`/notices/${n.id}`}>{n.title}</Link>
-              </td>
-              <td className="py-2">{n.assetCode ?? '—'}</td>
-              <td className="py-2">{n.status}</td>
-              <td className="py-2">
-                <button
-                  onClick={() => createWO(n.id)}
-                  className="px-3 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
-                  // Deshabilita si ya está RESOLVED (o si prefieres cuando no esté OPEN)
-                  disabled={n.status === 'RESOLVED'}
-                >
-                  Crear OT
-                </button>
-              </td>
-            </tr>
-          ))}
+          {notices.map(n => {
+            const hasWO = !!n.workOrderId;
+            return (
+              <tr key={n.id} className="border-b">
+                <td className="py-2">
+                  <Link className="underline" href={`/notices/${n.id}`}>{n.title}</Link>
+                </td>
+                <td className="py-2">{n.assetCode ?? '—'}</td>
+                <td className="py-2">{n.status}</td>
+                <td className="py-2">
+                  {hasWO ? (
+                    <Link
+                      href={`/work-orders/${n.workOrderId}`}
+                      className="px-3 py-1 rounded border hover:bg-gray-50 inline-block"
+                      title="Ver OT creada"
+                    >
+                      OT creada → Ver
+                    </Link>
+                  ) : (
+                    <button
+                      onClick={() => createWO(n.id)}
+                      className="px-3 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+                      disabled={n.status !== 'OPEN'} // solo permite crear OT cuando está OPEN
+                      title={n.status === 'OPEN' ? 'Crear OT' : 'Solo para notices OPEN'}
+                    >
+                      Crear OT
+                    </button>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
           {notices.length === 0 && (
             <tr><td colSpan={4} className="py-6 text-center text-gray-500">Sin avisos</td></tr>
           )}

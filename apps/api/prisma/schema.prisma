@@ -29,6 +29,15 @@ model Tenant {
   inventory  InventoryItem[]
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
+
+  symptomCodes   SymptomCode[]
+  causeCodes     CauseCode[]
+  remedyCodes    RemedyCode[]
+  workOrderResolutions WorkOrderResolution[]
+  workOrderPartUses WorkOrderPartUsed[]
+  workMeasurements   WorkMeasurement[]
+  workAttachments    WorkAttachment[]
+  workNotes          WorkNote[]
 }
 
 model User {
@@ -173,6 +182,11 @@ model WorkOrder {
 
   assignments WOAssignment[]
   workLogs    WorkLog[]
+  workOrderResolutions WorkOrderResolution[]
+  workOrderPartUses WorkOrderPartUsed[]
+  workMeasurements   WorkMeasurement[]
+  workAttachments    WorkAttachment[]
+  workNotes          WorkNote[]
 
   @@index([tenantId, status])
   @@index([tenantId, assetCode, status])
@@ -262,4 +276,185 @@ model InventoryItem {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   @@unique([tenantId, sku])
+}
+
+
+/// === Catálogos por tenant ===
+model SymptomCode {
+  id        String   @id @default(cuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  code      String
+  name      String
+  enabled   Boolean  @default(true)
+  assetType String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workOrderResolutios WorkOrderResolution[]
+
+  @@unique([tenantId, code])
+}
+
+model CauseCode {
+  id        String   @id @default(cuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  code      String
+  name      String
+  enabled   Boolean  @default(true)
+  assetType String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workOrderResolutios WorkOrderResolution[]
+
+  @@unique([tenantId, code])
+}
+
+model RemedyCode {
+  id        String   @id @default(cuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  code      String
+  name      String
+  enabled   Boolean  @default(true)
+  assetType String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workOrderResolutios WorkOrderResolution[]
+
+  @@unique([tenantId, code])
+}
+
+/// === Desarrollo/Resolución de la OT ===
+model WorkOrderResolution {
+  id                        String   @id @default(cuid())
+  tenantId                  String
+  tenant                    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  workOrderId               String   @unique
+  workOrder                 WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+
+  symptomCodeId             String?
+  symptomCode               SymptomCode? @relation(fields: [symptomCodeId], references: [id])
+  symptomOther              String?
+
+  causeCodeId               String?
+  causeCode                 CauseCode?   @relation(fields: [causeCodeId], references: [id])
+  causeOther                String?
+  rootCauseText             String?
+
+  remedyCodeId              String?
+  remedyCode                RemedyCode?  @relation(fields: [remedyCodeId], references: [id])
+  remedyOther               String?
+  solutionSummary           String?
+  preventiveRecommendation  String?
+
+  resolvedByUserId          String?
+  resolvedAt                DateTime?
+  verifiedByUserId          String?
+  verifiedAt                DateTime?
+  verificationNotes         String?
+
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
+
+  @@index([tenantId, workOrderId])
+}
+
+/// === Partes usadas ===
+model WorkOrderPartUsed {
+  id            String   @id @default(cuid())
+  tenantId      String
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  workOrderId   String
+  workOrder     WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+
+  inventoryItemId String?
+  freeText        String?
+  qty             Float
+  unitCost        Float?
+  totalCost       Float?
+
+  createdByUserId String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([tenantId, workOrderId])
+}
+
+/// === Mediciones ===
+enum MeasurementPhase {
+  BEFORE
+  AFTER
+  OTHER
+}
+
+model WorkMeasurement {
+  id          String   @id @default(cuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  workOrderId String
+  workOrder   WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+
+  type        String
+  valueNumeric Float?
+  valueText    String?
+  unit        String?
+  phase       MeasurementPhase @default(OTHER)
+  takenAt     DateTime @default(now())
+
+  createdByUserId String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([tenantId, workOrderId])
+}
+
+/// === Adjuntos ===
+enum AttachmentKind {
+  PHOTO
+  VIDEO
+  AUDIO
+  DOC
+}
+
+model WorkAttachment {
+  id          String   @id @default(cuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  workOrderId String
+  workOrder   WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+
+  kind        AttachmentKind
+  url         String
+  label       String?
+  meta        Json?
+
+  uploadedByUserId String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([tenantId, workOrderId])
+}
+
+/// === Notas técnicas ===
+model WorkNote {
+  id          String   @id @default(cuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  workOrderId String
+  workOrder   WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+
+  note        String
+  addedByUserId String
+  addedAt     DateTime @default(now())
+
+  @@index([tenantId, workOrderId, addedAt])
 }
