@@ -10,8 +10,9 @@ import { InventoryModule } from './modules/inventory/inventory.module';
 import { MqttModule } from './modules/mqtt/mqtt.module';
 import { WorkOrdersModule } from './modules/work-orders/work-orders.module';
 import { CatalogModule } from './modules/catalog/catalog.module';
+import { AttachmentsModule } from './modules/attachments/attachments.module';
 
 @Module({
-  imports: [ConfigModule.forRoot({ isGlobal: true }), AuthModule, TelemetryModule, RulesModule, AssetsModule, AlertsModule, NoticesModule, InventoryModule, MqttModule, WorkOrdersModule, CatalogModule],
+  imports: [ConfigModule.forRoot({ isGlobal: true }), AuthModule, TelemetryModule, RulesModule, AssetsModule, AlertsModule, NoticesModule, InventoryModule, MqttModule, WorkOrdersModule, CatalogModule, AttachmentsModule],
 })
 export class AppModule {}

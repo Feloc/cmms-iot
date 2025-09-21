@@ -1,4 +1,4 @@
-import { IsEnum, IsOptional, IsString } from 'class-validator';
+/* import { IsEnum, IsOptional, IsString } from 'class-validator';
 import { AttachmentKind } from '@prisma/client';
 
 export class CreateAttachmentDto {
@@ -6,4 +6,4 @@ export class CreateAttachmentDto {
   @IsString() url!: string;
   @IsOptional() @IsString() label?: string;
   @IsOptional() meta?: any;
-}
+} */

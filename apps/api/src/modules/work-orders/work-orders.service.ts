@@ -451,7 +451,7 @@ async deleteMeasurement(woId: string, measurementId: string) {
 }
 
 // --- Adjuntos ---
-async getAttachments(woId: string) {
+/* async getAttachments(woId: string) {
   const tenantId = this.getTenantId();
   await this.ensureWO(woId, tenantId);
   return this.prisma.workAttachment.findMany({ where: { tenantId, workOrderId: woId }, orderBy: { createdAt: 'desc' } });
@@ -477,7 +477,7 @@ async deleteAttachment(woId: string, attachmentId: string) {
   await this.prisma.workAttachment.findFirstOrThrow({ where: { id: attachmentId, tenantId, workOrderId: woId } });
   await this.prisma.workAttachment.delete({ where: { id: attachmentId } });
   return { ok: true };
-}
+} */
 
 // --- Notas ---
 async getNotes(woId: string) {

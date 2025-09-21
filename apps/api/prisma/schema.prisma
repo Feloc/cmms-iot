@@ -36,7 +36,7 @@ model Tenant {
   workOrderResolutions WorkOrderResolution[]
   workOrderPartUses WorkOrderPartUsed[]
   workMeasurements   WorkMeasurement[]
-  workAttachments    WorkAttachment[]
+  attachments    Attachment[]
   workNotes          WorkNote[]
 }
 
@@ -185,7 +185,7 @@ model WorkOrder {
   workOrderResolutions WorkOrderResolution[]
   workOrderPartUses WorkOrderPartUsed[]
   workMeasurements   WorkMeasurement[]
-  workAttachments    WorkAttachment[]
+  attachments        Attachment[]
   workNotes          WorkNote[]
 
   @@index([tenantId, status])
@@ -416,32 +416,32 @@ model WorkMeasurement {
 }
 
 /// === Adjuntos ===
-enum AttachmentKind {
-  PHOTO
-  VIDEO
-  AUDIO
-  DOC
-}
-
-model WorkAttachment {
-  id          String   @id @default(cuid())
+model Attachment {
+  id          String    @id @default(cuid())
   tenantId    String
-  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   workOrderId String
   workOrder   WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
 
-  kind        AttachmentKind
+  type        AttachmentType
+  filename    String
+  mimeType    String
+  size        Int
   url         String
-  label       String?
-  meta        Json?
+  createdBy   String
+  createdAt   DateTime  @default(now())
 
-  uploadedByUserId String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  @@index([tenantId, workOrderId])
+  @@index([tenantId, workOrderId, createdAt(sort: Desc)])
 }
+
+enum AttachmentType {
+  IMAGE
+  VIDEO
+  AUDIO
+  DOCUMENT
+}
+
 
 /// === Notas técnicas ===
 model WorkNote {
