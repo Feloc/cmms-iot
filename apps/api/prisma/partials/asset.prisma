@@ -1,0 +1,54 @@
+
+// apps/api/prisma/partials/asset.prisma
+// Modelo Asset multi-tenant con índices y enums básicos
+
+enum AssetStatus {
+  ACTIVE
+  INACTIVE
+  DECOMMISSIONED
+}
+
+enum AssetCriticality {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+model Asset {
+  id              String   @id @default(cuid())
+  tenantId        String
+  tenant          Tenant   @relation(fields: [tenantId], references: [id])
+
+  code            String
+  name            String
+  brand           String?
+  model           String?
+  serialNumber    String?
+  nominalPower    Float?
+  nominalPowerUnit String?
+
+  status          AssetStatus      @default(ACTIVE)
+  criticality     AssetCriticality @default(MEDIUM)
+
+  categoryId      String?
+  parentAssetId   String?
+  locationId      String?
+  supplierId      String?
+
+  slug            String?
+  barcode         String?
+  qrCodeData      String?
+  ingestKey       String?
+  assetTopicPrefix String?
+  defaultRuleSetId String?
+
+  acquiredOn      DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([tenantId, code])
+  @@index([tenantId, name])
+  @@index([tenantId, locationId])
+  @@index([tenantId, categoryId])
+  @@index([tenantId, parentAssetId])
+}

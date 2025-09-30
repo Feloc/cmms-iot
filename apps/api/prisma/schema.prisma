@@ -30,14 +30,18 @@ model Tenant {
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
-  symptomCodes   SymptomCode[]
-  causeCodes     CauseCode[]
-  remedyCodes    RemedyCode[]
-  workOrderResolutions WorkOrderResolution[]
-  workOrderPartUses WorkOrderPartUsed[]
-  workMeasurements   WorkMeasurement[]
-  attachments    Attachment[]
-  workNotes          WorkNote[]
+  symptomCodes          SymptomCode[]
+  causeCodes            CauseCode[]
+  remedyCodes           RemedyCode[]
+  workOrderResolutions  WorkOrderResolution[]
+  workOrderPartUses     WorkOrderPartUsed[]
+  workMeasurements      WorkMeasurement[]
+  attachments           Attachment[]
+  workNotes             WorkNote[]
+  assetImportUploads    AssetImportUpload[]
+  devices               Device[]
+  ruleStates            RuleState[]
+  assetEvents           AssetEvent[]
 }
 
 model User {
@@ -53,35 +57,88 @@ model User {
   @@unique([tenantId, email])
 }
 
-model Asset {
-  id        String   @id @default(cuid())
-  tenantId  String
-  tenant    Tenant   @relation(fields: [tenantId], references: [id])
-  code      String
-  name      String
-  type      String?
-  location  String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  @@unique([tenantId, code])
+enum AssetStatus {
+  ACTIVE
+  INACTIVE
+  DECOMMISSIONED
 }
 
-model Rule {
-  id        String   @id @default(cuid())
-  tenantId  String
-  tenant    Tenant   @relation(fields: [tenantId], references: [id])
-  assetCode String
-  sensor    String
-  type      String   // THRESHOLD | ROC
-  operator  String?  // >, <, >=, <= (para THRESHOLD)
-  value     Float?   // umbral
-  windowSec Int?     // para ROC
-  rocValue  Float?   // delta permitido
-  enabled   Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  @@index([tenantId, assetCode, sensor])
+enum AssetCriticality {
+  LOW
+  MEDIUM
+  HIGH
 }
+
+model Asset {
+  id              String   @id @default(cuid())
+  tenantId        String
+  tenant          Tenant   @relation(fields: [tenantId], references: [id])
+
+  code            String
+  name            String
+  brand           String?
+  model           String?
+  serialNumber    String?
+  nominalPower    Float?
+  nominalPowerUnit String?
+
+  status          AssetStatus      @default(ACTIVE)
+  criticality     AssetCriticality @default(MEDIUM)
+
+  categoryId      String?
+  parentAssetId   String?
+  locationId      String?
+  supplierId      String?
+
+  slug            String?
+  barcode         String?
+  qrCodeData      String?
+  ingestKey       String?
+  assetTopicPrefix String?
+  defaultRuleSetId String?
+
+  acquiredOn      DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  attachments     Attachment[]
+  devices         Device[]
+  rules           Rule[]
+  assetEvents     AssetEvent[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId, name])
+  @@index([tenantId, locationId])
+  @@index([tenantId, categoryId])
+  @@index([tenantId, parentAssetId])
+}
+
+// Modelo para almacenar uploads temporales de importación de Assets
+model AssetImportUpload {
+id            String @id @default(cuid())
+tenantId      String
+tenant        Tenant @relation(fields: [tenantId], references: [id])
+
+originalName  String
+mimeType      String
+size          Int
+sha256        String
+storagePath   String
+status ImportStatus @default(PENDING)
+
+createdAt DateTime @default(now())
+expiresAt DateTime?
+
+@@index([tenantId, createdAt])
+}
+
+enum ImportStatus {
+PENDING
+COMMITTED
+EXPIRED
+FAILED
+}
+
 
 model Alert {
   id        String   @id @default(cuid())
@@ -421,8 +478,11 @@ model Attachment {
   tenantId    String
   tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  workOrderId String
-  workOrder   WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  workOrderId String?
+  workOrder   WorkOrder? @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+
+  assetId     String?
+  asset       Asset?     @relation(fields: [assetId], references: [id], onDelete: Cascade)
 
   type        AttachmentType
   filename    String
@@ -433,6 +493,7 @@ model Attachment {
   createdAt   DateTime  @default(now())
 
   @@index([tenantId, workOrderId, createdAt(sort: Desc)])
+  @@index([tenantId, assetId, createdAt(sort: Desc)])
 }
 
 enum AttachmentType {
@@ -457,4 +518,132 @@ model WorkNote {
   addedAt     DateTime @default(now())
 
   @@index([tenantId, workOrderId, addedAt])
+}
+
+
+/// 
+/// IoT
+/// 
+
+enum DeviceType {
+  ARDUINO_NANO_33_IOT
+  GENERIC_MCU
+  EDGE_GATEWAY
+}
+
+enum DeviceStatus {
+  ONLINE
+  OFFLINE
+  UNKNOWN
+}
+
+enum RuleKind {
+  THRESHOLD
+  ROC
+  WINDOW_AVG
+}
+
+enum EventStatus {
+  OPEN
+  ACK
+  CLOSED
+}
+
+/// MODELS
+model Device {
+  id         String   @id @default(cuid())
+  tenantId   String
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  name       String
+  type       DeviceType
+  status     DeviceStatus   @default(UNKNOWN)
+  ingestKey  String?        @unique
+  assetId    String?
+  asset      Asset?   @relation(fields: [assetId], references: [id], onDelete: SetNull)
+
+  // Auth simple para MQTT (dev): username = `${tenantSlug}:${deviceId}` o propio
+  authMode   String   @default("password") // password | token | external
+  username   String?
+  secretHash String?  // nunca guardar plain text
+
+  lastSeen   DateTime?
+  metadata   Json?
+
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  events     AssetEvent[]
+  rules      Rule[]
+
+  @@index([tenantId, assetId])
+  @@index([tenantId, status, lastSeen])
+  @@unique([tenantId, name])
+}
+
+model Rule {
+  id         String    @id @default(cuid())
+  tenantId   String
+  tenant     Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  name       String
+  kind       RuleKind
+  severity   Severity  @default(MEDIUM)
+  enabled    Boolean   @default(true)
+
+  // ámbito de aplicación: por asset o por device (uno de los dos)
+  assetId    String?
+  asset      Asset?    @relation(fields: [assetId], references: [id], onDelete: SetNull)
+  deviceId   String?
+  device     Device?   @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+
+  // métrica a evaluar (ej: "rms_g", "temp_c") y parámetros de la regla (JSON)
+  metric     String
+  params     Json      // { min?:number, max?:number, windowSec?:number, rocLimit?:number, hysteresis?:number, cooldownSec?:number }
+
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  state      RuleState?
+  events     AssetEvent[]
+
+  @@index([tenantId, metric, enabled])
+}
+
+model RuleState {
+  id         String   @id @default(cuid())
+  tenantId   String
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  ruleId     String   @unique
+  rule       Rule     @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+
+  status     String   @default("NORMAL") // NORMAL | ALERTING
+  lastChangeAt DateTime @default(now())
+  data       Json?
+}
+
+model AssetEvent {
+  id         String     @id @default(cuid())
+  tenantId   String
+  tenant     Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  assetId    String
+  asset      Asset      @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  deviceId   String?
+  device     Device?    @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+
+  ruleId     String?
+  rule       Rule?      @relation(fields: [ruleId], references: [id], onDelete: SetNull)
+
+  message    String
+  severity   Severity   @default(MEDIUM)
+  status     EventStatus @default(OPEN)
+
+  createdAt  DateTime   @default(now())
+  closedAt   DateTime?
+
+  @@index([tenantId, assetId, createdAt(sort: Desc)])
+  @@index([tenantId, status, severity, createdAt(sort: Desc)])
 }

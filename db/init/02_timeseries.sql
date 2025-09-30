@@ -1,4 +1,4 @@
--- 02_timeseries.sql
+/* -- 02_timeseries.sql
 CREATE EXTENSION IF NOT EXISTS timescaledb;
 
 -- 1) Esquema y dueño
@@ -37,3 +37,4 @@ GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA timeseries TO cmms;
 -- );
 -- SELECT add_compression_policy('timeseries.telemetry', INTERVAL '7 days');
 -- SELECT add_retention_policy('timeseries.telemetry',  INTERVAL '365 days');
+ */ 

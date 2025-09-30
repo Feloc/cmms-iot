@@ -1,4 +1,4 @@
-CREATE EXTENSION IF NOT EXISTS timescaledb;
+/* CREATE EXTENSION IF NOT EXISTS timescaledb;
 
 -- Hypertable de telemetría
 -- Nota: cualquier PK/índice único debe incluir la columna de partición (ts)
@@ -20,3 +20,4 @@ CREATE INDEX IF NOT EXISTS idx_telemetry_sensor_ts ON telemetry(sensor_type, ts 
 -- (Opcional) RLS ejemplo (desactivado por defecto)
 -- ALTER TABLE telemetry ENABLE ROW LEVEL SECURITY;
 -- CREATE POLICY tenant_isolation ON telemetry USING (tenant_id = current_setting('cmms.tenant', true));
+ */

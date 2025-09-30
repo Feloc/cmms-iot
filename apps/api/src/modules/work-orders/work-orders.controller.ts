@@ -111,7 +111,7 @@ export class WorkOrdersController {
   }
 
   // --- Adjuntos ---
-  @Get(':id/attachments')
+  /* @Get(':id/attachments')
   getAttachments(@Param('id') id: string) {
     return this.service.getAttachments(id);
   }
@@ -122,7 +122,7 @@ export class WorkOrdersController {
   @Delete(':id/attachments/:attachmentId')
   deleteAttachment(@Param('id') id: string, @Param('attachmentId') attachmentId: string) {
     return this.service.deleteAttachment(id, attachmentId);
-  }
+  } */
 
   // --- Notas ---
   @Get(':id/notes')

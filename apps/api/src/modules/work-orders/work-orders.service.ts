@@ -460,7 +460,7 @@ async addAttachment(woId: string, dto: CreateAttachmentDto) {
   const tenantId = this.getTenantId();
   const userId = this.getUserId();
   await this.ensureWO(woId, tenantId);
-  return this.prisma.workAttachment.create({
+  return this.prisma.Attachment.create({
     data: {
       tenantId, workOrderId: woId,
       kind: dto.kind,

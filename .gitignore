@@ -5,6 +5,8 @@ dist/
 apps/*/node_modules/
 apps/*/.next/
 apps/*/dist/
+storage/
+apps/*/storage
 **/.env
 .env
 .env.local

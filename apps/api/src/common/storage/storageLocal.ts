@@ -7,17 +7,17 @@ export class LocalStorageDriver implements IStorageDriver {
   publicBase: string;
   constructor() {
     this.root = process.env.LOCAL_STORAGE_ROOT || path.resolve(process.cwd(), 'storage');
-    this.publicBase = process.env.LOCAL_PUBLIC_BASE || '/files';
+    this.publicBase = (process.env.LOCAL_PUBLIC_BASE || '/files').replace(/\/$/, '');
   }
 
-  async save(params: { key: string; buffer: Buffer; mimeType: string }) {
+  async save(params: { key: string; buffer: Buffer; mimeType: string }): Promise<UploadResult> {
     const filePath = path.join(this.root, params.key);
     await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
     await fs.promises.writeFile(filePath, params.buffer);
     return {
       storageKey: params.key,
-      publicUrl: `${this.publicBase}/${params.key}`.replace(/\\/g, '/'),
-      size: params.buffer.length,
+      publicUrl: this.getPublicUrl({ key: params.key }),
+      size: params.buffer.byteLength,
       mimeType: params.mimeType,
       filename: path.basename(params.key),
     };
@@ -25,7 +25,7 @@ export class LocalStorageDriver implements IStorageDriver {
 
   async remove(params: { key: string }): Promise<void> {
     const filePath = path.join(this.root, params.key);
-    try { await fs.promises.unlink(filePath); } catch (_) {}
+    try { await fs.promises.unlink(filePath); } catch { /* ignore */ }
   }
 
   getPublicUrl(params: { key: string }): string {

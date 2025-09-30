@@ -1,18 +1,19 @@
-import { IsEnum, IsNotEmpty, IsString } from 'class-validator';
+import { IsEnum, IsNotEmpty, IsOptional, IsString } from 'class-validator';
 
-export enum AttachmentTypeDto {
+export enum AttachmentType {
   IMAGE = 'IMAGE',
   VIDEO = 'VIDEO',
   AUDIO = 'AUDIO',
   DOCUMENT = 'DOCUMENT',
 }
 
-export class CreateAttachmentDto {
-  @IsEnum(AttachmentTypeDto) type!: AttachmentTypeDto;
+export class AttachmentTypeDto {
+  @IsEnum(AttachmentType)
+  type!: AttachmentType;
 
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
-  filename!: string;
+  label?: string;
 
   @IsString()
   @IsNotEmpty()

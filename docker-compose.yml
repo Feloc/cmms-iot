@@ -40,6 +40,7 @@ services:
     volumes:
       - ./apps/api:/app
       - /app/node_modules
+      - ./storage/attachments:/app/storage/attachments
     command: sh -c "npx prisma generate && npm run start:dev"
 
   web:

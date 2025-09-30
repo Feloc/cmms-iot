@@ -8,65 +8,66 @@ import { JwtService } from '@nestjs/jwt';
 import type { Request, Response, NextFunction } from 'express';
 
 async function bootstrap() {
-  // Usamos CORS nativo de Nest; desactivamos el flag de factory
   const app = await NestFactory.create(AppModule, { cors: false });
   const prisma = app.get(PrismaService);
   await prisma.$connect();
 
-  // CORS configurable por env (CORS_ORIGINS="http://localhost:3000,https://foo.bar")
+  // CORS: permitir headers personalizados y credenciales
   const origins = (process.env.CORS_ORIGINS || '')
     .split(',')
-    .map(s => s.trim())
+    .map((s) => s.trim())
     .filter(Boolean);
-  app.enableCors({ origin: origins.length ? origins : true, credentials: true });
+  app.enableCors({ origin: origins.length ? origins : true, credentials: true, exposedHeaders: ['Content-Length','Content-Type'] });
 
   app.use(cookieParser());
-
   const jwt = app.get(JwtService);
 
-  // Middleware tipado: fija tenant en AsyncLocalStorage desde header o JWT
+  // ===== TENANT/USER CONTEXT MIDDLEWARE =====
   app.use(async (req: Request, _res: Response, next: NextFunction) => {
     const hdr = req.headers as Record<string, string | string[] | undefined>;
-    const headerTenant =
+    const qs  = (req.query || {}) as Record<string, string | string[] | undefined>;
+
+    // 1) Intentar por headers comunes
+    let headerTenant =
       hdr['x-tenant'] ??
       hdr['x-tenant-id'] ??
       hdr['x_org'] ??
       hdr['x-org'];
 
+    // 2) Si no vino por header (caso <img>/<a>), aceptar por query param
+    if (!headerTenant) {
+      headerTenant = qs['x-tenant'] ?? qs['tenant'] ?? qs['x-tenant-id'] ?? undefined;
+    }
+
     let tenantId: string | undefined;
     let userId: string | undefined;
 
     if (headerTenant) {
-      const slug = Array.isArray(headerTenant)
-        ? String(headerTenant[0])
-        : String(headerTenant);
-      const t = await prisma.tenant.findUnique({ where: { slug } });
-      tenantId = t?.id;
+      const slug = Array.isArray(headerTenant) ? String(headerTenant[0]) : String(headerTenant);
+      try {
+        const t = await prisma.tenant.findUnique({ where: { slug } });
+        tenantId = t?.id;
+      } catch {
+        // noop
+      }
     }
-    
+
+    // 3) Intentar leer tenantId también del JWT si existe
     if (hdr.authorization && typeof hdr.authorization === 'string' && hdr.authorization.startsWith('Bearer ')) {
       try {
         const token = hdr.authorization.substring(7);
         const decoded = jwt.decode(token) as null | string | { [k: string]: any };
         if (decoded && typeof decoded === 'object') {
           tenantId = tenantId ?? (decoded.tenantId as string | undefined);
-          userId = decoded.sub as string | undefined;  // típico campo userId
+          userId = decoded.sub as string | undefined;
         }
       } catch {
-        // no-op: si el token no se puede decodificar, seguimos sin tenantId
+        // noop
       }
     }
 
     tenantStorage.run({ tenantId, userId }, () => next());
   });
-
-  // Graceful shutdown (sin $on('beforeExit'))
-  const shutdown = async () => {
-    try { await prisma.$disconnect(); } catch {}
-    try { await app.close(); } catch {}
-  };
-  process.on('SIGINT', async () => { await shutdown(); process.exit(0); });
-  process.on('SIGTERM', async () => { await shutdown(); process.exit(0); });
 
   const port = process.env.API_PORT ? Number(process.env.API_PORT) : 3001;
   await app.listen(port);

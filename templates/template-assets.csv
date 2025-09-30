@@ -1,0 +1,3 @@
+code,name,brand,model,serialNumber,category,location,criticality,status,nominalPower,nominalPowerUnit,acquiredOn,supplier,ingestKey
+AST-001,Motor Principal,Siemens,1PH8137,ABC123,Motor,Planta Norte,HIGH,ACTIVE,75,kW,2020-05-12,Proveedor1,motor-001
+AST-002,Bomba Agua,Grundfos,CRN5,XYZ789,Bomba,Planta Sur,MEDIUM,ACTIVE,15,kW,2021-03-01,Proveedor2,bomba-xyz
