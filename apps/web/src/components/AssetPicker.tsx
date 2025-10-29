@@ -12,16 +12,20 @@ type Asset = {
   location?: string | null;
 };
 
+type PaginatedResponse<T> = {
+  items: T[];
+  page: number;
+  size: number;
+  total: number;
+  pages: number;
+};
+
 type AssetPickerProps = {
   label?: string;
   placeholder?: string;
-  /** code del asset seleccionado (lo que persistes) */
   value?: string | null;
-  /** devuelve code del asset seleccionado */
   onChange: (code: string) => void;
-  /** si quieres deshabilitarlo en algún caso */
   disabled?: boolean;
-  /** requerido visualmente */
   required?: boolean;
 };
 
@@ -36,7 +40,7 @@ export default function AssetPicker({
   const { data: session } = useSession();
   const { token, tenantSlug } = getAuthFromSession(session);
 
-  const { data: assets, isLoading, error } = useApiSWR<Asset[]>(
+  const { data: assets, isLoading, error } = useApiSWR<PaginatedResponse<Asset> | Asset[]>(
     'assets',
     token,
     tenantSlug
@@ -46,7 +50,6 @@ export default function AssetPicker({
   const [q, setQ] = useState('');
   const rootRef = useRef<HTMLDivElement>(null);
 
-  // Cerrar al hacer clic afuera
   useEffect(() => {
     function onDocClick(e: MouseEvent) {
       if (!rootRef.current) return;
@@ -58,25 +61,30 @@ export default function AssetPicker({
     return () => document.removeEventListener('mousedown', onDocClick);
   }, []);
 
+  // Normalizar lista de activos (acepta array o respuesta paginada)
+  const list: Asset[] = useMemo(() => {
+    if (Array.isArray(assets)) return assets;
+    if (Array.isArray((assets as any)?.items)) return (assets as any).items;
+    return [];
+  }, [assets]);
+
   const selectedAsset = useMemo(() => {
-    if (!assets || !value) return null;
-    return assets.find(a => a.code === value) || null;
-  }, [assets, value]);
+    if (!value) return null;
+    return list.find(a => a.code === value) || null;
+  }, [list, value]);
 
   const norm = (s?: string | null) =>
     (s || '').toString().normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase();
 
-  const filtered = useMemo(() => {
-    if (!assets) return [];
+  const filtered: Asset[] = useMemo(() => {
     const nq = norm(q);
-    if (!nq) return assets;
-    return assets.filter(a => {
+    if (!nq) return list;
+    return list.filter(a => {
       const bag = `${a.name} ${a.code} ${a.location || ''}`;
       return norm(bag).includes(nq);
     });
-  }, [assets, q]);
+  }, [list, q]);
 
-  // grupos por location
   const grouped = useMemo(() => {
     const map = new Map<string, Asset[]>();
     for (const a of filtered) {
@@ -84,7 +92,7 @@ export default function AssetPicker({
       if (!map.has(key)) map.set(key, []);
       map.get(key)!.push(a);
     }
-    // ordenar grupos por nombre asc, y dentro por name asc
+
     const entries = Array.from(map.entries()).sort(([l1], [l2]) =>
       l1.localeCompare(l2, 'es', { sensitivity: 'base' })
     );
@@ -100,7 +108,6 @@ export default function AssetPicker({
         {label}{required ? <span className="text-red-500 ml-0.5">*</span> : null}
       </label>
 
-      {/* “Botón”/input que abre el panel */}
       <div className="relative">
         <button
           type="button"
@@ -123,13 +130,8 @@ export default function AssetPicker({
           )}
         </button>
 
-        {/* Panel dropdown */}
         {open && (
-          <div
-            className="absolute z-50 mt-2 w-full rounded-xl border bg-white shadow-xl"
-            role="listbox"
-          >
-            {/* Buscador */}
+          <div className="absolute z-50 mt-2 w-full rounded-xl border bg-white shadow-xl" role="listbox">
             <div className="p-2 border-b">
               <input
                 autoFocus
@@ -141,15 +143,8 @@ export default function AssetPicker({
               />
             </div>
 
-            {/* Estados de carga/errores */}
-            {isLoading && (
-              <div className="p-3 text-sm text-gray-500">Cargando activos…</div>
-            )}
-            {error && !isLoading && (
-              <div className="p-3 text-sm text-red-600">Error cargando activos.</div>
-            )}
-
-            {/* Lista agrupada */}
+            {isLoading && <div className="p-3 text-sm text-gray-500">Cargando activos…</div>}
+            {error && !isLoading && <div className="p-3 text-sm text-red-600">Error cargando activos.</div>}
             {!isLoading && !error && grouped.length === 0 && (
               <div className="p-3 text-sm text-gray-500">Sin resultados.</div>
             )}
@@ -168,11 +163,10 @@ export default function AssetPicker({
                           <button
                             type="button"
                             onClick={() => {
-                              onChange(a.code); // devolvemos CODE (lo que guardamos)
+                              onChange(a.code);
                               setOpen(false);
                             }}
-                            className={`w-full text-left px-3 py-2 hover:bg-blue-50
-                              ${isSel ? 'bg-blue-50' : ''}`}
+                            className={`w-full text-left px-3 py-2 hover:bg-blue-50 ${isSel ? 'bg-blue-50' : ''}`}
                           >
                             <div className="font-medium">{a.name}</div>
                             <div className="text-xs text-gray-500">{a.code}</div>

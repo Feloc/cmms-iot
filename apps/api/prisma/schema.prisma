@@ -531,11 +531,6 @@ enum DeviceType {
   EDGE_GATEWAY
 }
 
-enum DeviceStatus {
-  ONLINE
-  OFFLINE
-  UNKNOWN
-}
 
 enum RuleKind {
   THRESHOLD
@@ -551,34 +546,31 @@ enum EventStatus {
 
 /// MODELS
 model Device {
-  id         String   @id @default(cuid())
-  tenantId   String
-  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id            String        @id @default(cuid())
+  tenantId      String
+  tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  name       String
-  type       DeviceType
-  status     DeviceStatus   @default(UNKNOWN)
-  ingestKey  String?        @unique
-  assetId    String?
-  asset      Asset?   @relation(fields: [assetId], references: [id], onDelete: SetNull)
+  assetId       String?
+  asset         Asset?          @relation(fields: [assetId], references: [id], onDelete: SetNull)
 
-  // Auth simple para MQTT (dev): username = `${tenantSlug}:${deviceId}` o propio
-  authMode   String   @default("password") // password | token | external
-  username   String?
-  secretHash String?  // nunca guardar plain text
-
-  lastSeen   DateTime?
-  metadata   Json?
-
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
-
-  events     AssetEvent[]
-  rules      Rule[]
+  name          String
+  code          String          @unique
+  model         String?
+  manufacturer  String?
+  description   String?
+  ingestKey     String          @unique
+  status        DeviceStatus    @default(ACTIVE)
+  lastSeenAt    DateTime?
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
 
   @@index([tenantId, assetId])
-  @@index([tenantId, status, lastSeen])
-  @@unique([tenantId, name])
+}
+
+enum DeviceStatus {
+  ACTIVE
+  INACTIVE
+  MAINTENANCE
 }
 
 model Rule {
@@ -595,7 +587,6 @@ model Rule {
   assetId    String?
   asset      Asset?    @relation(fields: [assetId], references: [id], onDelete: SetNull)
   deviceId   String?
-  device     Device?   @relation(fields: [deviceId], references: [id], onDelete: SetNull)
 
   // métrica a evaluar (ej: "rms_g", "temp_c") y parámetros de la regla (JSON)
   metric     String
@@ -632,7 +623,6 @@ model AssetEvent {
   asset      Asset      @relation(fields: [assetId], references: [id], onDelete: Cascade)
 
   deviceId   String?
-  device     Device?    @relation(fields: [deviceId], references: [id], onDelete: SetNull)
 
   ruleId     String?
   rule       Rule?      @relation(fields: [ruleId], references: [id], onDelete: SetNull)

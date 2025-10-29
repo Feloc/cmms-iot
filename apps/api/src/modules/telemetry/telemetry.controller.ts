@@ -1,15 +1,35 @@
-import { Controller, Get } from '@nestjs/common';
+import { Controller, Get, Param, Query, BadRequestException } from '@nestjs/common';
 import { TelemetryService } from './telemetry.service';
-import { getTenant } from '../../common/tenant-context';
+import { TelemetryQueryDto } from './dto/telemetry-query.dto';
+import { tenantStorage } from '../../common/tenant-context';
 
-@Controller('dashboard')
+@Controller()
 export class TelemetryController {
-  constructor(private svc: TelemetryService) {}
+  constructor(private readonly svc: TelemetryService) {}
 
-  @Get()
-  async kpis() {
-    const tenantId = getTenant();
-    if (!tenantId) return { error: 'Missing tenant' };
-    return this.svc.kpis(tenantId);
+  @Get('devices/:deviceId/telemetry')
+  async byDevice(@Param('deviceId') deviceId: string, @Query() q: TelemetryQueryDto) {
+    const tenantId = tenantStorage.getStore()?.tenantId;
+    if (!tenantId) throw new BadRequestException('No tenant in context');
+
+    const from = q.from ? new Date(q.from) : undefined;
+    const to = q.to ? new Date(q.to) : undefined;
+    const bucket = q.bucket ?? 'raw';
+    const limit = q.limit;
+
+    return this.svc.byDevice(tenantId, deviceId, q.metric, from, to, bucket, limit);
+  }
+
+  @Get('assets/:assetId/telemetry')
+  async byAsset(@Param('assetId') assetId: string, @Query() q: TelemetryQueryDto) {
+    const tenantId = tenantStorage.getStore()?.tenantId;
+    if (!tenantId) throw new BadRequestException('No tenant in context');
+
+    const from = q.from ? new Date(q.from) : undefined;
+    const to = q.to ? new Date(q.to) : undefined;
+    const bucket = q.bucket ?? 'raw';
+    const limit = q.limit;
+
+    return this.svc.byAsset(tenantId, assetId, q.metric, from, to, bucket, limit);
   }
 }

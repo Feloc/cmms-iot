@@ -26,6 +26,24 @@ services:
     volumes:
       - ./mqtt/mosquitto.conf:/mosquitto/config/mosquitto.conf
 
+  ingest:
+    build:
+      context: .
+      dockerfile: apps/ingest/Dockerfile
+      target: dev
+    container_name: cmms_ingest
+    env_file:
+      - .env
+      - ./apps/ingest/.env
+    depends_on:
+      db: {condition: service_healthy}
+      mosquitto: {condition: service_started}
+    working_dir: /app/apps/ingest
+    volumes:
+      - ./apps/ingest:/app/apps/ingest
+      - ingest_node_modules:/app/node_modules
+    command: sh -lc '[ -d /app/node_modules ] || npm ci --workspaces --include-workspace-root; npm run dev'
+
   api:
     build: ./apps/api
     container_name: cmms_api
@@ -67,3 +85,4 @@ services:
 
 volumes:
   db_data:
+  ingest_node_modules:

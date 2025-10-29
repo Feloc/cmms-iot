@@ -10,6 +10,8 @@ const OverviewTab = dynamic(() => import('./tabs/OverviewTab'), { ssr: false, lo
 const AttachmentsTab = dynamic(() => import('./tabs/AttachmentsTab'), { ssr: false, loading: () => <div className="p-4 text-sm text-gray-500">Cargando adjuntos…</div> });
 const InventoryTab = dynamic(() => import('./tabs/InventoryTab'), { ssr: false, loading: () => <div className="p-4 text-sm text-gray-500">Cargando inventario…</div> });
 const ParametersTab = dynamic(() => import('./tabs/ParametersTab'), { ssr: false, loading: () => <div className="p-4 text-sm text-gray-500">Cargando parámetros…</div> });
+const TelemetryTab = dynamic(() => import('./tabs/TelemetryTab'), {ssr: false, loading: () => <div className="p-4 text-sm text-gray-500">Cargando telemetría…</div>,});
+
 
 export default function AssetDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -26,7 +28,7 @@ function DetailInner() {
   const [asset, setAsset] = React.useState<any>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [loading, setLoading] = React.useState(false);
-  const tabs = ['Resumen', 'Adjuntos', 'Inventario', 'Parámetros'] as const;
+  const tabs = ['Resumen', 'Adjuntos', 'Inventario', 'Parámetros', 'Telemetría'] as const;
   type TabKey = typeof tabs[number];
   const [active, setActive] = React.useState<TabKey>('Resumen');
 
@@ -89,6 +91,7 @@ function DetailInner() {
           {active === 'Adjuntos' && <AttachmentsTab />}
           {active === 'Inventario' && <InventoryTab />}
           {active === 'Parámetros' && <ParametersTab />}
+          {active === 'Telemetría' && <TelemetryTab assetId={asset.id} />}
         </div>
       ) : null}
     </div>
