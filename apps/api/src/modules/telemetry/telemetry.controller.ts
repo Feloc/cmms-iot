@@ -9,6 +9,8 @@ export class TelemetryController {
 
   @Get('devices/:deviceId/telemetry')
   async byDevice(@Param('deviceId') deviceId: string, @Query() q: TelemetryQueryDto) {
+    console.log('Hola get telemetry');
+    
     const tenantId = tenantStorage.getStore()?.tenantId;
     if (!tenantId) throw new BadRequestException('No tenant in context');
 
