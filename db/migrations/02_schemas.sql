@@ -1,0 +1,10 @@
+CREATE SCHEMA IF NOT EXISTS _timescaledb_cache;
+CREATE SCHEMA IF NOT EXISTS _timescaledb_catalog;
+CREATE SCHEMA IF NOT EXISTS _timescaledb_config;
+CREATE SCHEMA IF NOT EXISTS _timescaledb_debug;
+CREATE SCHEMA IF NOT EXISTS _timescaledb_functions;
+CREATE SCHEMA IF NOT EXISTS _timescaledb_internal;
+CREATE SCHEMA IF NOT EXISTS public;
+CREATE SCHEMA IF NOT EXISTS timescaledb_experimental;
+CREATE SCHEMA IF NOT EXISTS timescaledb_information;
+CREATE SCHEMA IF NOT EXISTS timeseries;

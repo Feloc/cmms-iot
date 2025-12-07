@@ -1,0 +1,35 @@
+--
+-- PostgreSQL database cluster dump
+--
+
+SET default_transaction_read_only = off;
+
+SET client_encoding = 'UTF8';
+SET standard_conforming_strings = on;
+
+--
+-- Roles
+--
+
+CREATE ROLE cmms;
+ALTER ROLE cmms WITH SUPERUSER INHERIT CREATEROLE CREATEDB LOGIN REPLICATION BYPASSRLS PASSWORD 'SCRAM-SHA-256$4096:S8sjla+1sDN/itwaoBsvFA==$8Khnh6e2VTR35KNfrkKog85FF/lLjgP3FmRSlm31P0k=:SSz6XMVpWlrx8wBDtzU6fx+KXkQzZHBFgRIFZU3lD5U=';
+CREATE ROLE cmms_app;
+ALTER ROLE cmms_app WITH NOSUPERUSER INHERIT NOCREATEROLE NOCREATEDB LOGIN NOREPLICATION NOBYPASSRLS PASSWORD 'SCRAM-SHA-256$4096:dqrjsxNLbAnRGtraOd/aGA==$A2CIKqe17FMAgNN4o7CKcSDtL7HlpAAgluvbrhddmFQ=:UQImJfiCZSrCf9128YaBc3q2lLAXXvHdgzvBvobzLnE=';
+CREATE ROLE cmms_ingest;
+ALTER ROLE cmms_ingest WITH NOSUPERUSER INHERIT NOCREATEROLE NOCREATEDB LOGIN NOREPLICATION NOBYPASSRLS PASSWORD 'SCRAM-SHA-256$4096:ptfC/khxHBCU926iz63h8Q==$zord9dmA+hqTYEKlcap2AB/oyXh/RXQQ2rdTU0MMGfk=:LsBjlwAyldXZ1L0stxDhz2/IKrRX834XXohiVxZpT8w=';
+
+--
+-- User Configurations
+--
+
+
+
+
+
+
+
+
+--
+-- PostgreSQL database cluster dump complete
+--
+
