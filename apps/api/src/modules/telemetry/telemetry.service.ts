@@ -7,6 +7,11 @@ export type TelemetryPoint = { ts: string; value: number | null; unit: string | 
 export class TelemetryService {
   constructor(private readonly prisma: PrismaService) {}
 
+  async resolveTenantIdBySlug(slug: string): Promise<string | null> {
+    const t = await this.prisma.tenant.findUnique({ where: { slug }, select: { id: true } });
+    return t?.id ?? null;
+  }
+
   private clampWindow(from?: Date, to?: Date) {
     const end = to ?? new Date();
     const start = from ?? new Date(end.getTime() - 24 * 3600 * 1000);
@@ -14,12 +19,43 @@ export class TelemetryService {
     return { start, end };
   }
 
-  /** Ejecuta un bloque dentro de una tx con SET LOCAL app.tenant_id */
   private async withTenant<T>(tenantId: string, run: (tx: any) => Promise<T>) {
     return this.prisma.$transaction(async (tx) => {
-      // Usa EXECUTE RAW para fijar tenant por conexión
       await tx.$executeRawUnsafe(`SET LOCAL app.tenant_id = '${tenantId.replace(/'/g, "''")}'`);
       return run(tx);
+    });
+  }
+
+  async metricsByDevice(tenantId: string, deviceId: string): Promise<string[]> {
+    return this.withTenant(tenantId, async (tx) => {
+      const rows: any[] = await tx.$queryRawUnsafe(
+        `SELECT DISTINCT metric
+           FROM timeseries.telemetry
+          WHERE tenant_id = $1 AND device_id = $2
+          ORDER BY metric ASC`,
+        tenantId, deviceId,
+      );
+      return rows.map((r) => r.metric);
+    });
+  }
+
+  async metricsByAsset(tenantId: string, assetId: string): Promise<string[]> {
+    const devices = await this.prisma.device.findMany({
+      where: { tenantId, assetId },
+      select: { id: true },
+    });
+    if (!devices.length) return [];
+    const ids = devices.map((d) => d.id);
+
+    return this.withTenant(tenantId, async (tx) => {
+      const rows: any[] = await tx.$queryRawUnsafe(
+        `SELECT DISTINCT metric
+           FROM timeseries.telemetry
+          WHERE tenant_id = $1 AND device_id = ANY($2::text[])
+          ORDER BY metric ASC`,
+        tenantId, ids,
+      );
+      return rows.map((r) => r.metric);
     });
   }
 
@@ -32,20 +68,43 @@ export class TelemetryService {
     bucket: 'raw' | '5m' = 'raw',
     limit?: number,
   ): Promise<TelemetryPoint[]> {
-    const { start, end } = this.clampWindow(from, to);
-    const tbl = bucket === '5m' ? 'timeseries.v_telemetry_5m' : 'timeseries.v_telemetry';
-    const timeCol = bucket === '5m' ? 'bucket' : 'ts';
-    const safetyLimit = bucket === 'raw' ? Math.min(limit ?? 10000, 20000) : Math.min(limit ?? 5000, 10000);
+    const safetyLimit = bucket === 'raw' ? Math.min(limit ?? 2000, 20000) : Math.min(limit ?? 1000, 10000);
+    const hasWindow = !!from || !!to;
+    const window = hasWindow ? this.clampWindow(from, to) : null;
 
     return this.withTenant(tenantId, async (tx) => {
+      if (bucket === '5m') {
+        const args = hasWindow
+          ? [tenantId, deviceId, metric, window!.start, window!.end]
+          : [tenantId, deviceId, metric];
+
+        const rows: any[] = await tx.$queryRawUnsafe(
+          `SELECT bucket as ts, v_avg as value, unit
+             FROM timeseries.v_telemetry_5m
+            WHERE tenant_id = $1 AND device_id = $2 AND metric = $3
+              ${hasWindow ? 'AND bucket >= $4 AND bucket < $5' : ''}
+            ORDER BY bucket ${hasWindow ? 'ASC' : 'DESC'}
+            LIMIT ${safetyLimit}`,
+          ...args,
+        );
+        if (!hasWindow) rows.reverse();
+        return rows.map((r) => ({ ts: new Date(r.ts).toISOString(), value: r.value, unit: r.unit ?? null }));
+      }
+
+      const args = hasWindow
+        ? [tenantId, deviceId, metric, window!.start, window!.end]
+        : [tenantId, deviceId, metric];
+
       const rows: any[] = await tx.$queryRawUnsafe(
-        `SELECT ${timeCol} as ts, ${bucket === '5m' ? 'v_avg' : 'value_double'} as value, unit
-         FROM ${tbl}
-         WHERE device_id = $1 AND metric = $2 AND ${timeCol} >= $3 AND ${timeCol} < $4
-         ORDER BY ${timeCol} ASC
-         LIMIT ${safetyLimit}`,
-        deviceId, metric, start, end,
+        `SELECT ts, value_double as value, unit
+           FROM timeseries.telemetry
+          WHERE tenant_id = $1 AND device_id = $2 AND metric = $3
+            ${hasWindow ? 'AND ts >= $4 AND ts < $5' : ''}
+          ORDER BY ts ${hasWindow ? 'ASC' : 'DESC'}
+          LIMIT ${safetyLimit}`,
+        ...args,
       );
+      if (!hasWindow) rows.reverse();
       return rows.map((r) => ({ ts: new Date(r.ts).toISOString(), value: r.value, unit: r.unit ?? null }));
     });
   }
@@ -59,34 +118,28 @@ export class TelemetryService {
     bucket: 'raw' | '5m' = 'raw',
     limit?: number,
   ): Promise<TelemetryPoint[]> {
-    // 1) lista devices del asset
     const devices = await this.prisma.device.findMany({
       where: { tenantId, assetId },
       select: { id: true },
     });
     if (!devices.length) return [];
 
-    // 2) consulta para todos los devices y merge por timestamp (suma/avg simple)
     const seriesPerDevice = await Promise.all(
       devices.map((d) => this.byDevice(tenantId, d.id, metric, from, to, bucket, limit)),
     );
 
-    // 3) merge: si hay varias series, agregamos por timestamp (avg)
-    const map = new Map<string, { valueSum: number; n: number; unit: string | null }>();
+    const map = new Map<string, { sum: number; n: number; unit: string | null }>();
     for (const s of seriesPerDevice) {
       for (const p of s) {
-        const key = p.ts;
-        const entry = map.get(key) || { valueSum: 0, n: 0, unit: p.unit };
-        if (typeof p.value === 'number') {
-          entry.valueSum += p.value; entry.n += 1;
-        }
-        entry.unit = entry.unit ?? p.unit ?? null;
-        map.set(key, entry);
+        const e = map.get(p.ts) || { sum: 0, n: 0, unit: p.unit };
+        if (typeof p.value === 'number') { e.sum += p.value; e.n += 1; }
+        e.unit = e.unit ?? p.unit ?? null;
+        map.set(p.ts, e);
       }
     }
-    const out: TelemetryPoint[] = Array.from(map.entries())
-      .map(([ts, e]) => ({ ts, value: e.n ? e.valueSum / e.n : null, unit: e.unit }))
+
+    return Array.from(map.entries())
+      .map(([ts, e]) => ({ ts, value: e.n ? e.sum / e.n : null, unit: e.unit }))
       .sort((a, b) => a.ts.localeCompare(b.ts));
-    return out;
   }
 }

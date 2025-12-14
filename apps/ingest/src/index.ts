@@ -3,6 +3,7 @@ import mqtt from 'mqtt';
 import pino from 'pino';
 import { createPool, withTenant } from './db';
 import { parseTopic } from './mqtt-topics';
+import { normalizeTelemetryTimestamp, isSuspicious1970 } from './time';
 import { TelemetryPayload, toRows } from './telemetry';
 import { insertTelemetry } from './db-timescale';
 import { loadRules, evalRulesForMetric, upsertRuleStateAndEvent, Rule } from './rules';
@@ -108,8 +109,27 @@ function startMqtt() {
       if (!dev) return log.warn({ topic }, 'unknown device');
 
       if (p.channel.startsWith(CHANNEL_TELEMETRY)) {
-        const rows = toRows(tenantId, dev.id, parsed);
-        console.log(rows);
+  // Timestamp fix:
+  // - If device sends epoch (ms/sec or ISO), we store it.
+  // - If device sends uptime millis (ends up as 1970), we fallback to server receive time.
+  const receivedAt = new Date();
+  const deviceTs =
+    (parsed as any).ts ??
+    (parsed as any).timestamp ??
+    (parsed as any).time ??
+    undefined;
+
+  const norm = normalizeTelemetryTimestamp(deviceTs, receivedAt);
+
+  const rowsRaw = toRows(tenantId, dev.id, parsed);
+  const rows = rowsRaw.map((r: any) => {
+    try {
+      if (r?.ts instanceof Date && isSuspicious1970(r.ts)) return { ...r, ts: norm.ts };
+      if (!r?.ts) return { ...r, ts: norm.ts };
+    } catch {}
+    return r;
+  });
+console.log(rows);
         
         if (rows.length) {
           await insertTelemetry(pool, rows);
