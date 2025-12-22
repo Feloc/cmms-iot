@@ -9,12 +9,31 @@ import { NoticesModule } from './modules/notices/notices.module';
 import { InventoryModule } from './modules/inventory/inventory.module';
 import { MqttModule } from './modules/mqtt/mqtt.module';
 import { WorkOrdersModule } from './modules/work-orders/work-orders.module';
+import { ServiceOrdersModule } from './modules/service-orders/service-orders.module';
+import { UsersModule } from './modules/users/users.module';
+import { PmPlansModule } from './modules/pm-plans/pm-plans.module';
 import { CatalogModule } from './modules/catalog/catalog.module';
 import { AttachmentsModule } from './modules/attachments/attachments.module';
 import { DevicesModule } from './modules/devices/devices.module';
 
-
 @Module({
-  imports: [ConfigModule.forRoot({ isGlobal: true }), AuthModule, TelemetryModule, RulesModule, AssetsModule, AlertsModule, NoticesModule, InventoryModule, MqttModule, WorkOrdersModule, CatalogModule, AttachmentsModule, DevicesModule],
+  imports: [
+    ConfigModule.forRoot({ isGlobal: true }),
+    AuthModule,
+    TelemetryModule,
+    RulesModule,
+    AssetsModule,
+    AlertsModule,
+    NoticesModule,
+    InventoryModule,
+    MqttModule,
+    WorkOrdersModule,
+    ServiceOrdersModule,
+    UsersModule,
+    PmPlansModule,
+    CatalogModule,
+    AttachmentsModule,
+    DevicesModule,
+  ],
 })
 export class AppModule {}

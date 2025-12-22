@@ -51,6 +51,7 @@ export class AssetsService {
         { brand: { contains: s, mode: 'insensitive' } },
         { model: { contains: s, mode: 'insensitive' } },
         { serialNumber: { contains: s, mode: 'insensitive' } },
+        { customer: { contains: s, mode: 'insensitive' } },
       ];
     }
 
@@ -98,6 +99,7 @@ export class AssetsService {
       tenant: { connect: { id: tenantId } },
       code: dto.code?.trim(),
       name: dto.name?.trim(),
+      customer: (dto as any).customer ?? undefined,
       brand: dto.brand ?? null,
       model: dto.model ?? null,
       serialNumber: dto.serialNumber ?? null,
@@ -126,6 +128,7 @@ export class AssetsService {
     const data: Prisma.AssetUpdateInput = {
       code: dto.code?.trim(),
       name: dto.name?.trim(),
+      customer: (dto as any).customer ?? undefined,
       brand: dto.brand,
       model: dto.model,
       serialNumber: dto.serialNumber,

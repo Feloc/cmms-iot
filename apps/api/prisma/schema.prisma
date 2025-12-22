@@ -14,6 +14,20 @@ enum Role {
 }
 
 
+enum WorkOrderKind {
+  WORK_ORDER
+  SERVICE_ORDER
+}
+
+enum ServiceOrderType {
+  ALISTAMIENTO
+  DIAGNOSTICO
+  PREVENTIVO
+  CORRECTIVO
+  ENTREGA
+  OTRO
+}
+
 model Tenant {
   id         String   @id @default(cuid())
   slug       String   @unique
@@ -25,6 +39,7 @@ model Tenant {
   notices    Notice[]
   workOrders WorkOrder[]
   assignments WOAssignment[]
+  serviceOrderParts ServiceOrderPart[]
   workLog    WorkLog[]
   inventory  InventoryItem[]
   createdAt  DateTime @default(now())
@@ -42,6 +57,7 @@ model Tenant {
   devices               Device[]
   ruleStates            RuleState[]
   assetEvents           AssetEvent[]
+  pmPlans               PmPlan[]
 }
 
 model User {
@@ -54,6 +70,9 @@ model User {
   name      String
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  assignments WOAssignment[]
+
   @@unique([tenantId, email])
 }
 
@@ -76,6 +95,7 @@ model Asset {
 
   code            String
   name            String
+  customer        String?
   brand           String?
   model           String?
   serialNumber    String?
@@ -230,6 +250,24 @@ model WorkOrder {
   status      WorkOrderStatus  @default(OPEN)
   priority    WorkOrderPriority?
 
+
+  kind        WorkOrderKind     @default(WORK_ORDER)
+  serviceOrderType ServiceOrderType?
+  pmPlanId     String?
+  pmPlan       PmPlan?            @relation(fields: [pmPlanId], references: [id])
+
+  hasIssue     Boolean            @default(false)
+  formData     Json?
+
+  takenAt              DateTime?
+  arrivedAt            DateTime?
+  checkInAt            DateTime?
+  activityStartedAt    DateTime?
+  activityFinishedAt   DateTime?
+  deliveredAt          DateTime?
+
+  technicianSignature  String?
+  receiverSignature    String?
   dueDate     DateTime?
   startedAt   DateTime?
   completedAt DateTime?
@@ -238,6 +276,7 @@ model WorkOrder {
   updatedAt   DateTime @updatedAt
 
   assignments WOAssignment[]
+  serviceOrderParts ServiceOrderPart[]
   workLogs    WorkLog[]
   workOrderResolutions WorkOrderResolution[]
   workOrderPartUses WorkOrderPartUsed[]
@@ -274,6 +313,7 @@ model WOAssignment {
   workOrder    WorkOrder        @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
 
   userId       String
+  user         User?            @relation(fields: [userId], references: [id])
   role         AssignmentRole   @default(TECHNICIAN)
   state        AssignmentState  @default(ACTIVE)
   note         String?
@@ -332,6 +372,9 @@ model InventoryItem {
   qty       Int      @default(0)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  serviceOrderParts ServiceOrderPart[]
+
   @@unique([tenantId, sku])
 }
 
@@ -636,4 +679,44 @@ model AssetEvent {
 
   @@index([tenantId, assetId, createdAt(sort: Desc)])
   @@index([tenantId, status, severity, createdAt(sort: Desc)])
+}
+
+
+model PmPlan {
+  id        String   @id @default(cuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  name          String
+  intervalHours Int?
+  checklist     Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workOrders WorkOrder[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId, name])
+}
+
+model ServiceOrderPart {
+  id        String   @id @default(cuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  workOrderId String
+  workOrder   WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+
+  inventoryItemId String?
+  inventoryItem   InventoryItem? @relation(fields: [inventoryItemId], references: [id])
+
+  freeText String?
+  qty      Float   @default(1)
+  notes    String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId, workOrderId])
 }
