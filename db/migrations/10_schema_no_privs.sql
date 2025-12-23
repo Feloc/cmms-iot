@@ -206,6 +206,20 @@ CREATE TYPE "public"."RuleKind" AS ENUM (
 
 
 --
+-- Name: ServiceOrderType; Type: TYPE; Schema: public; Owner: -
+--
+
+CREATE TYPE "public"."ServiceOrderType" AS ENUM (
+    'ALISTAMIENTO',
+    'DIAGNOSTICO',
+    'PREVENTIVO',
+    'CORRECTIVO',
+    'ENTREGA',
+    'OTRO'
+);
+
+
+--
 -- Name: Severity; Type: TYPE; Schema: public; Owner: -
 --
 
@@ -225,6 +239,16 @@ CREATE TYPE "public"."WorkLogSource" AS ENUM (
     'MANUAL',
     'IMPORT',
     'IOT'
+);
+
+
+--
+-- Name: WorkOrderKind; Type: TYPE; Schema: public; Owner: -
+--
+
+CREATE TYPE "public"."WorkOrderKind" AS ENUM (
+    'WORK_ORDER',
+    'SERVICE_ORDER'
 );
 
 
@@ -304,6 +328,16 @@ CREATE VIEW "_timescaledb_internal"."_direct_view_3" AS
 
 
 --
+-- Name: _hyper_1_11_chunk; Type: TABLE; Schema: _timescaledb_internal; Owner: -
+--
+
+CREATE TABLE "_timescaledb_internal"."_hyper_1_11_chunk" (
+    CONSTRAINT "constraint_7" CHECK ((("ts" >= '2025-12-14 00:00:00+00'::timestamp with time zone) AND ("ts" < '2025-12-15 00:00:00+00'::timestamp with time zone)))
+)
+INHERITS ("timeseries"."telemetry");
+
+
+--
 -- Name: _hyper_1_1_chunk; Type: TABLE; Schema: _timescaledb_internal; Owner: -
 --
 
@@ -324,6 +358,36 @@ INHERITS ("timeseries"."telemetry");
 
 
 --
+-- Name: _hyper_1_6_chunk; Type: TABLE; Schema: _timescaledb_internal; Owner: -
+--
+
+CREATE TABLE "_timescaledb_internal"."_hyper_1_6_chunk" (
+    CONSTRAINT "constraint_4" CHECK ((("ts" >= '1970-01-01 00:00:00+00'::timestamp with time zone) AND ("ts" < '1970-01-02 00:00:00+00'::timestamp with time zone)))
+)
+INHERITS ("timeseries"."telemetry");
+
+
+--
+-- Name: _hyper_1_7_chunk; Type: TABLE; Schema: _timescaledb_internal; Owner: -
+--
+
+CREATE TABLE "_timescaledb_internal"."_hyper_1_7_chunk" (
+    CONSTRAINT "constraint_5" CHECK ((("ts" >= '1970-02-19 00:00:00+00'::timestamp with time zone) AND ("ts" < '1970-02-20 00:00:00+00'::timestamp with time zone)))
+)
+INHERITS ("timeseries"."telemetry");
+
+
+--
+-- Name: _hyper_1_8_chunk; Type: TABLE; Schema: _timescaledb_internal; Owner: -
+--
+
+CREATE TABLE "_timescaledb_internal"."_hyper_1_8_chunk" (
+    CONSTRAINT "constraint_6" CHECK ((("ts" >= '2105-01-14 00:00:00+00'::timestamp with time zone) AND ("ts" < '2105-01-15 00:00:00+00'::timestamp with time zone)))
+)
+INHERITS ("timeseries"."telemetry");
+
+
+--
 -- Name: _materialized_hypertable_3; Type: TABLE; Schema: _timescaledb_internal; Owner: -
 --
 
@@ -338,6 +402,16 @@ CREATE TABLE "_timescaledb_internal"."_materialized_hypertable_3" (
     "v_avg" double precision,
     "v_last" double precision
 );
+
+
+--
+-- Name: _hyper_3_12_chunk; Type: TABLE; Schema: _timescaledb_internal; Owner: -
+--
+
+CREATE TABLE "_timescaledb_internal"."_hyper_3_12_chunk" (
+    CONSTRAINT "constraint_8" CHECK ((("bucket" >= '2025-12-08 00:00:00+00'::timestamp with time zone) AND ("bucket" < '2025-12-18 00:00:00+00'::timestamp with time zone)))
+)
+INHERITS ("_timescaledb_internal"."_materialized_hypertable_3");
 
 
 --
@@ -367,6 +441,86 @@ CREATE VIEW "_timescaledb_internal"."_partial_view_3" AS
    FROM "timeseries"."telemetry"
   WHERE ("telemetry"."value_double" IS NOT NULL)
   GROUP BY "telemetry"."tenant_id", "telemetry"."device_id", "telemetry"."metric", ("public"."time_bucket"('00:05:00'::interval, "telemetry"."ts"));
+
+
+--
+-- Name: compress_hyper_2_10_chunk; Type: TABLE; Schema: _timescaledb_internal; Owner: -
+--
+
+CREATE TABLE "_timescaledb_internal"."compress_hyper_2_10_chunk" (
+    "_ts_meta_count" integer,
+    "tenant_id" "text",
+    "device_id" "text",
+    "metric" "text",
+    "_ts_meta_min_1" timestamp with time zone,
+    "_ts_meta_max_1" timestamp with time zone,
+    "ts" "_timescaledb_internal"."compressed_data",
+    "value_double" "_timescaledb_internal"."compressed_data",
+    "value_bool" "_timescaledb_internal"."compressed_data",
+    "value_text" "_timescaledb_internal"."compressed_data",
+    "unit" "_timescaledb_internal"."compressed_data",
+    "quality" "_timescaledb_internal"."compressed_data",
+    "attrs" "_timescaledb_internal"."compressed_data"
+)
+WITH ("toast_tuple_target"='128');
+ALTER TABLE ONLY "_timescaledb_internal"."compress_hyper_2_10_chunk" ALTER COLUMN "_ts_meta_count" SET STATISTICS 1000;
+ALTER TABLE ONLY "_timescaledb_internal"."compress_hyper_2_10_chunk" ALTER COLUMN "tenant_id" SET STATISTICS 1000;
+ALTER TABLE ONLY "_timescaledb_internal"."compress_hyper_2_10_chunk" ALTER COLUMN "device_id" SET STATISTICS 1000;
+ALTER TABLE ONLY "_timescaledb_internal"."compress_hyper_2_10_chunk" ALTER COLUMN "metric" SET STATISTICS 1000;
+ALTER TABLE ONLY "_timescaledb_internal"."compress_hyper_2_10_chunk" ALTER COLUMN "_ts_meta_min_1" SET STATISTICS 1000;
+ALTER TABLE ONLY "_timescaledb_internal"."compress_hyper_2_10_chunk" ALTER COLUMN "_ts_meta_max_1" SET STATISTICS 1000;
+ALTER TABLE ONLY "_timescaledb_internal"."compress_hyper_2_10_chunk" ALTER COLUMN "ts" SET STATISTICS 0;
+ALTER TABLE ONLY "_timescaledb_internal"."compress_hyper_2_10_chunk" ALTER COLUMN "value_double" SET STATISTICS 0;
+ALTER TABLE ONLY "_timescaledb_internal"."compress_hyper_2_10_chunk" ALTER COLUMN "value_bool" SET STATISTICS 0;
+ALTER TABLE ONLY "_timescaledb_internal"."compress_hyper_2_10_chunk" ALTER COLUMN "value_bool" SET STORAGE EXTENDED;
+ALTER TABLE ONLY "_timescaledb_internal"."compress_hyper_2_10_chunk" ALTER COLUMN "value_text" SET STATISTICS 0;
+ALTER TABLE ONLY "_timescaledb_internal"."compress_hyper_2_10_chunk" ALTER COLUMN "value_text" SET STORAGE EXTENDED;
+ALTER TABLE ONLY "_timescaledb_internal"."compress_hyper_2_10_chunk" ALTER COLUMN "unit" SET STATISTICS 0;
+ALTER TABLE ONLY "_timescaledb_internal"."compress_hyper_2_10_chunk" ALTER COLUMN "unit" SET STORAGE EXTENDED;
+ALTER TABLE ONLY "_timescaledb_internal"."compress_hyper_2_10_chunk" ALTER COLUMN "quality" SET STATISTICS 0;
+ALTER TABLE ONLY "_timescaledb_internal"."compress_hyper_2_10_chunk" ALTER COLUMN "quality" SET STORAGE EXTENDED;
+ALTER TABLE ONLY "_timescaledb_internal"."compress_hyper_2_10_chunk" ALTER COLUMN "attrs" SET STATISTICS 0;
+ALTER TABLE ONLY "_timescaledb_internal"."compress_hyper_2_10_chunk" ALTER COLUMN "attrs" SET STORAGE EXTENDED;
+
+
+--
+-- Name: compress_hyper_2_13_chunk; Type: TABLE; Schema: _timescaledb_internal; Owner: -
+--
+
+CREATE TABLE "_timescaledb_internal"."compress_hyper_2_13_chunk" (
+    "_ts_meta_count" integer,
+    "tenant_id" "text",
+    "device_id" "text",
+    "metric" "text",
+    "_ts_meta_min_1" timestamp with time zone,
+    "_ts_meta_max_1" timestamp with time zone,
+    "ts" "_timescaledb_internal"."compressed_data",
+    "value_double" "_timescaledb_internal"."compressed_data",
+    "value_bool" "_timescaledb_internal"."compressed_data",
+    "value_text" "_timescaledb_internal"."compressed_data",
+    "unit" "_timescaledb_internal"."compressed_data",
+    "quality" "_timescaledb_internal"."compressed_data",
+    "attrs" "_timescaledb_internal"."compressed_data"
+)
+WITH ("toast_tuple_target"='128');
+ALTER TABLE ONLY "_timescaledb_internal"."compress_hyper_2_13_chunk" ALTER COLUMN "_ts_meta_count" SET STATISTICS 1000;
+ALTER TABLE ONLY "_timescaledb_internal"."compress_hyper_2_13_chunk" ALTER COLUMN "tenant_id" SET STATISTICS 1000;
+ALTER TABLE ONLY "_timescaledb_internal"."compress_hyper_2_13_chunk" ALTER COLUMN "device_id" SET STATISTICS 1000;
+ALTER TABLE ONLY "_timescaledb_internal"."compress_hyper_2_13_chunk" ALTER COLUMN "metric" SET STATISTICS 1000;
+ALTER TABLE ONLY "_timescaledb_internal"."compress_hyper_2_13_chunk" ALTER COLUMN "_ts_meta_min_1" SET STATISTICS 1000;
+ALTER TABLE ONLY "_timescaledb_internal"."compress_hyper_2_13_chunk" ALTER COLUMN "_ts_meta_max_1" SET STATISTICS 1000;
+ALTER TABLE ONLY "_timescaledb_internal"."compress_hyper_2_13_chunk" ALTER COLUMN "ts" SET STATISTICS 0;
+ALTER TABLE ONLY "_timescaledb_internal"."compress_hyper_2_13_chunk" ALTER COLUMN "value_double" SET STATISTICS 0;
+ALTER TABLE ONLY "_timescaledb_internal"."compress_hyper_2_13_chunk" ALTER COLUMN "value_bool" SET STATISTICS 0;
+ALTER TABLE ONLY "_timescaledb_internal"."compress_hyper_2_13_chunk" ALTER COLUMN "value_bool" SET STORAGE EXTENDED;
+ALTER TABLE ONLY "_timescaledb_internal"."compress_hyper_2_13_chunk" ALTER COLUMN "value_text" SET STATISTICS 0;
+ALTER TABLE ONLY "_timescaledb_internal"."compress_hyper_2_13_chunk" ALTER COLUMN "value_text" SET STORAGE EXTENDED;
+ALTER TABLE ONLY "_timescaledb_internal"."compress_hyper_2_13_chunk" ALTER COLUMN "unit" SET STATISTICS 0;
+ALTER TABLE ONLY "_timescaledb_internal"."compress_hyper_2_13_chunk" ALTER COLUMN "unit" SET STORAGE EXTENDED;
+ALTER TABLE ONLY "_timescaledb_internal"."compress_hyper_2_13_chunk" ALTER COLUMN "quality" SET STATISTICS 0;
+ALTER TABLE ONLY "_timescaledb_internal"."compress_hyper_2_13_chunk" ALTER COLUMN "quality" SET STORAGE EXTENDED;
+ALTER TABLE ONLY "_timescaledb_internal"."compress_hyper_2_13_chunk" ALTER COLUMN "attrs" SET STATISTICS 0;
+ALTER TABLE ONLY "_timescaledb_internal"."compress_hyper_2_13_chunk" ALTER COLUMN "attrs" SET STORAGE EXTENDED;
 
 
 --
@@ -450,6 +604,46 @@ ALTER TABLE ONLY "_timescaledb_internal"."compress_hyper_2_5_chunk" ALTER COLUMN
 
 
 --
+-- Name: compress_hyper_2_9_chunk; Type: TABLE; Schema: _timescaledb_internal; Owner: -
+--
+
+CREATE TABLE "_timescaledb_internal"."compress_hyper_2_9_chunk" (
+    "_ts_meta_count" integer,
+    "tenant_id" "text",
+    "device_id" "text",
+    "metric" "text",
+    "_ts_meta_min_1" timestamp with time zone,
+    "_ts_meta_max_1" timestamp with time zone,
+    "ts" "_timescaledb_internal"."compressed_data",
+    "value_double" "_timescaledb_internal"."compressed_data",
+    "value_bool" "_timescaledb_internal"."compressed_data",
+    "value_text" "_timescaledb_internal"."compressed_data",
+    "unit" "_timescaledb_internal"."compressed_data",
+    "quality" "_timescaledb_internal"."compressed_data",
+    "attrs" "_timescaledb_internal"."compressed_data"
+)
+WITH ("toast_tuple_target"='128');
+ALTER TABLE ONLY "_timescaledb_internal"."compress_hyper_2_9_chunk" ALTER COLUMN "_ts_meta_count" SET STATISTICS 1000;
+ALTER TABLE ONLY "_timescaledb_internal"."compress_hyper_2_9_chunk" ALTER COLUMN "tenant_id" SET STATISTICS 1000;
+ALTER TABLE ONLY "_timescaledb_internal"."compress_hyper_2_9_chunk" ALTER COLUMN "device_id" SET STATISTICS 1000;
+ALTER TABLE ONLY "_timescaledb_internal"."compress_hyper_2_9_chunk" ALTER COLUMN "metric" SET STATISTICS 1000;
+ALTER TABLE ONLY "_timescaledb_internal"."compress_hyper_2_9_chunk" ALTER COLUMN "_ts_meta_min_1" SET STATISTICS 1000;
+ALTER TABLE ONLY "_timescaledb_internal"."compress_hyper_2_9_chunk" ALTER COLUMN "_ts_meta_max_1" SET STATISTICS 1000;
+ALTER TABLE ONLY "_timescaledb_internal"."compress_hyper_2_9_chunk" ALTER COLUMN "ts" SET STATISTICS 0;
+ALTER TABLE ONLY "_timescaledb_internal"."compress_hyper_2_9_chunk" ALTER COLUMN "value_double" SET STATISTICS 0;
+ALTER TABLE ONLY "_timescaledb_internal"."compress_hyper_2_9_chunk" ALTER COLUMN "value_bool" SET STATISTICS 0;
+ALTER TABLE ONLY "_timescaledb_internal"."compress_hyper_2_9_chunk" ALTER COLUMN "value_bool" SET STORAGE EXTENDED;
+ALTER TABLE ONLY "_timescaledb_internal"."compress_hyper_2_9_chunk" ALTER COLUMN "value_text" SET STATISTICS 0;
+ALTER TABLE ONLY "_timescaledb_internal"."compress_hyper_2_9_chunk" ALTER COLUMN "value_text" SET STORAGE EXTENDED;
+ALTER TABLE ONLY "_timescaledb_internal"."compress_hyper_2_9_chunk" ALTER COLUMN "unit" SET STATISTICS 0;
+ALTER TABLE ONLY "_timescaledb_internal"."compress_hyper_2_9_chunk" ALTER COLUMN "unit" SET STORAGE EXTENDED;
+ALTER TABLE ONLY "_timescaledb_internal"."compress_hyper_2_9_chunk" ALTER COLUMN "quality" SET STATISTICS 0;
+ALTER TABLE ONLY "_timescaledb_internal"."compress_hyper_2_9_chunk" ALTER COLUMN "quality" SET STORAGE EXTENDED;
+ALTER TABLE ONLY "_timescaledb_internal"."compress_hyper_2_9_chunk" ALTER COLUMN "attrs" SET STATISTICS 0;
+ALTER TABLE ONLY "_timescaledb_internal"."compress_hyper_2_9_chunk" ALTER COLUMN "attrs" SET STORAGE EXTENDED;
+
+
+--
 -- Name: Alert; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -494,7 +688,8 @@ CREATE TABLE "public"."Asset" (
     "serialNumber" "text",
     "slug" "text",
     "status" "public"."AssetStatus" DEFAULT 'ACTIVE'::"public"."AssetStatus" NOT NULL,
-    "supplierId" "text"
+    "supplierId" "text",
+    "customer" "text"
 );
 
 ALTER TABLE ONLY "public"."Asset" FORCE ROW LEVEL SECURITY;
@@ -641,6 +836,21 @@ CREATE TABLE "public"."Notice" (
 
 
 --
+-- Name: PmPlan; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE "public"."PmPlan" (
+    "id" "text" NOT NULL,
+    "tenantId" "text" NOT NULL,
+    "name" "text" NOT NULL,
+    "intervalHours" integer,
+    "checklist" "jsonb",
+    "createdAt" timestamp(3) without time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    "updatedAt" timestamp(3) without time zone NOT NULL
+);
+
+
+--
 -- Name: RemedyCode; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -687,6 +897,23 @@ CREATE TABLE "public"."RuleState" (
     "status" "text" DEFAULT 'NORMAL'::"text" NOT NULL,
     "lastChangeAt" timestamp(3) without time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
     "data" "jsonb"
+);
+
+
+--
+-- Name: ServiceOrderPart; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE "public"."ServiceOrderPart" (
+    "id" "text" NOT NULL,
+    "tenantId" "text" NOT NULL,
+    "workOrderId" "text" NOT NULL,
+    "inventoryItemId" "text",
+    "freeText" "text",
+    "qty" double precision DEFAULT 1 NOT NULL,
+    "notes" "text",
+    "createdAt" timestamp(3) without time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    "updatedAt" timestamp(3) without time zone NOT NULL
 );
 
 
@@ -821,7 +1048,21 @@ CREATE TABLE "public"."WorkOrder" (
     "updatedAt" timestamp(3) without time zone NOT NULL,
     "dueDate" timestamp(3) without time zone,
     "priority" "public"."WorkOrderPriority",
-    "status" "public"."WorkOrderStatus" DEFAULT 'OPEN'::"public"."WorkOrderStatus" NOT NULL
+    "status" "public"."WorkOrderStatus" DEFAULT 'OPEN'::"public"."WorkOrderStatus" NOT NULL,
+    "activityFinishedAt" timestamp(3) without time zone,
+    "activityStartedAt" timestamp(3) without time zone,
+    "arrivedAt" timestamp(3) without time zone,
+    "checkInAt" timestamp(3) without time zone,
+    "deliveredAt" timestamp(3) without time zone,
+    "formData" "jsonb",
+    "hasIssue" boolean DEFAULT false NOT NULL,
+    "kind" "public"."WorkOrderKind" DEFAULT 'WORK_ORDER'::"public"."WorkOrderKind" NOT NULL,
+    "pmPlanId" "text",
+    "receiverSignature" "text",
+    "serviceOrderType" "public"."ServiceOrderType",
+    "takenAt" timestamp(3) without time zone,
+    "technicianSignature" "text",
+    "durationMin" integer DEFAULT 60
 );
 
 
@@ -926,6 +1167,14 @@ CREATE VIEW "timeseries"."v_telemetry_5m" WITH ("security_barrier"='true') AS
 
 
 --
+-- Name: _hyper_1_11_chunk 11_6_telemetry_pkey; Type: CONSTRAINT; Schema: _timescaledb_internal; Owner: -
+--
+
+ALTER TABLE ONLY "_timescaledb_internal"."_hyper_1_11_chunk"
+    ADD CONSTRAINT "11_6_telemetry_pkey" PRIMARY KEY ("tenant_id", "device_id", "ts", "metric");
+
+
+--
 -- Name: _hyper_1_1_chunk 1_1_telemetry_pkey; Type: CONSTRAINT; Schema: _timescaledb_internal; Owner: -
 --
 
@@ -939,6 +1188,30 @@ ALTER TABLE ONLY "_timescaledb_internal"."_hyper_1_1_chunk"
 
 ALTER TABLE ONLY "_timescaledb_internal"."_hyper_1_4_chunk"
     ADD CONSTRAINT "4_2_telemetry_pkey" PRIMARY KEY ("tenant_id", "device_id", "ts", "metric");
+
+
+--
+-- Name: _hyper_1_6_chunk 6_3_telemetry_pkey; Type: CONSTRAINT; Schema: _timescaledb_internal; Owner: -
+--
+
+ALTER TABLE ONLY "_timescaledb_internal"."_hyper_1_6_chunk"
+    ADD CONSTRAINT "6_3_telemetry_pkey" PRIMARY KEY ("tenant_id", "device_id", "ts", "metric");
+
+
+--
+-- Name: _hyper_1_7_chunk 7_4_telemetry_pkey; Type: CONSTRAINT; Schema: _timescaledb_internal; Owner: -
+--
+
+ALTER TABLE ONLY "_timescaledb_internal"."_hyper_1_7_chunk"
+    ADD CONSTRAINT "7_4_telemetry_pkey" PRIMARY KEY ("tenant_id", "device_id", "ts", "metric");
+
+
+--
+-- Name: _hyper_1_8_chunk 8_5_telemetry_pkey; Type: CONSTRAINT; Schema: _timescaledb_internal; Owner: -
+--
+
+ALTER TABLE ONLY "_timescaledb_internal"."_hyper_1_8_chunk"
+    ADD CONSTRAINT "8_5_telemetry_pkey" PRIMARY KEY ("tenant_id", "device_id", "ts", "metric");
 
 
 --
@@ -1014,6 +1287,14 @@ ALTER TABLE ONLY "public"."Notice"
 
 
 --
+-- Name: PmPlan PmPlan_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."PmPlan"
+    ADD CONSTRAINT "PmPlan_pkey" PRIMARY KEY ("id");
+
+
+--
 -- Name: RemedyCode RemedyCode_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1035,6 +1316,14 @@ ALTER TABLE ONLY "public"."RuleState"
 
 ALTER TABLE ONLY "public"."Rule"
     ADD CONSTRAINT "Rule_pkey" PRIMARY KEY ("id");
+
+
+--
+-- Name: ServiceOrderPart ServiceOrderPart_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."ServiceOrderPart"
+    ADD CONSTRAINT "ServiceOrderPart_pkey" PRIMARY KEY ("id");
 
 
 --
@@ -1126,6 +1415,27 @@ ALTER TABLE ONLY "timeseries"."telemetry"
 
 
 --
+-- Name: _hyper_1_11_chunk_idx_tel_tenant_device_ts; Type: INDEX; Schema: _timescaledb_internal; Owner: -
+--
+
+CREATE INDEX "_hyper_1_11_chunk_idx_tel_tenant_device_ts" ON "_timescaledb_internal"."_hyper_1_11_chunk" USING "btree" ("tenant_id", "device_id", "ts" DESC);
+
+
+--
+-- Name: _hyper_1_11_chunk_idx_tel_tenant_metric_ts; Type: INDEX; Schema: _timescaledb_internal; Owner: -
+--
+
+CREATE INDEX "_hyper_1_11_chunk_idx_tel_tenant_metric_ts" ON "_timescaledb_internal"."_hyper_1_11_chunk" USING "btree" ("tenant_id", "metric", "ts" DESC);
+
+
+--
+-- Name: _hyper_1_11_chunk_telemetry_ts_idx; Type: INDEX; Schema: _timescaledb_internal; Owner: -
+--
+
+CREATE INDEX "_hyper_1_11_chunk_telemetry_ts_idx" ON "_timescaledb_internal"."_hyper_1_11_chunk" USING "btree" ("ts" DESC);
+
+
+--
 -- Name: _hyper_1_1_chunk_idx_tel_tenant_device_ts; Type: INDEX; Schema: _timescaledb_internal; Owner: -
 --
 
@@ -1165,6 +1475,104 @@ CREATE INDEX "_hyper_1_4_chunk_idx_tel_tenant_metric_ts" ON "_timescaledb_intern
 --
 
 CREATE INDEX "_hyper_1_4_chunk_telemetry_ts_idx" ON "_timescaledb_internal"."_hyper_1_4_chunk" USING "btree" ("ts" DESC);
+
+
+--
+-- Name: _hyper_1_6_chunk_idx_tel_tenant_device_ts; Type: INDEX; Schema: _timescaledb_internal; Owner: -
+--
+
+CREATE INDEX "_hyper_1_6_chunk_idx_tel_tenant_device_ts" ON "_timescaledb_internal"."_hyper_1_6_chunk" USING "btree" ("tenant_id", "device_id", "ts" DESC);
+
+
+--
+-- Name: _hyper_1_6_chunk_idx_tel_tenant_metric_ts; Type: INDEX; Schema: _timescaledb_internal; Owner: -
+--
+
+CREATE INDEX "_hyper_1_6_chunk_idx_tel_tenant_metric_ts" ON "_timescaledb_internal"."_hyper_1_6_chunk" USING "btree" ("tenant_id", "metric", "ts" DESC);
+
+
+--
+-- Name: _hyper_1_6_chunk_telemetry_ts_idx; Type: INDEX; Schema: _timescaledb_internal; Owner: -
+--
+
+CREATE INDEX "_hyper_1_6_chunk_telemetry_ts_idx" ON "_timescaledb_internal"."_hyper_1_6_chunk" USING "btree" ("ts" DESC);
+
+
+--
+-- Name: _hyper_1_7_chunk_idx_tel_tenant_device_ts; Type: INDEX; Schema: _timescaledb_internal; Owner: -
+--
+
+CREATE INDEX "_hyper_1_7_chunk_idx_tel_tenant_device_ts" ON "_timescaledb_internal"."_hyper_1_7_chunk" USING "btree" ("tenant_id", "device_id", "ts" DESC);
+
+
+--
+-- Name: _hyper_1_7_chunk_idx_tel_tenant_metric_ts; Type: INDEX; Schema: _timescaledb_internal; Owner: -
+--
+
+CREATE INDEX "_hyper_1_7_chunk_idx_tel_tenant_metric_ts" ON "_timescaledb_internal"."_hyper_1_7_chunk" USING "btree" ("tenant_id", "metric", "ts" DESC);
+
+
+--
+-- Name: _hyper_1_7_chunk_telemetry_ts_idx; Type: INDEX; Schema: _timescaledb_internal; Owner: -
+--
+
+CREATE INDEX "_hyper_1_7_chunk_telemetry_ts_idx" ON "_timescaledb_internal"."_hyper_1_7_chunk" USING "btree" ("ts" DESC);
+
+
+--
+-- Name: _hyper_1_8_chunk_idx_tel_tenant_device_ts; Type: INDEX; Schema: _timescaledb_internal; Owner: -
+--
+
+CREATE INDEX "_hyper_1_8_chunk_idx_tel_tenant_device_ts" ON "_timescaledb_internal"."_hyper_1_8_chunk" USING "btree" ("tenant_id", "device_id", "ts" DESC);
+
+
+--
+-- Name: _hyper_1_8_chunk_idx_tel_tenant_metric_ts; Type: INDEX; Schema: _timescaledb_internal; Owner: -
+--
+
+CREATE INDEX "_hyper_1_8_chunk_idx_tel_tenant_metric_ts" ON "_timescaledb_internal"."_hyper_1_8_chunk" USING "btree" ("tenant_id", "metric", "ts" DESC);
+
+
+--
+-- Name: _hyper_1_8_chunk_telemetry_ts_idx; Type: INDEX; Schema: _timescaledb_internal; Owner: -
+--
+
+CREATE INDEX "_hyper_1_8_chunk_telemetry_ts_idx" ON "_timescaledb_internal"."_hyper_1_8_chunk" USING "btree" ("ts" DESC);
+
+
+--
+-- Name: _hyper_3_12_chunk__materialized_hypertable_3_bucket_idx; Type: INDEX; Schema: _timescaledb_internal; Owner: -
+--
+
+CREATE INDEX "_hyper_3_12_chunk__materialized_hypertable_3_bucket_idx" ON "_timescaledb_internal"."_hyper_3_12_chunk" USING "btree" ("bucket" DESC);
+
+
+--
+-- Name: _hyper_3_12_chunk__materialized_hypertable_3_device_id_bucket_i; Type: INDEX; Schema: _timescaledb_internal; Owner: -
+--
+
+CREATE INDEX "_hyper_3_12_chunk__materialized_hypertable_3_device_id_bucket_i" ON "_timescaledb_internal"."_hyper_3_12_chunk" USING "btree" ("device_id", "bucket" DESC);
+
+
+--
+-- Name: _hyper_3_12_chunk__materialized_hypertable_3_metric_bucket_idx; Type: INDEX; Schema: _timescaledb_internal; Owner: -
+--
+
+CREATE INDEX "_hyper_3_12_chunk__materialized_hypertable_3_metric_bucket_idx" ON "_timescaledb_internal"."_hyper_3_12_chunk" USING "btree" ("metric", "bucket" DESC);
+
+
+--
+-- Name: _hyper_3_12_chunk__materialized_hypertable_3_tenant_id_bucket_i; Type: INDEX; Schema: _timescaledb_internal; Owner: -
+--
+
+CREATE INDEX "_hyper_3_12_chunk__materialized_hypertable_3_tenant_id_bucket_i" ON "_timescaledb_internal"."_hyper_3_12_chunk" USING "btree" ("tenant_id", "bucket" DESC);
+
+
+--
+-- Name: _hyper_3_12_chunk_idx_tel5m_tenant_metric_bucket; Type: INDEX; Schema: _timescaledb_internal; Owner: -
+--
+
+CREATE INDEX "_hyper_3_12_chunk_idx_tel5m_tenant_metric_bucket" ON "_timescaledb_internal"."_hyper_3_12_chunk" USING "btree" ("tenant_id", "device_id", "metric", "bucket" DESC);
 
 
 --
@@ -1231,6 +1639,20 @@ CREATE INDEX "_materialized_hypertable_3_tenant_id_bucket_idx" ON "_timescaledb_
 
 
 --
+-- Name: compress_hyper_2_10_chunk_tenant_id_device_id_metric__ts_me_idx; Type: INDEX; Schema: _timescaledb_internal; Owner: -
+--
+
+CREATE INDEX "compress_hyper_2_10_chunk_tenant_id_device_id_metric__ts_me_idx" ON "_timescaledb_internal"."compress_hyper_2_10_chunk" USING "btree" ("tenant_id", "device_id", "metric", "_ts_meta_min_1" DESC, "_ts_meta_max_1" DESC);
+
+
+--
+-- Name: compress_hyper_2_13_chunk_tenant_id_device_id_metric__ts_me_idx; Type: INDEX; Schema: _timescaledb_internal; Owner: -
+--
+
+CREATE INDEX "compress_hyper_2_13_chunk_tenant_id_device_id_metric__ts_me_idx" ON "_timescaledb_internal"."compress_hyper_2_13_chunk" USING "btree" ("tenant_id", "device_id", "metric", "_ts_meta_min_1" DESC, "_ts_meta_max_1" DESC);
+
+
+--
 -- Name: compress_hyper_2_3_chunk_tenant_id_device_id_metric__ts_met_idx; Type: INDEX; Schema: _timescaledb_internal; Owner: -
 --
 
@@ -1242,6 +1664,13 @@ CREATE INDEX "compress_hyper_2_3_chunk_tenant_id_device_id_metric__ts_met_idx" O
 --
 
 CREATE INDEX "compress_hyper_2_5_chunk_tenant_id_device_id_metric__ts_met_idx" ON "_timescaledb_internal"."compress_hyper_2_5_chunk" USING "btree" ("tenant_id", "device_id", "metric", "_ts_meta_min_1" DESC, "_ts_meta_max_1" DESC);
+
+
+--
+-- Name: compress_hyper_2_9_chunk_tenant_id_device_id_metric__ts_met_idx; Type: INDEX; Schema: _timescaledb_internal; Owner: -
+--
+
+CREATE INDEX "compress_hyper_2_9_chunk_tenant_id_device_id_metric__ts_met_idx" ON "_timescaledb_internal"."compress_hyper_2_9_chunk" USING "btree" ("tenant_id", "device_id", "metric", "_ts_meta_min_1" DESC, "_ts_meta_max_1" DESC);
 
 
 --
@@ -1385,6 +1814,20 @@ CREATE INDEX "Notice_tenantId_status_idx" ON "public"."Notice" USING "btree" ("t
 
 
 --
+-- Name: PmPlan_tenantId_name_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "PmPlan_tenantId_name_idx" ON "public"."PmPlan" USING "btree" ("tenantId", "name");
+
+
+--
+-- Name: PmPlan_tenantId_name_key; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX "PmPlan_tenantId_name_key" ON "public"."PmPlan" USING "btree" ("tenantId", "name");
+
+
+--
 -- Name: RemedyCode_tenantId_code_key; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -1403,6 +1846,13 @@ CREATE UNIQUE INDEX "RuleState_ruleId_key" ON "public"."RuleState" USING "btree"
 --
 
 CREATE INDEX "Rule_tenantId_metric_enabled_idx" ON "public"."Rule" USING "btree" ("tenantId", "metric", "enabled");
+
+
+--
+-- Name: ServiceOrderPart_tenantId_workOrderId_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "ServiceOrderPart_tenantId_workOrderId_idx" ON "public"."ServiceOrderPart" USING "btree" ("tenantId", "workOrderId");
 
 
 --
@@ -1560,6 +2010,13 @@ CREATE INDEX "telemetry_ts_idx" ON "timeseries"."telemetry" USING "btree" ("ts" 
 
 
 --
+-- Name: _hyper_1_11_chunk ts_cagg_invalidation_trigger; Type: TRIGGER; Schema: _timescaledb_internal; Owner: -
+--
+
+CREATE TRIGGER "ts_cagg_invalidation_trigger" AFTER INSERT OR DELETE OR UPDATE ON "_timescaledb_internal"."_hyper_1_11_chunk" FOR EACH ROW EXECUTE FUNCTION "_timescaledb_functions"."continuous_agg_invalidation_trigger"('1');
+
+
+--
 -- Name: _hyper_1_1_chunk ts_cagg_invalidation_trigger; Type: TRIGGER; Schema: _timescaledb_internal; Owner: -
 --
 
@@ -1571,6 +2028,27 @@ CREATE TRIGGER "ts_cagg_invalidation_trigger" AFTER INSERT OR DELETE OR UPDATE O
 --
 
 CREATE TRIGGER "ts_cagg_invalidation_trigger" AFTER INSERT OR DELETE OR UPDATE ON "_timescaledb_internal"."_hyper_1_4_chunk" FOR EACH ROW EXECUTE FUNCTION "_timescaledb_functions"."continuous_agg_invalidation_trigger"('1');
+
+
+--
+-- Name: _hyper_1_6_chunk ts_cagg_invalidation_trigger; Type: TRIGGER; Schema: _timescaledb_internal; Owner: -
+--
+
+CREATE TRIGGER "ts_cagg_invalidation_trigger" AFTER INSERT OR DELETE OR UPDATE ON "_timescaledb_internal"."_hyper_1_6_chunk" FOR EACH ROW EXECUTE FUNCTION "_timescaledb_functions"."continuous_agg_invalidation_trigger"('1');
+
+
+--
+-- Name: _hyper_1_7_chunk ts_cagg_invalidation_trigger; Type: TRIGGER; Schema: _timescaledb_internal; Owner: -
+--
+
+CREATE TRIGGER "ts_cagg_invalidation_trigger" AFTER INSERT OR DELETE OR UPDATE ON "_timescaledb_internal"."_hyper_1_7_chunk" FOR EACH ROW EXECUTE FUNCTION "_timescaledb_functions"."continuous_agg_invalidation_trigger"('1');
+
+
+--
+-- Name: _hyper_1_8_chunk ts_cagg_invalidation_trigger; Type: TRIGGER; Schema: _timescaledb_internal; Owner: -
+--
+
+CREATE TRIGGER "ts_cagg_invalidation_trigger" AFTER INSERT OR DELETE OR UPDATE ON "_timescaledb_internal"."_hyper_1_8_chunk" FOR EACH ROW EXECUTE FUNCTION "_timescaledb_functions"."continuous_agg_invalidation_trigger"('1');
 
 
 --
@@ -1722,6 +2200,14 @@ ALTER TABLE ONLY "public"."Notice"
 
 
 --
+-- Name: PmPlan PmPlan_tenantId_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."PmPlan"
+    ADD CONSTRAINT "PmPlan_tenantId_fkey" FOREIGN KEY ("tenantId") REFERENCES "public"."Tenant"("id") ON UPDATE CASCADE ON DELETE CASCADE;
+
+
+--
 -- Name: RemedyCode RemedyCode_tenantId_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1762,6 +2248,30 @@ ALTER TABLE ONLY "public"."Rule"
 
 
 --
+-- Name: ServiceOrderPart ServiceOrderPart_inventoryItemId_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."ServiceOrderPart"
+    ADD CONSTRAINT "ServiceOrderPart_inventoryItemId_fkey" FOREIGN KEY ("inventoryItemId") REFERENCES "public"."InventoryItem"("id") ON UPDATE CASCADE ON DELETE SET NULL;
+
+
+--
+-- Name: ServiceOrderPart ServiceOrderPart_tenantId_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."ServiceOrderPart"
+    ADD CONSTRAINT "ServiceOrderPart_tenantId_fkey" FOREIGN KEY ("tenantId") REFERENCES "public"."Tenant"("id") ON UPDATE CASCADE ON DELETE CASCADE;
+
+
+--
+-- Name: ServiceOrderPart ServiceOrderPart_workOrderId_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."ServiceOrderPart"
+    ADD CONSTRAINT "ServiceOrderPart_workOrderId_fkey" FOREIGN KEY ("workOrderId") REFERENCES "public"."WorkOrder"("id") ON UPDATE CASCADE ON DELETE CASCADE;
+
+
+--
 -- Name: SymptomCode SymptomCode_tenantId_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1783,6 +2293,14 @@ ALTER TABLE ONLY "public"."User"
 
 ALTER TABLE ONLY "public"."WOAssignment"
     ADD CONSTRAINT "WOAssignment_tenantId_fkey" FOREIGN KEY ("tenantId") REFERENCES "public"."Tenant"("id") ON UPDATE CASCADE ON DELETE CASCADE;
+
+
+--
+-- Name: WOAssignment WOAssignment_userId_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."WOAssignment"
+    ADD CONSTRAINT "WOAssignment_userId_fkey" FOREIGN KEY ("userId") REFERENCES "public"."User"("id") ON UPDATE CASCADE ON DELETE RESTRICT;
 
 
 --
@@ -1903,6 +2421,14 @@ ALTER TABLE ONLY "public"."WorkOrderResolution"
 
 ALTER TABLE ONLY "public"."WorkOrder"
     ADD CONSTRAINT "WorkOrder_noticeId_fkey" FOREIGN KEY ("noticeId") REFERENCES "public"."Notice"("id") ON UPDATE CASCADE ON DELETE SET NULL;
+
+
+--
+-- Name: WorkOrder WorkOrder_pmPlanId_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."WorkOrder"
+    ADD CONSTRAINT "WorkOrder_pmPlanId_fkey" FOREIGN KEY ("pmPlanId") REFERENCES "public"."PmPlan"("id") ON UPDATE CASCADE ON DELETE SET NULL;
 
 
 --

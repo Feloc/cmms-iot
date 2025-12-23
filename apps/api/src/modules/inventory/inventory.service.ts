@@ -17,7 +17,7 @@ export class InventoryService {
       where.OR = [
         { sku: { contains: s, mode: 'insensitive' } },
         { name: { contains: s, mode: 'insensitive' } },
-        { model: { contains: s, mode: 'insensitive' } },
+        //{ model: { contains: s, mode: 'insensitive' } },
       ];
     }
     return this.prisma.inventoryItem.findMany({ where, take: 25, orderBy: { name: 'asc' } });

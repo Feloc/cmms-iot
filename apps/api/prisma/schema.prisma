@@ -269,6 +269,7 @@ model WorkOrder {
   technicianSignature  String?
   receiverSignature    String?
   dueDate     DateTime?
+  durationMin Int? @default(60)
   startedAt   DateTime?
   completedAt DateTime?
 

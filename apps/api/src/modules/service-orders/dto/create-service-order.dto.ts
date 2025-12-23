@@ -12,6 +12,9 @@ export class CreateServiceOrderDto {
   /** Fecha/hora programada de ejecución */
   dueDate?: string | Date;
 
+  /** Duración planificada en minutos (para calendario). Default recomendado: 60 */
+  durationMin?: number;
+
   /** Solo para PREVENTIVO */
   pmPlanId?: string;
 }

@@ -72,6 +72,12 @@ private async assertSo(id: string) {
       if (end) (where.dueDate as any).lte = end;
     }
 
+    // Solo programadas (para calendario)
+    if ((q as any).scheduledOnly) {
+      // Asegura dueDate != null (y preserva gte/lte si venían)
+      where.dueDate = { ...(where.dueDate as any), not: null } as any;
+    }
+
     // Filtro por técnico: buscamos assignments ACTIVAS de rol TECHNICIAN
     if (q.technicianId) {
       where.assignments = {
@@ -152,7 +158,9 @@ private async assertSo(id: string) {
         title,
         description: dto.description,
         dueDate: dto.dueDate ? this.coerceDate(dto.dueDate) : undefined,
-      },
+      
+        durationMin: dto.durationMin ?? 60,
+},
     });
   }
 
@@ -170,77 +178,79 @@ private async assertSo(id: string) {
       },
     });
   }
-async schedule(id: string, dto: ScheduleServiceOrderDto) {
+
+  async schedule(id: string, dto: ScheduleServiceOrderDto) {
   const tenantId = this.getTenantId();
 
-  // valida existencia (tenant + kind)
-  const so0 = await this.prisma.workOrder.findFirst({ where: { id, tenantId, kind: 'SERVICE_ORDER' } });
-  if (!so0) throw new NotFoundException('Service order not found');
+  const wo = await this.prisma.workOrder.findFirst({ where: { id, tenantId, kind: 'SERVICE_ORDER' } });
+  if (!wo) throw new NotFoundException('Service order not found');
 
-  // dueDate:
-  // - undefined => no cambia
-  // - null => desprograma (dueDate = null)
-  // - string/Date => programa
+  // dueDate: undefined => no cambia, null => desprograma, string/Date => programa
   const dueDateData =
     dto.dueDate === undefined ? undefined : dto.dueDate === null ? null : this.coerceDate(dto.dueDate);
 
-  // technicianId:
-  // - undefined => no cambia
-  // - ""/null => quita asignación (REMOVED)
-  // - id => reasigna
-  const technicianId = dto.technicianId === undefined ? undefined : (dto.technicianId ?? '').trim();
+  // durationMin: undefined => no cambia, null => limpia, number => set
+  let durationMinData: number | null | undefined = undefined;
+  if (dto.durationMin !== undefined) {
+    if (dto.durationMin === null) {
+      durationMinData = null;
+    } else {
+      const n = Number(dto.durationMin);
+      if (!Number.isFinite(n) || n <= 0) throw new BadRequestException('durationMin must be a positive number');
+      durationMinData = Math.round(n);
+    }
+  }
 
-  await this.prisma.$transaction(async (tx) => {
-    if (dueDateData !== undefined) {
-      await tx.workOrder.update({ where: { id }, data: { dueDate: dueDateData as any } });
+  // Ejecuta update + reasignación de técnico en transacción
+  const updated = await this.prisma.$transaction(async (tx) => {
+    // 1) actualizar campos (si vienen)
+    if (dueDateData !== undefined || durationMinData !== undefined) {
+      await tx.workOrder.update({
+        where: { id },
+        data: {
+          ...(dueDateData !== undefined ? { dueDate: dueDateData as any } : {}),
+          ...(durationMinData !== undefined ? { durationMin: durationMinData as any } : {}),
+        },
+      });
     }
 
-    if (technicianId !== undefined) {
-      // remueve assignment activo anterior
+    // 2) reasignar técnico si viene el campo (incluye "" para quitar)
+    if (dto.technicianId !== undefined) {
+      // remover el técnico activo anterior
       await tx.wOAssignment.updateMany({
         where: { tenantId, workOrderId: id, role: 'TECHNICIAN', state: 'ACTIVE' },
         data: { state: 'REMOVED' },
       });
 
-      // si viene id, valida usuario y crea assignment nuevo
-      if (technicianId) {
-        const tech = await tx.user.findFirst({ where: { id: technicianId, tenantId } });
+      const techId = (dto.technicianId ?? '').trim();
+
+      if (techId) {
+        // valida existencia en el mismo tenant (evita FK y fugas multi-tenant)
+        const tech = await tx.user.findFirst({ where: { id: techId, tenantId } });
         if (!tech) throw new BadRequestException('Technician not found for this tenant');
 
         await tx.wOAssignment.create({
           data: {
             tenantId,
             workOrderId: id,
-            userId: technicianId,
+            userId: techId,
             role: 'TECHNICIAN',
             state: 'ACTIVE',
           },
         });
       }
     }
+
+    return tx.workOrder.findFirst({
+      where: { id, tenantId },
+      include: { assignments: { include: { user: true } }, pmPlan: true, serviceOrderParts: true },
+    });
   });
 
-  // Re-consulta y enriquece como en getOne(): assignments + pmPlan + asset (por assetCode)
-  const so = await this.prisma.workOrder.findFirst({
-    where: { id, tenantId, kind: 'SERVICE_ORDER' },
-    include: {
-      assignments: { where: { state: 'ACTIVE' }, include: { user: true } },
-      pmPlan: true,
-      serviceOrderParts: { include: { inventoryItem: true } },
-    },
-  });
-  if (!so) throw new NotFoundException('Service order not found');
-
-  const asset = await this.prisma.asset.findFirst({
-    where: { tenantId, code: so.assetCode },
-    select: { code: true, customer: true, name: true, brand: true, model: true, serialNumber: true },
-  });
-
-  return { ...so, asset: asset ?? null };
+  return updated;
 }
 
-
-  async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
+async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
     await this.assertSo(id);
     return this.prisma.workOrder.update({
       where: { id },
