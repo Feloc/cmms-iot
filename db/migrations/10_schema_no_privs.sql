@@ -846,7 +846,10 @@ CREATE TABLE "public"."PmPlan" (
     "intervalHours" integer,
     "checklist" "jsonb",
     "createdAt" timestamp(3) without time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
-    "updatedAt" timestamp(3) without time zone NOT NULL
+    "updatedAt" timestamp(3) without time zone NOT NULL,
+    "active" boolean DEFAULT true NOT NULL,
+    "defaultDurationMin" integer DEFAULT 60 NOT NULL,
+    "description" "text"
 );
 
 
