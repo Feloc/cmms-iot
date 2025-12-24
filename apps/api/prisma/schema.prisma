@@ -684,18 +684,21 @@ model AssetEvent {
 
 
 model PmPlan {
-  id        String   @id @default(cuid())
-  tenantId  String
-  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id                         String   @id @default(cuid())
+  tenantId                   String
+  tenant                     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  name          String
-  intervalHours Int?
-  checklist     Json?
+  name                        String
+  intervalHours               Int?
+  description                 String?
+  defaultDurationMin          Int      @default(60)
+  checklist                   Json?
+  active                      Boolean  @default(true)
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt                   DateTime @default(now())
+  updatedAt                   DateTime @updatedAt
 
-  workOrders WorkOrder[]
+  workOrders                  WorkOrder[]
 
   @@unique([tenantId, name])
   @@index([tenantId, name])

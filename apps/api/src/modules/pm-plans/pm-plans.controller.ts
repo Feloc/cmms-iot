@@ -1,17 +1,36 @@
-import { Body, Controller, Get, Post } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import { PmPlansService } from './pm-plans.service';
+import { CreatePmPlanDto } from './dto/create-pm-plan.dto';
+import { UpdatePmPlanDto } from './dto/update-pm-plan.dto';
 
 @Controller('pm-plans')
 export class PmPlansController {
-  constructor(private svc: PmPlansService) {}
+  constructor(private readonly service: PmPlansService) {}
 
   @Get()
-  list() {
-    return this.svc.list();
+  list(@Query('all') all?: string) {
+    // all=1 incluye inactivos
+    return this.service.list(all === '1' || all === 'true');
+  }
+
+  @Get(':id')
+  getOne(@Param('id') id: string) {
+    return this.service.getOne(id);
   }
 
   @Post()
-  create(@Body() dto: { name: string; intervalHours?: number; checklist?: any }) {
-    return this.svc.create(dto);
+  create(@Body() dto: CreatePmPlanDto) {
+    return this.service.create(dto);
+  }
+
+  @Patch(':id')
+  update(@Param('id') id: string, @Body() dto: UpdatePmPlanDto) {
+    return this.service.update(id, dto);
+  }
+
+  @Delete(':id')
+  remove(@Param('id') id: string) {
+    // soft delete: active=false
+    return this.service.remove(id);
   }
 }
