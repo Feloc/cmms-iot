@@ -76,6 +76,7 @@ export class AssetsImportService {
             tenantId,
             code: String(r.code).trim(),
             name: String(r.name).trim(),
+            customer: (r as any).customer ?? (r as any).cliente ?? (r as any).Cliente ?? (r as any).CLIENTE ?? null,
             brand: r.brand ?? null,
             model: r.model ?? null,
             serialNumber: r.serialNumber ?? null,

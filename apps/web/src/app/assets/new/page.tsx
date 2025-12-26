@@ -14,6 +14,7 @@ type PreviewRow = {
   name?: string;
   brand?: string;
   model?: string;
+  customer?: string;
   serialNumber?: string;
   category?: string;
   location?: string;
@@ -310,7 +311,7 @@ export default function AssetNewPage() {
         throw new Error(message);
       }
       setCreateMsg('Activo creado correctamente');
-      setForm({ code: '', name: '', status: 'ACTIVE', criticality: 'MEDIUM' });
+      setForm({ code: '', name: '', customer: '', acquiredOn: undefined, status: 'ACTIVE', criticality: 'MEDIUM' } as any);
     } catch (e: any) {
       setCreateMsg(e?.message || 'Error creando el activo');
     } finally {
@@ -377,6 +378,16 @@ export default function AssetNewPage() {
                   onChange={(e) => setField('model', e.target.value)}
                 />
               </label>
+<label className="text-sm">
+  <span className="block text-gray-600">Cliente</span>
+  <input
+    className="mt-1 w-full border rounded px-2 py-1"
+    value={(form as any).customer || ''}
+    onChange={(e) => setField('customer' as any, e.target.value)}
+    placeholder="Nombre del cliente"
+  />
+</label>
+
 
               <label className="text-sm">
                 <span className="block text-gray-600">N° Serie</span>
@@ -504,7 +515,7 @@ export default function AssetNewPage() {
               {busy ? 'Procesando…' : 'Previsualizar'}
             </button>
             <a
-              href="/api/assets/template/download"
+              href="/templates/template-assets.csv" download
               className="text-blue-700 underline text-sm"
               title="Descargar plantilla"
             >
@@ -553,6 +564,7 @@ export default function AssetNewPage() {
                       <th className="px-2 py-1 text-left">brand</th>
                       <th className="px-2 py-1 text-left">model</th>
                       <th className="px-2 py-1 text-left">serial</th>
+                      <th className="px-2 py-1 text-left">cliente</th>
                       <th className="px-2 py-1 text-left">category</th>
                       <th className="px-2 py-1 text-left">location</th>
                       <th className="px-2 py-1 text-left">supplier</th>
@@ -575,6 +587,7 @@ export default function AssetNewPage() {
                         <td className="px-2 py-1 border-b">{r?.brand ?? ''}</td>
                         <td className="px-2 py-1 border-b">{r?.model ?? ''}</td>
                         <td className="px-2 py-1 border-b">{r?.serialNumber ?? ''}</td>
+                        <td className="px-2 py-1 border-b">{(r as any)?.customer ?? (r as any)?.cliente ?? (r as any)?.Cliente ?? ''}</td>
                         <td className="px-2 py-1 border-b">{r?.category ?? ''}</td>
                         <td className="px-2 py-1 border-b">{r?.location ?? ''}</td>
                         <td className="px-2 py-1 border-b">{r?.supplier ?? ''}</td>

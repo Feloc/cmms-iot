@@ -10,6 +10,10 @@ import { ImportCommitOptionsDto } from './dto/import.dto';
 
 type FindAllQuery = {
   search?: string;
+  serial?: string;
+  name?: string;
+  model?: string;
+  customer?: string;
   status?: 'ACTIVE' | 'INACTIVE' | 'DECOMMISSIONED' | '';
   locationId?: string;
   categoryId?: string;
@@ -26,6 +30,10 @@ export class AssetsController {
   @Get()
   async findAll(
     @Query('search') search?: string,
+    @Query('serial') serial?: string,
+    @Query('name') name?: string,
+    @Query('model') model?: string,
+    @Query('customer') customer?: string,
     @Query('status') status?: string,
     @Query('locationId') locationId?: string,
     @Query('categoryId') categoryId?: string,
@@ -35,6 +43,10 @@ export class AssetsController {
   ) {
     const q: FindAllQuery = {
       search,
+      serial: serial || undefined,
+      name: name || undefined,
+      model: model || undefined,
+      customer: customer || undefined,
       status: (status as any) || '',
       locationId: locationId || undefined,
       categoryId: categoryId || undefined,
@@ -51,6 +63,11 @@ export class AssetsController {
     return this.service.findOne(id);
   }
 
+
+@Get(':id/service-order-parts')
+async listServiceOrderParts(@Param('id') id: string) {
+  return this.service.listServiceOrderParts(id);
+}
 
   @Post()
   async create(@Body() dto: CreateAssetDto) {

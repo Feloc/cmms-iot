@@ -26,5 +26,7 @@ export class CreateAssetDto {
   @IsOptional() @IsString() assetTopicPrefix?: string;
   @IsOptional() @IsString() defaultRuleSetId?: string;
 
+  @IsOptional() @IsString() customer?: string;
+
   @IsOptional() @IsDateString() acquiredOn?: string;
 }

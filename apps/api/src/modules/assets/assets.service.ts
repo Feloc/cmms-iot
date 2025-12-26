@@ -8,6 +8,10 @@ import { UpdateAssetDto } from './dto/update-asset.dto';
 
 type FindAllQuery = {
   search?: string;
+  serial?: string;
+  name?: string;
+  model?: string;
+  customer?: string;
   status?: AssetStatus | '';
   locationId?: string;
   categoryId?: string;
@@ -55,6 +59,12 @@ export class AssetsService {
       ];
     }
 
+// Field-specific filters (AND with `search` if provided)
+if (q.serial) where.serialNumber = { contains: q.serial.trim(), mode: 'insensitive' };
+if (q.name) where.name = { contains: q.name.trim(), mode: 'insensitive' };
+if (q.model) where.model = { contains: q.model.trim(), mode: 'insensitive' };
+if (q.customer) where.customer = { contains: q.customer.trim(), mode: 'insensitive' };
+
     if (q.status) where.status = q.status as AssetStatus;
     if (q.locationId) where.locationId = q.locationId;
     if (q.categoryId) where.categoryId = q.categoryId;
@@ -99,7 +109,7 @@ export class AssetsService {
       tenant: { connect: { id: tenantId } },
       code: dto.code?.trim(),
       name: dto.name?.trim(),
-      customer: (dto as any).customer ?? undefined,
+      customer: dto.customer?.trim() ? dto.customer.trim() : null,
       brand: dto.brand ?? null,
       model: dto.model ?? null,
       serialNumber: dto.serialNumber ?? null,
@@ -128,7 +138,7 @@ export class AssetsService {
     const data: Prisma.AssetUpdateInput = {
       code: dto.code?.trim(),
       name: dto.name?.trim(),
-      customer: (dto as any).customer ?? undefined,
+      customer: dto.customer === undefined ? undefined : (dto.customer?.trim() ? dto.customer.trim() : null),
       brand: dto.brand,
       model: dto.model,
       serialNumber: dto.serialNumber,
@@ -163,4 +173,36 @@ export class AssetsService {
       return tx.asset.update({ where: { id }, data: { status: AssetStatus.DECOMMISSIONED } });
     });
   }
+
+/**
+ * Lista los repuestos registrados en órdenes de servicio (SERVICE_ORDER) para este asset.
+ * Útil para el tab "Repuestos cambiados".
+ */
+async listServiceOrderParts(assetId: string) {
+  if (!assetId) throw new BadRequestException('assetId is required');
+  const tenantId = this.getTenantId();
+
+  return this.withTenantRLS(async (tx) => {
+    const asset = await tx.asset.findFirst({ where: { id: assetId }, select: { id: true, code: true } });
+    if (!asset) throw new NotFoundException('Asset not found');
+
+    // ServiceOrderPart -> WorkOrder(kind=SERVICE_ORDER) -> assetCode
+    const rows = await (tx as any).serviceOrderPart.findMany({
+      where: {
+        tenantId,
+        workOrder: {
+          tenantId,
+          kind: 'SERVICE_ORDER',
+          assetCode: asset.code,
+        },
+      },
+      include: {
+        inventoryItem: true,
+        workOrder: { select: { id: true, dueDate: true, title: true, serviceOrderType: true, status: true } },
+      },
+    });
+
+    return rows;
+  });
+}
 }
