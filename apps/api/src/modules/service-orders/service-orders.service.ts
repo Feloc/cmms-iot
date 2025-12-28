@@ -10,6 +10,9 @@ import { ServiceOrderFormDataDto } from './dto/form-data.dto';
 import { ServiceOrderSignaturesDto } from './dto/signatures.dto';
 import { AddServiceOrderPartDto } from './dto/parts.dto';
 import { Prisma } from '@prisma/client';
+import * as fs from 'fs/promises';
+import * as path from 'path';
+import { randomUUID } from 'crypto';
 
 @Injectable()
 export class ServiceOrdersService {
@@ -70,12 +73,6 @@ private async assertSo(id: string) {
       where.dueDate = {};
       if (start) (where.dueDate as any).gte = start;
       if (end) (where.dueDate as any).lte = end;
-    }
-
-    // Solo programadas (para calendario)
-    if ((q as any).scheduledOnly) {
-      // Asegura dueDate != null (y preserva gte/lte si venían)
-      where.dueDate = { ...(where.dueDate as any), not: null } as any;
     }
 
     // Filtro por técnico: buscamos assignments ACTIVAS de rol TECHNICIAN
@@ -158,9 +155,7 @@ private async assertSo(id: string) {
         title,
         description: dto.description,
         dueDate: dto.dueDate ? this.coerceDate(dto.dueDate) : undefined,
-      
-        durationMin: dto.durationMin ?? 60,
-},
+      },
     });
   }
 
@@ -180,77 +175,38 @@ private async assertSo(id: string) {
   }
 
   async schedule(id: string, dto: ScheduleServiceOrderDto) {
-  const tenantId = this.getTenantId();
+    const tenantId = this.getTenantId();
+    // Actualiza dueDate (programación)
+    const wo = await this.prisma.workOrder.findFirst({ where: { id, tenantId, kind: 'SERVICE_ORDER' } });
+    if (!wo) throw new NotFoundException('Service order not found');
 
-  const wo = await this.prisma.workOrder.findFirst({ where: { id, tenantId, kind: 'SERVICE_ORDER' } });
-  if (!wo) throw new NotFoundException('Service order not found');
+    const dueDate = this.coerceDate(dto.dueDate);
+    const updated = await this.prisma.workOrder.update({ where: { id }, data: { dueDate } });
 
-  // dueDate: undefined => no cambia, null => desprograma, string/Date => programa
-  const dueDateData =
-    dto.dueDate === undefined ? undefined : dto.dueDate === null ? null : this.coerceDate(dto.dueDate);
-
-  // durationMin: undefined => no cambia, null => limpia, number => set
-  let durationMinData: number | null | undefined = undefined;
-  if (dto.durationMin !== undefined) {
-    if (dto.durationMin === null) {
-      durationMinData = null;
-    } else {
-      const n = Number(dto.durationMin);
-      if (!Number.isFinite(n) || n <= 0) throw new BadRequestException('durationMin must be a positive number');
-      durationMinData = Math.round(n);
-    }
-  }
-
-  // Ejecuta update + reasignación de técnico en transacción
-  const updated = await this.prisma.$transaction(async (tx) => {
-    // 1) actualizar campos (si vienen)
-    if (dueDateData !== undefined || durationMinData !== undefined) {
-      await tx.workOrder.update({
-        where: { id },
-        data: {
-          ...(dueDateData !== undefined ? { dueDate: dueDateData as any } : {}),
-          ...(durationMinData !== undefined ? { durationMin: durationMinData as any } : {}),
-        },
-      });
-    }
-
-    // 2) reasignar técnico si viene el campo (incluye "" para quitar)
-    if (dto.technicianId !== undefined) {
-      // remover el técnico activo anterior
-      await tx.wOAssignment.updateMany({
-        where: { tenantId, workOrderId: id, role: 'TECHNICIAN', state: 'ACTIVE' },
-        data: { state: 'REMOVED' },
-      });
-
-      const techId = (dto.technicianId ?? '').trim();
-
-      if (techId) {
-        // valida existencia en el mismo tenant (evita FK y fugas multi-tenant)
-        const tech = await tx.user.findFirst({ where: { id: techId, tenantId } });
-        if (!tech) throw new BadRequestException('Technician not found for this tenant');
-
+    // Asignación técnico (si viene)
+    if (dto.technicianId) {
+      // inactivar assignment anterior de TECHNICIAN y crear nueva
+      await this.prisma.$transaction(async (tx) => {
+        await tx.wOAssignment.updateMany({
+          where: { tenantId, workOrderId: id, role: 'TECHNICIAN', state: 'ACTIVE' },
+          data: { state: 'REMOVED' },
+        });
         await tx.wOAssignment.create({
           data: {
             tenantId,
             workOrderId: id,
-            userId: techId,
+            userId: dto.technicianId,
             role: 'TECHNICIAN',
             state: 'ACTIVE',
           },
         });
-      }
+      });
     }
 
-    return tx.workOrder.findFirst({
-      where: { id, tenantId },
-      include: { assignments: { include: { user: true } }, pmPlan: true, serviceOrderParts: true },
-    });
-  });
+    return updated;
+  }
 
-  return updated;
-}
-
-async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
+  async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
     await this.assertSo(id);
     return this.prisma.workOrder.update({
       where: { id },
@@ -311,4 +267,112 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
     await this.prisma.serviceOrderPart.delete({ where: { id: partId } });
     return { ok: true };
   }
+
+// ---------------------------
+// Imágenes / Galería (filesystem)
+// ---------------------------
+private uploadsRoot(): string {
+  // En Docker, por defecto cae en /app/uploads. En local, en <repo>/uploads
+  return process.env.UPLOADS_DIR || path.join(process.cwd(), 'uploads');
+}
+
+private imagesDir(tenantId: string, serviceOrderId: string): string {
+  return path.join(this.uploadsRoot(), 'service-orders', tenantId, serviceOrderId);
+}
+
+private async assertServiceOrderExists(serviceOrderId: string, tenantId: string) {
+  const so = await this.prisma.workOrder.findFirst({
+    where: { id: serviceOrderId, tenantId },
+    select: { id: true },
+  });
+  if (!so) throw new NotFoundException('Service order not found');
+  return so;
+}
+
+async listImages(serviceOrderId: string) {
+  const tenantId = this.getTenantId();
+  await this.assertServiceOrderExists(serviceOrderId, tenantId);
+
+  const dir = this.imagesDir(tenantId, serviceOrderId);
+  let files: string[] = [];
+  try {
+    files = await fs.readdir(dir);
+  } catch (e: any) {
+    if (e?.code === 'ENOENT') return { items: [] };
+    throw e;
+  }
+
+  const items: Array<{ filename: string; size: number; updatedAt: string }> = [];
+  for (const f of files) {
+    const fp = path.join(dir, f);
+    try {
+      const st = await fs.stat(fp);
+      if (!st.isFile()) continue;
+      items.push({ filename: f, size: st.size, updatedAt: st.mtime.toISOString() });
+    } catch {
+      // ignore
+    }
+  }
+  items.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1)); // newest first
+  return { items };
+}
+
+async uploadImages(serviceOrderId: string, files: Array<any>) {
+  const tenantId = this.getTenantId();
+  await this.assertServiceOrderExists(serviceOrderId, tenantId);
+
+  if (!files || files.length === 0) {
+    throw new BadRequestException('No files uploaded');
+  }
+
+  const dir = this.imagesDir(tenantId, serviceOrderId);
+  await fs.mkdir(dir, { recursive: true });
+
+  const mimeToExt: Record<string, string> = {
+    'image/jpeg': '.jpg',
+    'image/jpg': '.jpg',
+    'image/png': '.png',
+    'image/webp': '.webp',
+    'image/gif': '.gif',
+    'image/heic': '.heic',
+    'image/heif': '.heif',
+  };
+
+  for (const file of files) {
+    const mimetype: string = file?.mimetype || '';
+    if (!mimetype.startsWith('image/')) continue;
+
+    const buf: Buffer | undefined = file?.buffer;
+    if (!buf || buf.length === 0) continue;
+
+    let ext = (file?.originalname ? path.extname(file.originalname) : '').toLowerCase();
+    if (!ext || ext.length > 10) ext = '';
+    if (!ext) ext = mimeToExt[mimetype] || '.img';
+
+    const filename = `${Date.now()}-${randomUUID()}${ext}`;
+    const fp = path.join(dir, filename);
+    await fs.writeFile(fp, buf);
+  }
+
+  return this.listImages(serviceOrderId);
+}
+
+async getImagePath(serviceOrderId: string, filename: string) {
+  const tenantId = this.getTenantId();
+  await this.assertServiceOrderExists(serviceOrderId, tenantId);
+
+  // Prevent path traversal
+  const safe = path.basename(filename);
+  if (safe !== filename) throw new BadRequestException('Invalid filename');
+
+  const fp = path.join(this.imagesDir(tenantId, serviceOrderId), safe);
+  try {
+    const st = await fs.stat(fp);
+    if (!st.isFile()) throw new Error('not-file');
+  } catch {
+    throw new NotFoundException('Image not found');
+  }
+  return fp;
+}
+
 }

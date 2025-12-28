@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Res, UploadedFiles, UseInterceptors } from '@nestjs/common';
 import { ServiceOrdersService } from './service-orders.service';
 import { CreateServiceOrderDto } from './dto/create-service-order.dto';
 import { UpdateServiceOrderDto } from './dto/update-service-order.dto';
@@ -8,6 +8,9 @@ import { ServiceOrderFormDataDto } from './dto/form-data.dto';
 import { ServiceOrderSignaturesDto } from './dto/signatures.dto';
 import { AddServiceOrderPartDto } from './dto/parts.dto';
 import { ListServiceOrdersQuery } from './dto/list-service-orders.query';
+import { FilesInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
+import type { Response } from 'express';
 
 @Controller('service-orders')
 export class ServiceOrdersController {
@@ -62,4 +65,28 @@ export class ServiceOrdersController {
   removePart(@Param('id') id: string, @Param('partId') partId: string) {
     return this.svc.removePart(id, partId);
   }
+
+@Get(':id/images')
+listImages(@Param('id') id: string) {
+  return this.svc.listImages(id);
+}
+
+@Post(':id/images')
+@UseInterceptors(
+  FilesInterceptor('files', 10, {
+    storage: memoryStorage(),
+    limits: { fileSize: 10 * 1024 * 1024 },
+    fileFilter: (_req, file, cb) => cb(null, !!file?.mimetype?.startsWith('image/')),
+  }),
+)
+uploadImages(@Param('id') id: string, @UploadedFiles() files: any[]) {
+  return this.svc.uploadImages(id, files ?? []);
+}
+
+@Get(':id/images/:filename')
+async getImage(@Param('id') id: string, @Param('filename') filename: string, @Res() res: Response) {
+  const p = await this.svc.getImagePath(id, filename);
+  return res.sendFile(p);
+}
+
 }

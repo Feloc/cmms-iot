@@ -59,6 +59,7 @@ services:
       - ./apps/api:/app
       - /app/node_modules
       - ./storage/attachments:/app/storage/attachments
+      - ./data/uploads:/app/uploads
     command: sh -c "npx prisma generate && npx prisma db push && npm run start:dev"
 
   web:

@@ -1,12 +1,14 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { useSession } from 'next-auth/react';
 import { getAuthFromSession } from '@/lib/auth';
 import { useApiSWR } from '@/lib/swr';
 import { apiFetch } from '@/lib/api';
 import { SignatureCanvas } from '@/components/SignatureCanvas';
+import { ServiceOrderImagesGallery } from '@/components/ServiceOrderImagesGallery';
+import { ServiceOrderChecklistSection } from '@/components/ServiceOrderChecklistSection';
 
 type User = { id: string; name: string; email: string; role: string };
 type InventoryItem = { id: string; sku: string; name: string; model?: string | null };
@@ -36,23 +38,112 @@ type ServiceOrder = {
   serviceOrderParts?: Part[];
 };
 
+// ---- Fecha/hora helpers (datetime-local) ----
+// Evita usar toISOString().slice() porque eso es UTC y desplaza la hora en Colombia.
+function pad2(n: number) {
+  return String(n).padStart(2, '0');
+}
+function toLocalInput(d: Date) {
+  const y = d.getFullYear();
+  const m = pad2(d.getMonth() + 1);
+  const da = pad2(d.getDate());
+  const h = pad2(d.getHours());
+  const mi = pad2(d.getMinutes());
+  return `${y}-${m}-${da}T${h}:${mi}`; // yyyy-MM-ddTHH:mm (local)
+}
 function isoToLocal(iso?: string | null) {
   if (!iso) return '';
   const d = new Date(iso);
   if (isNaN(d.getTime())) return '';
-  return d.toISOString().slice(0, 16);
+  return toLocalInput(d);
 }
+function localInputToIso(v: string): string | null {
+  if (!v) return null;
+  const [date, time] = v.split('T');
+  if (!date || !time) return null;
+  const [y, mo, da] = date.split('-').map(Number);
+  const [h, mi] = time.split(':').map(Number);
+  const d = new Date(y, (mo ?? 1) - 1, da ?? 1, h ?? 0, mi ?? 0, 0, 0); // local
+  return d.toISOString();
+}
+function nowLocalInputValue() {
+  return toLocalInput(new Date());
+}
+
+function statusPillClass(status: string) {
+  switch ((status || 'OPEN').toUpperCase()) {
+    case 'IN_PROGRESS':
+      return 'bg-amber-100 text-amber-900 border-amber-200';
+    case 'ON_HOLD':
+      return 'bg-violet-100 text-violet-900 border-violet-200';
+    case 'COMPLETED':
+      return 'bg-green-100 text-green-900 border-green-200';
+    case 'CANCELED':
+      return 'bg-red-100 text-red-900 border-red-200';
+    case 'CLOSED':
+      return 'bg-gray-100 text-gray-900 border-gray-200';
+    case 'OPEN':
+    default:
+      return 'bg-blue-100 text-blue-900 border-blue-200';
+  }
+}
+
+type TsKey = 'takenAt' | 'arrivedAt' | 'checkInAt' | 'activityStartedAt' | 'activityFinishedAt' | 'deliveredAt';
+
+const TS_FIELDS: Array<{ key: TsKey; label: string; hint?: string }> = [
+  { key: 'takenAt', label: 'Hora toma OS', hint: 'Al registrar este tiempo, la OS pasa a IN_PROGRESS.' },
+  { key: 'arrivedAt', label: 'Hora llegada cliente' },
+  { key: 'checkInAt', label: 'Hora ingreso' },
+  { key: 'activityStartedAt', label: 'Inicio actividad' },
+  { key: 'activityFinishedAt', label: 'Fin actividad', hint: 'Al registrar este tiempo, la OS pasa a COMPLETED.' },
+  { key: 'deliveredAt', label: 'Hora entrega' },
+];
 
 export default function ServiceOrderDetailPage() {
   const { id } = useParams<{ id: string }>();
   const { data: session } = useSession();
   const auth = getAuthFromSession(session);
 
-  const { data, error, isLoading, mutate } = useApiSWR<ServiceOrder>(id ? `/service-orders/${id}` : null, auth.token, auth.tenantSlug);
+  const { data, error, isLoading, mutate } = useApiSWR<ServiceOrder>(
+    id ? `/service-orders/${id}` : null,
+    auth.token,
+    auth.tenantSlug
+  );
   const { data: techs } = useApiSWR<User[]>(`/users?role=TECH`, auth.token, auth.tenantSlug);
 
   const [busy, setBusy] = useState(false);
   const [partQ, setPartQ] = useState('');
+
+  // Timestamps controlados (para botón "Ahora")
+  const [ts, setTs] = useState<Record<TsKey, string>>({
+    takenAt: '',
+    arrivedAt: '',
+    checkInAt: '',
+    activityStartedAt: '',
+    activityFinishedAt: '',
+    deliveredAt: '',
+  });
+
+  useEffect(() => {
+    if (!data) return;
+    setTs({
+      takenAt: isoToLocal(data.takenAt),
+      arrivedAt: isoToLocal(data.arrivedAt),
+      checkInAt: isoToLocal(data.checkInAt),
+      activityStartedAt: isoToLocal(data.activityStartedAt),
+      activityFinishedAt: isoToLocal(data.activityFinishedAt),
+      deliveredAt: isoToLocal(data.deliveredAt),
+    });
+  }, [
+    data?.id,
+    data?.takenAt,
+    data?.arrivedAt,
+    data?.checkInAt,
+    data?.activityStartedAt,
+    data?.activityFinishedAt,
+    data?.deliveredAt,
+  ]);
+
   const invPath = useMemo(() => {
     const q = partQ.trim();
     if (!q) return null;
@@ -66,7 +157,7 @@ export default function ServiceOrderDetailPage() {
   if (error) return <div className="p-6 text-red-600">Error: {(error as any).message}</div>;
   if (!data) return <div className="p-6">No encontrado.</div>;
 
-  const tech = data.assignments?.find(a => a.role === 'TECHNICIAN' && a.state === 'ACTIVE')?.user;
+  const tech = data.assignments?.find((a) => a.role === 'TECHNICIAN' && a.state === 'ACTIVE')?.user;
 
   async function patch(path: string, body: any) {
     setBusy(true);
@@ -80,9 +171,57 @@ export default function ServiceOrderDetailPage() {
 
   async function patchSchedule(dueLocal: string, technicianId: string) {
     await patch(`/service-orders/${id}/schedule`, {
-      dueDate: dueLocal ? new Date(dueLocal).toISOString() : null,
+      dueDate: dueLocal ? localInputToIso(dueLocal) : null,
       technicianId: technicianId || undefined,
     });
+  }
+
+  async function setTimestamp(key: TsKey, localValue: string) {
+    // UI inmediato
+    setTs((s) => ({ ...s, [key]: localValue }));
+
+    const iso = localInputToIso(localValue);
+
+    setBusy(true);
+    try {
+      // 1) guardar timestamp
+      await apiFetch(`/service-orders/${id}/timestamps`, {
+        method: 'PATCH',
+        token: auth.token!,
+        tenantSlug: auth.tenantSlug!,
+        body: { [key]: iso },
+      });
+
+      // 2) reglas simples de estado (solo las que pediste)
+      const currentStatus = (data.status || 'OPEN').toUpperCase();
+
+      if (key === 'takenAt' && iso) {
+        // no forzar si ya está finalizada/cancelada/cerrada
+        if (!['COMPLETED', 'CLOSED', 'CANCELED'].includes(currentStatus)) {
+          await apiFetch(`/service-orders/${id}`, {
+            method: 'PATCH',
+            token: auth.token!,
+            tenantSlug: auth.tenantSlug!,
+            body: { status: 'IN_PROGRESS' },
+          });
+        }
+      }
+
+      if (key === 'activityFinishedAt' && iso) {
+        if (!['CLOSED', 'CANCELED'].includes(currentStatus)) {
+          await apiFetch(`/service-orders/${id}`, {
+            method: 'PATCH',
+            token: auth.token!,
+            tenantSlug: auth.tenantSlug!,
+            body: { status: 'COMPLETED' },
+          });
+        }
+      }
+
+      await mutate();
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function addPart(item?: InventoryItem) {
@@ -105,31 +244,51 @@ export default function ServiceOrderDetailPage() {
     mutate();
   }
 
-  // Formularios dinámicos (simple v1)
   const fd = data.formData ?? {};
-  const checklist = Array.isArray(data.pmPlan?.checklist) ? data.pmPlan!.checklist : [];
-  const checked: Record<string, boolean> = fd.checked ?? {};
+  const showChecklist = data.serviceOrderType === 'ALISTAMIENTO' || data.serviceOrderType === 'PREVENTIVO';
 
   return (
     <div className="p-4 space-y-6 max-w-4xl">
       <div className="space-y-1">
-        <h1 className="text-xl font-semibold">{data.title}</h1>
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <h1 className="text-xl font-semibold">{data.title}</h1>
+          <span className={`px-2 py-1 text-xs border rounded ${statusPillClass(data.status)}`}>{data.status}</span>
+        </div>
         <div className="text-sm text-gray-700">
           <span className="font-medium">Activo:</span> {data.assetCode} · {data.asset?.name ?? ''}
         </div>
         <div className="text-sm text-gray-700">
-          Cliente: {data.asset?.customer ?? '-'} · Marca: {data.asset?.brand ?? '-'} · Modelo: {data.asset?.model ?? '-'} · Serie: {data.asset?.serialNumber ?? '-'}
+          Cliente: {data.asset?.customer ?? '-'} · Marca: {data.asset?.brand ?? '-'} · Modelo: {data.asset?.model ?? '-'} · Serie:{' '}
+          {data.asset?.serialNumber ?? '-'}
         </div>
       </div>
 
       {/* Programación */}
       <section className="border rounded p-4 space-y-3">
         <h2 className="font-semibold">Programación</h2>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
           <div>
             <label className="text-sm font-medium">Tipo</label>
             <div className="text-sm">{data.serviceOrderType ?? '-'}</div>
           </div>
+          <div>
+            <label className="text-sm font-medium">Estado</label>
+            <select
+              className="border rounded px-3 py-2 w-full"
+              value={data.status}
+              disabled={busy}
+              onChange={(e) => patch(`/service-orders/${id}`, { status: e.target.value })}
+            >
+              <option value="OPEN">OPEN</option>
+              <option value="IN_PROGRESS">IN_PROGRESS</option>
+              <option value="ON_HOLD">ON_HOLD</option>
+              <option value="COMPLETED">COMPLETED</option>
+              <option value="CLOSED">CLOSED</option>
+              <option value="CANCELED">CANCELED</option>
+            </select>
+            <p className="text-xs text-gray-500">El calendario colorea eventos por estado.</p>
+          </div>
+
           <div>
             <label className="text-sm font-medium">Fecha/hora ejecución</label>
             <input
@@ -148,7 +307,11 @@ export default function ServiceOrderDetailPage() {
               onChange={(e) => patchSchedule(isoToLocal(data.dueDate), e.target.value)}
             >
               <option value="">(sin asignar)</option>
-              {(techs ?? []).map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+              {(techs ?? []).map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name}
+                </option>
+              ))}
             </select>
           </div>
         </div>
@@ -157,63 +320,66 @@ export default function ServiceOrderDetailPage() {
       {/* Timestamps */}
       <section className="border rounded p-4 space-y-3">
         <h2 className="font-semibold">Tiempos (timestamps)</h2>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-          {[
-            ['takenAt','Hora toma OS'],
-            ['arrivedAt','Hora llegada cliente'],
-            ['checkInAt','Hora ingreso'],
-            ['activityStartedAt','Inicio actividad'],
-            ['activityFinishedAt','Fin actividad'],
-            ['deliveredAt','Hora entrega'],
-          ].map(([k,label]) => (
-            <div key={k}>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+          {TS_FIELDS.map(({ key, label, hint }) => (
+            <div key={key} className="border rounded p-2">
               <label className="text-sm font-medium">{label}</label>
-              <input
-                type="datetime-local"
-                className="border rounded px-3 py-2 w-full"
-                defaultValue={isoToLocal((data as any)[k])}
-                onBlur={(e) => patch(`/service-orders/${id}/timestamps`, { [k]: e.target.value ? new Date(e.target.value).toISOString() : null })}
-              />
+
+              <div className="mt-1 flex items-center gap-2">
+                <input
+                  type="datetime-local"
+                  className="border rounded px-3 py-2 w-full"
+                  value={ts[key]}
+                  onChange={(e) => setTs((s) => ({ ...s, [key]: e.target.value }))}
+                  onBlur={(e) => setTimestamp(key, e.target.value)}
+                />
+
+                {/* Evitamos doble guardado: click en botón no dispara blur del input */}
+                <button
+                  type="button"
+                  className="px-3 py-2 border rounded whitespace-nowrap disabled:opacity-50"
+                  disabled={busy}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => setTimestamp(key, nowLocalInputValue())}
+                  title="Registrar hora actual"
+                >
+                  Ahora
+                </button>
+
+                <button
+                  type="button"
+                  className="px-3 py-2 border rounded whitespace-nowrap disabled:opacity-50"
+                  disabled={busy || !ts[key]}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => setTimestamp(key, '')}
+                  title="Limpiar"
+                >
+                  ✕
+                </button>
+              </div>
+
+              {hint ? <p className="text-xs text-gray-500 mt-1">{hint}</p> : null}
             </div>
           ))}
         </div>
       </section>
 
-      {/* Formulario dinámico */}
+      {/* Formulario técnico */}
       <section className="border rounded p-4 space-y-3">
         <h2 className="font-semibold">Formulario técnico</h2>
 
-        {data.serviceOrderType === 'PREVENTIVO' && (
-          <div className="space-y-2">
-            <div className="text-sm text-gray-700">
-              Plan: <span className="font-medium">{data.pmPlan?.name ?? '(sin plan)'}</span>
-            </div>
-            {checklist.length > 0 ? (
-              <div className="space-y-1">
-                {checklist.map((it: any, idx: number) => {
-                  const key = typeof it === 'string' ? it : (it?.label ?? `item-${idx}`);
-                  return (
-                    <label key={key} className="flex items-center gap-2 text-sm">
-                      <input
-                        type="checkbox"
-                        defaultChecked={!!checked[key]}
-                        onChange={(e) => {
-                          const next = { ...checked, [key]: e.target.checked };
-                          patch(`/service-orders/${id}/form`, { formData: { ...fd, checked: next } });
-                        }}
-                      />
-                      <span>{key}</span>
-                    </label>
-                  );
-                })}
-              </div>
-            ) : (
-              <div className="text-sm text-gray-600">Este PM Plan no tiene checklist aún.</div>
-            )}
-          </div>
-        )}
-
-        {data.serviceOrderType !== 'PREVENTIVO' && (
+        {/* Checklist + Observaciones/Resultado para ALISTAMIENTO y PREVENTIVO */}
+        {showChecklist ? (
+          <ServiceOrderChecklistSection
+            soId={data.id}
+            soType={(data.serviceOrderType ?? '') as any}
+            asset={{ brand: data.asset?.brand, model: data.asset?.model }}
+            pmChecklist={data.pmPlan?.checklist}
+            initialFormData={data.formData}
+            onSaved={() => mutate()}
+          />
+        ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
             <div className="space-y-1">
               <label className="text-sm font-medium">Observaciones</label>
@@ -258,7 +424,7 @@ export default function ServiceOrderDetailPage() {
               <input className="border rounded px-3 py-2 w-full" value={partQ} onChange={(e) => setPartQ(e.target.value)} />
               {partQ.trim() && (invMatches ?? []).length > 0 && (
                 <div className="border rounded mt-1">
-                  {(invMatches ?? []).map(it => (
+                  {(invMatches ?? []).map((it) => (
                     <button
                       key={it.id}
                       type="button"
@@ -278,10 +444,10 @@ export default function ServiceOrderDetailPage() {
 
             <div className="space-y-2">
               <div className="text-sm font-medium">Listado de repuestos necesarios</div>
-              {(data.serviceOrderParts ?? []).map(p => (
+              {(data.serviceOrderParts ?? []).map((p) => (
                 <div key={p.id} className="flex items-center justify-between border rounded px-3 py-2">
                   <div className="text-sm">
-                    {p.inventoryItem ? `${p.inventoryItem.sku} — ${p.inventoryItem.name}` : (p.freeText ?? '')}
+                    {p.inventoryItem ? `${p.inventoryItem.sku} — ${p.inventoryItem.name}` : p.freeText ?? ''}
                     <span className="text-gray-600"> · Qty: {p.qty}</span>
                   </div>
                   <button className="text-sm underline" onClick={() => removePart(p.id)}>Quitar</button>
@@ -291,6 +457,14 @@ export default function ServiceOrderDetailPage() {
             </div>
           </div>
         )}
+      </section>
+
+      {/* Galería (miniaturas compactas) - antes de Firmas */}
+      <section className="border rounded p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <h2 className="font-semibold">Galería</h2>
+        </div>
+        <ServiceOrderImagesGallery serviceOrderId={id} />
       </section>
 
       {/* Firmas */}

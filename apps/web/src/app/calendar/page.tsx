@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { useSession } from 'next-auth/react';
 import { getAuthFromSession } from '@/lib/auth';
 import { apiFetch } from '@/lib/api';
@@ -69,6 +69,26 @@ const localizer = dateFnsLocalizer({
 
 const UNASSIGNED = 'UNASSIGNED';
 const DEFAULT_DURATION_MIN = 60;
+
+function statusToStyle(status?: string | null): CSSProperties {
+  const s = (status || 'OPEN').toUpperCase();
+  // WorkOrderStatus: OPEN | IN_PROGRESS | ON_HOLD | COMPLETED | CLOSED | CANCELED
+  switch (s) {
+    case 'IN_PROGRESS':
+      return { backgroundColor: '#f59e0b', borderColor: '#f59e0b', color: '#111827' }; // amber
+    case 'ON_HOLD':
+      return { backgroundColor: '#a78bfa', borderColor: '#a78bfa', color: '#111827' }; // violet
+    case 'COMPLETED':
+      return { backgroundColor: '#22c55e', borderColor: '#22c55e', color: '#052e16' }; // green
+    case 'CLOSED':
+      return { backgroundColor: '#9ca3af', borderColor: '#9ca3af', color: '#111827' }; // gray
+    case 'CANCELED':
+      return { backgroundColor: '#ef4444', borderColor: '#ef4444', color: '#111827', opacity: 0.75 }; // red
+    case 'OPEN':
+    default:
+      return { backgroundColor: '#3b82f6', borderColor: '#3b82f6', color: '#0b1220' }; // blue
+  }
+}
 
 // Horario visible (semana/día)
 const MIN_TIME = new Date(1970, 0, 1, 7, 30);
@@ -257,6 +277,25 @@ export default function CalendarPage() {
     loadEvents();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [auth.token, auth.tenantSlug, view, date, onlyTechId]);
+// Refrescar cuando vuelves a la pestaña (útil después de cambiar estado en el detalle de una OS)
+useEffect(() => {
+  if (!auth.token || !auth.tenantSlug) return;
+  const onFocus = () => {
+    loadEvents();
+    loadUnscheduled();
+  };
+  window.addEventListener('focus', onFocus);
+  const onVis = () => {
+    if (!document.hidden) onFocus();
+  };
+  document.addEventListener('visibilitychange', onVis);
+  return () => {
+    window.removeEventListener('focus', onFocus);
+    document.removeEventListener('visibilitychange', onVis);
+  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [auth.token, auth.tenantSlug, view, date, onlyTechId]);
+
 
   useEffect(() => {
     if (!auth.token || !auth.tenantSlug) return;
@@ -358,6 +397,9 @@ export default function CalendarPage() {
 
         <div className="flex items-center gap-3">
           <LinkBack />
+          <button className="px-3 py-2 border rounded" onClick={() => { loadEvents(); loadUnscheduled(); }}>
+            Actualizar
+          </button>
           <select className="border rounded px-2 py-1" value={onlyTechId} onChange={(e) => setOnlyTechId(e.target.value)}>
             <option value="">Todos</option>
             <option value={UNASSIGNED}>Sin asignar</option>
@@ -462,9 +504,11 @@ export default function CalendarPage() {
                 // Más info en el evento cuando estamos en vista Día
                 event: (props: any) => <EventBox {...props} view={view} />,
               }}
-              eventPropGetter={() => ({
-                style: view === Views.DAY ? { whiteSpace: 'normal', lineHeight: 1.15 } : undefined,
-              })}
+              eventPropGetter={(event) => {
+                const base = view === Views.DAY ? { whiteSpace: 'normal', lineHeight: 1.15 } : undefined;
+                const st = statusToStyle(event?.so?.status);
+                return { style: { ...(base as any), ...(st as any) } };
+              }}
             />
           </DndProvider>
         </div>
