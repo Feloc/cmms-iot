@@ -173,38 +173,79 @@ private async assertSo(id: string) {
       },
     });
   }
+async schedule(id: string, dto: ScheduleServiceOrderDto) {
+  const tenantId = this.getTenantId();
 
-  async schedule(id: string, dto: ScheduleServiceOrderDto) {
-    const tenantId = this.getTenantId();
-    // Actualiza dueDate (programación)
-    const wo = await this.prisma.workOrder.findFirst({ where: { id, tenantId, kind: 'SERVICE_ORDER' } });
+  return this.prisma.$transaction(async (tx) => {
+    const wo = await tx.workOrder.findFirst({ where: { id, tenantId, kind: 'SERVICE_ORDER' } });
     if (!wo) throw new NotFoundException('Service order not found');
 
-    const dueDate = this.coerceDate(dto.dueDate);
-    const updated = await this.prisma.workOrder.update({ where: { id }, data: { dueDate } });
+    const data: Prisma.WorkOrderUpdateInput = {};
 
-    // Asignación técnico (si viene)
-    if (dto.technicianId) {
-      // inactivar assignment anterior de TECHNICIAN y crear nueva
-      await this.prisma.$transaction(async (tx) => {
-        await tx.wOAssignment.updateMany({
-          where: { tenantId, workOrderId: id, role: 'TECHNICIAN', state: 'ACTIVE' },
-          data: { state: 'REMOVED' },
+    // dueDate
+    // - undefined: no cambia
+    // - null: quitar programación (volver a "sin programación")
+    // - string/Date: actualizar
+    if (dto.dueDate === null) {
+      data.dueDate = null;
+    } else if (dto.dueDate !== undefined) {
+      data.dueDate = this.coerceDate(dto.dueDate as any);
+    }
+
+    // durationMin (para resize del calendario)
+    if ((dto as any).durationMin === null) {
+      (data as any).durationMin = null;
+    } else if ((dto as any).durationMin !== undefined) {
+      const v = Number((dto as any).durationMin);
+      if (!Number.isFinite(v) || v <= 0) throw new BadRequestException('Invalid durationMin');
+      (data as any).durationMin = Math.round(v);
+    }
+
+    // technicianId
+    // - undefined: no tocar asignación
+    // - null / "": quitar asignación
+    // - string: reemplazar asignación
+    const shouldClearTechWhenUnscheduling = dto.dueDate === null && dto.technicianId === undefined;
+    const hasTechInstruction = dto.technicianId !== undefined || shouldClearTechWhenUnscheduling;
+
+    if (hasTechInstruction) {
+      const technicianId = shouldClearTechWhenUnscheduling
+        ? ''
+        : dto.technicianId
+          ? String(dto.technicianId).trim()
+          : '';
+
+      // Borra asignaciones TECHNICIAN previas (evita depender de enums como INACTIVE/REMOVED)
+      await tx.wOAssignment.deleteMany({
+        where: { tenantId, workOrderId: id, role: 'TECHNICIAN' },
+      });
+
+      if (technicianId) {
+        const tech = await tx.user.findFirst({
+          where: { id: technicianId, tenantId },
+          select: { id: true },
         });
+        if (!tech) throw new BadRequestException('Technician not found');
+
         await tx.wOAssignment.create({
           data: {
             tenantId,
             workOrderId: id,
-            userId: dto.technicianId,
+            userId: technicianId,
             role: 'TECHNICIAN',
-            state: 'ACTIVE',
-          },
+            state: 'ACTIVE' as any,
+          } as any,
         });
-      });
+      }
     }
 
+    const updated = Object.keys(data).length
+      ? await tx.workOrder.update({ where: { id }, data })
+      : wo;
+
     return updated;
-  }
+  });
+}
 
   async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
     await this.assertSo(id);

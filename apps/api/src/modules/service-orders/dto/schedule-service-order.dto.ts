@@ -1,23 +1,19 @@
-export class ScheduleServiceOrderDto {
-  /**
-   * Fecha/hora de ejecución (programación)
-   * - undefined: no cambia
-   * - null: desprograma
-   * - string/Date: programa
-   */
-  dueDate?: string | Date | null;
+import { IsInt, IsOptional, IsString, Min } from 'class-validator';
 
-  /**
-   * Técnico asignado (User.id)
-   * - undefined: no cambia
-   * - "" o null: quita asignación
-   */
+export class ScheduleServiceOrderDto {
+  /** Fecha/hora de ejecución (programación). null => quitar programación */
+  @IsOptional()
+  @IsString()
+  dueDate?: string | null;
+
+  /** Técnico asignado (User.id). null/"" => quitar asignación. undefined => no toca técnico */
+  @IsOptional()
+  @IsString()
   technicianId?: string | null;
 
-  /**
-   * Duración planificada en minutos (para calendario)
-   * - undefined: no cambia
-   * - null: limpia (se usará default del frontend, p.e. 60)
-   */
+  /** Duración (min) para calendario (resize) */
+  @IsOptional()
+  @IsInt()
+  @Min(1)
   durationMin?: number | null;
 }

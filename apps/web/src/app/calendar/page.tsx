@@ -32,7 +32,6 @@ type ServiceOrder = {
     user?: { id: string; name: string } | null;
   }> | null;
   asset?: {
-    name?: string | null;
     customer?: string | null;
     serialNumber?: string | null;
     brand?: string | null;
@@ -41,7 +40,6 @@ type ServiceOrder = {
 };
 
 type Paginated<T> = { items: T[]; total: number; page: number; size: number };
-
 type Resource = { id: string; title: string };
 
 type CalEvent = {
@@ -62,33 +60,13 @@ const locales = { es };
 const localizer = dateFnsLocalizer({
   format,
   parse,
-  startOfWeek: () => startOfWeek(new Date(), { weekStartsOn: 1 }), // Lunes
+  startOfWeek: () => startOfWeek(new Date(), { weekStartsOn: 1 }),
   getDay,
   locales,
 });
 
 const UNASSIGNED = 'UNASSIGNED';
 const DEFAULT_DURATION_MIN = 60;
-
-function statusToStyle(status?: string | null): CSSProperties {
-  const s = (status || 'OPEN').toUpperCase();
-  // WorkOrderStatus: OPEN | IN_PROGRESS | ON_HOLD | COMPLETED | CLOSED | CANCELED
-  switch (s) {
-    case 'IN_PROGRESS':
-      return { backgroundColor: '#f59e0b', borderColor: '#f59e0b', color: '#111827' }; // amber
-    case 'ON_HOLD':
-      return { backgroundColor: '#a78bfa', borderColor: '#a78bfa', color: '#111827' }; // violet
-    case 'COMPLETED':
-      return { backgroundColor: '#22c55e', borderColor: '#22c55e', color: '#052e16' }; // green
-    case 'CLOSED':
-      return { backgroundColor: '#9ca3af', borderColor: '#9ca3af', color: '#111827' }; // gray
-    case 'CANCELED':
-      return { backgroundColor: '#ef4444', borderColor: '#ef4444', color: '#111827', opacity: 0.75 }; // red
-    case 'OPEN':
-    default:
-      return { backgroundColor: '#3b82f6', borderColor: '#3b82f6', color: '#0b1220' }; // blue
-  }
-}
 
 // Horario visible (semana/día)
 const MIN_TIME = new Date(1970, 0, 1, 7, 30);
@@ -114,6 +92,25 @@ function addMinutes(d: Date, minutes: number) {
   return new Date(d.getTime() + minutes * 60_000);
 }
 
+function statusToStyle(status?: string | null): CSSProperties {
+  const s = (status || 'OPEN').toUpperCase();
+  switch (s) {
+    case 'IN_PROGRESS':
+      return { backgroundColor: '#f59e0b', borderColor: '#f59e0b', color: '#111827' };
+    case 'ON_HOLD':
+      return { backgroundColor: '#a78bfa', borderColor: '#a78bfa', color: '#111827' };
+    case 'COMPLETED':
+      return { backgroundColor: '#22c55e', borderColor: '#22c55e', color: '#052e16' };
+    case 'CLOSED':
+      return { backgroundColor: '#9ca3af', borderColor: '#9ca3af', color: '#111827' };
+    case 'CANCELED':
+      return { backgroundColor: '#ef4444', borderColor: '#ef4444', color: '#111827', opacity: 0.75 };
+    case 'OPEN':
+    default:
+      return { backgroundColor: '#3b82f6', borderColor: '#3b82f6', color: '#0b1220' };
+  }
+}
+
 function getRange(date: Date, view: View) {
   if (view === Views.MONTH) {
     const start = startOfMonth(date);
@@ -123,7 +120,6 @@ function getRange(date: Date, view: View) {
   if (view === Views.DAY) {
     return { start: startOfDay(date), end: endOfDay(date) };
   }
-  // WEEK (default)
   const start = startOfWeek(date, { weekStartsOn: 1 });
   const end = addMinutes(new Date(start.getTime() + 7 * 24 * 60 * 60_000), -1);
   return { start, end };
@@ -148,9 +144,28 @@ function buildSidebarTitle(so: ServiceOrder) {
 }
 
 function clampText(s: string, max: number) {
-  const t = s.trim();
+  const t = (s || '').trim();
   if (t.length <= max) return t;
   return t.slice(0, max - 1) + '…';
+}
+
+function normalizeResourceId(r: any): string {
+  if (!r) return '';
+  if (typeof r === 'string' || typeof r === 'number') return String(r);
+  if (typeof r === 'object' && 'id' in r) return String((r as any).id);
+  return '';
+}
+
+function bestResourceId(
+  raw: any,
+  fallback: { hoverResourceId?: string; onlyTechId?: string; currentEventResourceId?: string }
+) {
+  const direct = normalizeResourceId(raw);
+  if (direct) return direct;
+  if (fallback.hoverResourceId) return fallback.hoverResourceId;
+  if (fallback.onlyTechId) return fallback.onlyTechId;
+  if (fallback.currentEventResourceId) return fallback.currentEventResourceId;
+  return UNASSIGNED;
 }
 
 export default function CalendarPage() {
@@ -159,7 +174,9 @@ export default function CalendarPage() {
 
   const [view, setView] = useState<View>(Views.WEEK);
   const [date, setDate] = useState<Date>(new Date());
-  const [onlyTechId, setOnlyTechId] = useState<string>(''); // filtro
+  const [onlyTechId, setOnlyTechId] = useState<string>('');
+  const [hoverResourceId, setHoverResourceId] = useState<string>('');
+
   const [techs, setTechs] = useState<User[]>([]);
   const [events, setEvents] = useState<CalEvent[]>([]);
   const [unscheduled, setUnscheduled] = useState<ServiceOrder[]>([]);
@@ -201,8 +218,6 @@ export default function CalendarPage() {
       });
 
       const items = data?.items ?? [];
-
-      // Si el backend no filtra bien por rango, filtramos aquí.
       const inRange = items.filter((so) => {
         if (!so.dueDate) return false;
         const d = new Date(so.dueDate);
@@ -214,22 +229,10 @@ export default function CalendarPage() {
         const dur = so.durationMin ?? DEFAULT_DURATION_MIN;
         const endAt = addMinutes(startAt, dur);
         const techId = getActiveTechnicianId(so) ?? UNASSIGNED;
-
-        // Título compacto para week/month. Para day, renderizamos más info con un componente.
-        const title = buildCompactTitle(so);
-
-        return {
-          id: so.id,
-          title,
-          start: startAt,
-          end: endAt,
-          resourceId: techId,
-          so,
-        };
+        return { id: so.id, title: buildCompactTitle(so), start: startAt, end: endAt, resourceId: techId, so };
       });
 
-      const filtered = onlyTechId ? mapped.filter((e) => e.resourceId === onlyTechId) : mapped;
-      setEvents(filtered);
+      setEvents(onlyTechId ? mapped.filter((e) => e.resourceId === onlyTechId) : mapped);
     } catch (e: any) {
       setErr(e?.message ?? 'Error cargando agenda');
     } finally {
@@ -245,7 +248,6 @@ export default function CalendarPage() {
       qs.set('size', '200');
       if (unscheduledQ.trim()) qs.set('q', unscheduledQ.trim());
 
-      // NO enviar scheduledOnly=0 (string "0" puede ser truthy en backend).
       const data = await apiFetch<Paginated<ServiceOrder>>(`/service-orders?${qs.toString()}`, {
         token: auth.token,
         tenantSlug: auth.tenantSlug,
@@ -261,14 +263,10 @@ export default function CalendarPage() {
   useEffect(() => {
     if (!auth.token || !auth.tenantSlug) return;
     (async () => {
-      try {
-        await loadTechs();
-        await loadEvents();
-        await loadUnscheduled();
-      } catch (e: any) {
-        setErr(e?.message ?? 'Error inicializando calendario');
-      }
-    })();
+      await loadTechs();
+      await loadEvents();
+      await loadUnscheduled();
+    })().catch((e: any) => setErr(e?.message ?? 'Error inicializando calendario'));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [auth.token, auth.tenantSlug]);
 
@@ -277,59 +275,60 @@ export default function CalendarPage() {
     loadEvents();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [auth.token, auth.tenantSlug, view, date, onlyTechId]);
-// Refrescar cuando vuelves a la pestaña (útil después de cambiar estado en el detalle de una OS)
-useEffect(() => {
-  if (!auth.token || !auth.tenantSlug) return;
-  const onFocus = () => {
-    loadEvents();
-    loadUnscheduled();
-  };
-  window.addEventListener('focus', onFocus);
-  const onVis = () => {
-    if (!document.hidden) onFocus();
-  };
-  document.addEventListener('visibilitychange', onVis);
-  return () => {
-    window.removeEventListener('focus', onFocus);
-    document.removeEventListener('visibilitychange', onVis);
-  };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [auth.token, auth.tenantSlug, view, date, onlyTechId]);
-
 
   useEffect(() => {
     if (!auth.token || !auth.tenantSlug) return;
-    const t = setTimeout(() => {
-      loadUnscheduled();
-    }, 250);
+    const t = setTimeout(() => loadUnscheduled(), 250);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [unscheduledQ, auth.token, auth.tenantSlug]);
 
-  async function reschedule(soId: string, start: Date, resourceId: string, durationMin?: number | null) {
+  async function reschedule(soId: string, start: Date | null, resourceId: string, durationMin?: number | null) {
     if (!auth.token || !auth.tenantSlug) return;
-
-    const technicianId = resourceId === UNASSIGNED ? '' : resourceId;
 
     await apiFetch(`/service-orders/${soId}/schedule`, {
       method: 'PATCH',
       token: auth.token,
       tenantSlug: auth.tenantSlug,
       body: {
-        dueDate: start.toISOString(),
-        technicianId,
+        dueDate: start === null ? null : start.toISOString(),
+        technicianId: resourceId === UNASSIGNED ? null : resourceId,
         ...(durationMin !== undefined ? { durationMin } : {}),
       },
     });
   }
 
-  const onEventDrop: withDragAndDropProps<CalEvent, Resource>['onEventDrop'] = async ({ event, start, resourceId }) => {
+  async function unscheduleSo(soId: string) {
+    setLoading(true);
+    setErr('');
     try {
-      setLoading(true);
-      const duration =
-        Math.max(15, Math.round(((event.end as Date).getTime() - (event.start as Date).getTime()) / 60000)) || DEFAULT_DURATION_MIN;
-      await reschedule(event.id, start as Date, String(resourceId ?? event.resourceId), duration);
+      await reschedule(soId, null, UNASSIGNED, undefined);
       await loadEvents();
+      await loadUnscheduled();
+    } catch (e: any) {
+      setErr(e?.message ?? 'No se pudo devolver a "Sin programación"');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const onEventDrop: withDragAndDropProps<CalEvent, Resource>['onEventDrop'] = async ({ event, start, end, resourceId }) => {
+    setLoading(true);
+    setErr('');
+    try {
+      const s = start as Date;
+      const e = (end as Date) ?? (event.end as Date);
+      const duration = Math.max(15, Math.round((e.getTime() - s.getTime()) / 60000)) || DEFAULT_DURATION_MIN;
+
+      const targetResId = bestResourceId(resourceId, {
+        hoverResourceId,
+        onlyTechId,
+        currentEventResourceId: event.resourceId,
+      });
+
+      await reschedule(event.id, s, targetResId, duration);
+      await loadEvents();
+      await loadUnscheduled();
     } catch (e: any) {
       setErr(e?.message ?? 'No se pudo reprogramar');
     } finally {
@@ -338,10 +337,20 @@ useEffect(() => {
   };
 
   const onEventResize: withDragAndDropProps<CalEvent, Resource>['onEventResize'] = async ({ event, start, end, resourceId }) => {
+    setLoading(true);
+    setErr('');
     try {
-      setLoading(true);
-      const duration = Math.max(15, Math.round(((end as Date).getTime() - (start as Date).getTime()) / 60000));
-      await reschedule(event.id, start as Date, String(resourceId ?? event.resourceId), duration);
+      const s = start as Date;
+      const e = end as Date;
+      const duration = Math.max(15, Math.round((e.getTime() - s.getTime()) / 60000));
+
+      const targetResId = bestResourceId(resourceId, {
+        hoverResourceId,
+        onlyTechId,
+        currentEventResourceId: event.resourceId,
+      });
+
+      await reschedule(event.id, s, targetResId, duration);
       await loadEvents();
     } catch (e: any) {
       setErr(e?.message ?? 'No se pudo ajustar la duración');
@@ -350,29 +359,25 @@ useEffect(() => {
     }
   };
 
-  // Drag & drop externo (pendientes -> calendario)
   const dragPreviewEvent = useMemo<CalEvent | null>(() => {
     if (!dragSo) return null;
     const startAt = new Date();
     const dur = dragSo.durationMin ?? DEFAULT_DURATION_MIN;
     const endAt = addMinutes(startAt, dur);
-    return {
-      id: dragSo.id,
-      title: buildCompactTitle(dragSo),
-      start: startAt,
-      end: endAt,
-      resourceId: UNASSIGNED,
-      so: dragSo,
-    };
+    return { id: dragSo.id, title: buildCompactTitle(dragSo), start: startAt, end: endAt, resourceId: UNASSIGNED, so: dragSo };
   }, [dragSo]);
 
   const onDropFromOutside: withDragAndDropProps<CalEvent, Resource>['onDropFromOutside'] = async ({ start, resourceId }) => {
     if (!dragSo) return;
+    setLoading(true);
+    setErr('');
     try {
-      setLoading(true);
-      const techTarget = String(resourceId ?? UNASSIGNED);
+      const s = start as Date;
+      const techTarget = bestResourceId(resourceId, { hoverResourceId, onlyTechId });
       const dur = dragSo.durationMin ?? DEFAULT_DURATION_MIN;
-      await reschedule(dragSo.id, start as Date, techTarget, dur);
+
+      await reschedule(dragSo.id, s, techTarget, dur);
+
       setDragSo(null);
       await loadEvents();
       await loadUnscheduled();
@@ -383,10 +388,73 @@ useEffect(() => {
     }
   };
 
+  const TimeSlotWrapper = (props: any) => {
+    const resId = props?.resource ? String(props.resource) : '';
+    return (
+      <div
+        onMouseEnter={() => resId && setHoverResourceId(resId)}
+        onDragEnter={() => resId && setHoverResourceId(resId)}
+        style={{ height: '100%' }}
+      >
+        {props.children}
+      </div>
+    );
+  };
+
+  const DateCellWrapper = (props: any) => {
+    const resId = props?.resource ? String(props.resource) : '';
+    return (
+      <div onMouseEnter={() => resId && setHoverResourceId(resId)} onDragEnter={() => resId && setHoverResourceId(resId)}>
+        {props.children}
+      </div>
+    );
+  };
+
   if (!auth.token || !auth.tenantSlug) return <div className="p-6">Inicia sesión.</div>;
 
   return (
     <div className="p-6 space-y-4">
+      {/* Handles de resize (si no importaste el CSS del addon) */}
+      <style jsx global>{`
+        .rbc-event {
+          cursor: move;
+        }
+        .rbc-addons-dnd-resizable {
+          position: relative;
+        }
+        .rbc-addons-dnd-resizable .rbc-addons-dnd-resize-ns-anchor {
+          position: absolute;
+          left: 0;
+          right: 0;
+          height: 10px;
+          cursor: ns-resize;
+          z-index: 5;
+        }
+        .rbc-addons-dnd-resizable .rbc-addons-dnd-resize-ns-anchor.rbc-addons-dnd-resize-ns-anchor-top {
+          top: -4px;
+        }
+        .rbc-addons-dnd-resizable .rbc-addons-dnd-resize-ns-anchor.rbc-addons-dnd-resize-ns-anchor-bottom {
+          bottom: -4px;
+        }
+        .rbc-addons-dnd-resizable .rbc-addons-dnd-resize-ns-anchor:after {
+          content: '';
+          display: block;
+          margin: 4px auto;
+          width: 36px;
+          height: 2px;
+          background: rgba(0, 0, 0, 0.35);
+          border-radius: 2px;
+        }
+.rbc-addons-dnd-resizable {
+  overflow: visible;
+}
+.rbc-addons-dnd-resizable .rbc-addons-dnd-resize-ns-anchor {
+  pointer-events: auto;
+  background: transparent;
+}
+
+      `}</style>
+
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div>
           <div className="text-xl font-semibold">Calendario</div>
@@ -396,7 +464,9 @@ useEffect(() => {
         </div>
 
         <div className="flex items-center gap-3">
-          <LinkBack />
+          <a className="px-3 py-2 border rounded" href="/service-orders">
+            Lista OS
+          </a>
           <button className="px-3 py-2 border rounded" onClick={() => { loadEvents(); loadUnscheduled(); }}>
             Actualizar
           </button>
@@ -447,8 +517,8 @@ useEffect(() => {
                     className="border rounded p-2 cursor-move hover:bg-gray-50"
                     onDragStart={() => setDragSo(so)}
                     onDragEnd={() => setDragSo(null)}
-                    onMouseDown={() => setDragSo(so)} // fallback
-                    onTouchStart={() => setDragSo(so)} // mobile fallback (sin drop real)
+                    onMouseDown={() => setDragSo(so)}
+                    onTouchStart={() => setDragSo(so)}
                     title="Arrastra al calendario para programar"
                   >
                     <div className="text-sm font-medium">{buildSidebarTitle(so)}</div>
@@ -460,8 +530,11 @@ useEffect(() => {
             )}
           </div>
 
-          <div className="text-[11px] text-gray-500 mt-3">
-            Tip: arrastra un ítem y suéltalo sobre una columna (técnico) y una hora.
+          <div className="text-[11px] text-gray-500 mt-3 space-y-1">
+            <div>Tip: arrastra un ítem y suéltalo sobre una columna (técnico) y una hora.</div>
+            <div>
+              Para “devolver” una OS al panel, usa el botón <span className="font-mono">↩</span> en el evento.
+            </div>
           </div>
         </div>
 
@@ -490,19 +563,19 @@ useEffect(() => {
               max={MAX_TIME}
               selectable={false}
               resizable
+              draggableAccessor={() => true}
+              resizableAccessor={() => true}
               onEventDrop={onEventDrop}
               onEventResize={onEventResize}
-              // External DnD (pendientes -> calendario)
               dragFromOutsideItem={() => dragPreviewEvent}
               onDropFromOutside={onDropFromOutside}
               onDragOver={(e) => e.preventDefault()}
               style={{ height: 760 }}
-              onSelectEvent={(e) => {
-                window.location.href = `/service-orders/${e.id}`;
-              }}
+              onDoubleClickEvent={(e) => { window.location.href = `/service-orders/${e.id}`; }}
               components={{
-                // Más info en el evento cuando estamos en vista Día
-                event: (props: any) => <EventBox {...props} view={view} />,
+                event: (props: any) => <EventBox {...props} view={view} onUnschedule={() => unscheduleSo(props.event.id)} />,
+                timeSlotWrapper: TimeSlotWrapper,
+                dateCellWrapper: DateCellWrapper,
               }}
               eventPropGetter={(event) => {
                 const base = view === Views.DAY ? { whiteSpace: 'normal', lineHeight: 1.15 } : undefined;
@@ -517,29 +590,45 @@ useEffect(() => {
   );
 }
 
-function EventBox({ event, view }: { event: CalEvent; view: View }) {
+function EventBox({ event, view, onUnschedule }: { event: CalEvent; view: View; onUnschedule: () => void }) {
   const so = event.so;
   const serial = so.asset?.serialNumber ? `Serie: ${so.asset.serialNumber}` : '';
   const title = so.title?.trim() ? so.title.trim() : event.title;
   const desc = so.description?.trim() ? so.description.trim() : '';
 
+  const Button = (
+    <button
+      className="text-xs opacity-80 hover:opacity-100"
+      title='Devolver a "Sin programación"'
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        onUnschedule();
+      }}
+    >
+      ↩
+    </button>
+  );
+
   if (view !== Views.DAY) {
-    return <span>{event.title}</span>;
+    return (
+      <div className="flex items-start justify-between gap-2">
+        <span>{event.title}</span>
+        {Button}
+      </div>
+    );
   }
 
   return (
     <div style={{ whiteSpace: 'normal' }}>
-      <div style={{ fontWeight: 700 }}>{serial || so.assetCode}</div>
-      <div style={{ fontWeight: 600 }}>{title}</div>
+      <div className="flex items-start justify-between gap-2">
+        <div>
+          <div style={{ fontWeight: 700 }}>{serial || so.assetCode}</div>
+          <div style={{ fontWeight: 600 }}>{title}</div>
+        </div>
+        {Button}
+      </div>
       {desc ? <div style={{ fontSize: 12, opacity: 0.9 }}>{desc}</div> : null}
     </div>
-  );
-}
-
-function LinkBack() {
-  return (
-    <a className="px-3 py-2 border rounded" href="/service-orders">
-      Lista OS
-    </a>
   );
 }

@@ -15,6 +15,8 @@ import { PmPlansModule } from './modules/pm-plans/pm-plans.module';
 import { CatalogModule } from './modules/catalog/catalog.module';
 import { AttachmentsModule } from './modules/attachments/attachments.module';
 import { DevicesModule } from './modules/devices/devices.module';
+import { TenantsModule } from './modules/tenants/tenants.module';
+import { AdminUsersModule } from './modules/admin-users/admin-users.module';
 
 @Module({
   imports: [
@@ -34,6 +36,8 @@ import { DevicesModule } from './modules/devices/devices.module';
     CatalogModule,
     AttachmentsModule,
     DevicesModule,
+    TenantsModule,
+    AdminUsersModule,
   ],
 })
 export class AppModule {}

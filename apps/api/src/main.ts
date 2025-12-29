@@ -4,6 +4,7 @@ import { AppModule } from './app.module';
 import cookieParser from 'cookie-parser';
 import { tenantStorage } from './common/tenant-context';
 import { PrismaService } from './prisma.service';
+import { seedPlatform } from './seed/platform.seed';
 import { JwtService } from '@nestjs/jwt';
 import type { Request, Response, NextFunction } from 'express';
 
@@ -11,8 +12,13 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule, { cors: false });
   const prisma = app.get(PrismaService);
   await prisma.$connect();
-
-  // CORS: permitir headers personalizados y credenciales
+  
+// Seed automático (idempotente). Útil para bootstrap de platform tenant.
+// Activar con: AUTO_SEED=true
+if (String(process.env.AUTO_SEED || '').toLowerCase() === 'true') {
+  await seedPlatform(prisma);
+}
+// CORS: permitir headers personalizados y credenciales
   const origins = (process.env.CORS_ORIGINS || '')
     .split(',')
     .map((s) => s.trim())
