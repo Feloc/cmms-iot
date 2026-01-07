@@ -95,6 +95,8 @@ function addMinutes(d: Date, minutes: number) {
 function statusToStyle(status?: string | null): CSSProperties {
   const s = (status || 'OPEN').toUpperCase();
   switch (s) {
+    case 'SCHEDULED':
+      return { backgroundColor: '#06b6d4', borderColor: '#06b6d4', color: '#0b1220' };
     case 'IN_PROGRESS':
       return { backgroundColor: '#f59e0b', borderColor: '#f59e0b', color: '#111827' };
     case 'ON_HOLD':

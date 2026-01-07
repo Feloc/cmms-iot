@@ -1,8 +1,8 @@
 export class ServiceOrderTimestampsDto {
-  takenAt?: string | Date;
-  arrivedAt?: string | Date;
-  checkInAt?: string | Date;
-  activityStartedAt?: string | Date;
-  activityFinishedAt?: string | Date;
-  deliveredAt?: string | Date;
+  takenAt?: string | Date | null;
+  arrivedAt?: string | Date | null;
+  checkInAt?: string | Date | null;
+  activityStartedAt?: string | Date | null;
+  activityFinishedAt?: string | Date | null;
+  deliveredAt?: string | Date | null;
 }

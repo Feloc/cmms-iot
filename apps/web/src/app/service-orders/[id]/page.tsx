@@ -8,11 +8,15 @@ import { useApiSWR } from '@/lib/swr';
 import { apiFetch } from '@/lib/api';
 import { SignatureCanvas } from '@/components/SignatureCanvas';
 import { ServiceOrderImagesGallery } from '@/components/ServiceOrderImagesGallery';
+import { ServiceOrderFilesSection } from '@/components/ServiceOrderFilesSection';
 import { ServiceOrderChecklistSection } from '@/components/ServiceOrderChecklistSection';
+import { AssetSearchSelect } from '@/components/AssetSearchSelect';
 
 type User = { id: string; name: string; email: string; role: string };
 type InventoryItem = { id: string; sku: string; name: string; model?: string | null };
 type Part = { id: string; qty: number; notes?: string | null; freeText?: string | null; inventoryItem?: InventoryItem | null };
+
+type PmPlan = { id: string; name: string; intervalHours?: number | null; defaultDurationMin?: number | null };
 
 type ServiceOrder = {
   id: string;
@@ -99,10 +103,63 @@ const TS_FIELDS: Array<{ key: TsKey; label: string; hint?: string }> = [
   { key: 'deliveredAt', label: 'Hora entrega' },
 ];
 
+
+const TS_ORDER: TsKey[] = ['takenAt', 'arrivedAt', 'checkInAt', 'activityStartedAt', 'activityFinishedAt', 'deliveredAt'];
+
+function parseLocalToDate(v: string): Date | null {
+  const iso = localInputToIso(v);
+  return iso ? new Date(iso) : null;
+}
+
+function validateTsChange(current: Record<TsKey, string>, key: TsKey, nextLocal: string): string | null {
+  const next: Record<TsKey, Date | null> = {
+    takenAt: current.takenAt ? parseLocalToDate(current.takenAt) : null,
+    arrivedAt: current.arrivedAt ? parseLocalToDate(current.arrivedAt) : null,
+    checkInAt: current.checkInAt ? parseLocalToDate(current.checkInAt) : null,
+    activityStartedAt: current.activityStartedAt ? parseLocalToDate(current.activityStartedAt) : null,
+    activityFinishedAt: current.activityFinishedAt ? parseLocalToDate(current.activityFinishedAt) : null,
+    deliveredAt: current.deliveredAt ? parseLocalToDate(current.deliveredAt) : null,
+  };
+
+  const proposed = nextLocal ? parseLocalToDate(nextLocal) : null;
+  next[key] = proposed;
+
+  const idx = TS_ORDER.indexOf(key);
+
+  // Si se intenta borrar, no permitir si hay posteriores registrados
+  if (proposed === null) {
+    for (const later of TS_ORDER.slice(idx + 1)) {
+      if (next[later]) return `No puedes borrar ${key} mientras ${later} esté registrado. Borra primero los timestamps posteriores.`;
+    }
+    return null;
+  }
+
+  // Debe existir el anterior
+  if (idx > 0) {
+    const prevK = TS_ORDER[idx - 1];
+    const prev = next[prevK];
+    if (!prev) return `Debes registrar ${prevK} antes de registrar/modificar ${key}.`;
+    if (proposed.getTime() < prev.getTime()) return `${key} no puede ser más temprano que ${prevK}.`;
+  }
+
+  // Consistencia global (por si editaste un timestamp anterior)
+  for (let i = 1; i < TS_ORDER.length; i++) {
+    const a = next[TS_ORDER[i - 1]];
+    const b = next[TS_ORDER[i]];
+    if (b && !a) return `Debes registrar ${TS_ORDER[i - 1]} antes de ${TS_ORDER[i]}.`;
+    if (a && b && b.getTime() < a.getTime()) return `${TS_ORDER[i]} no puede ser más temprano que ${TS_ORDER[i - 1]}.`;
+  }
+
+  return null;
+}
+
 export default function ServiceOrderDetailPage() {
   const { id } = useParams<{ id: string }>();
   const { data: session } = useSession();
   const auth = getAuthFromSession(session);
+
+  const role = (session as any)?.user?.role as string | undefined;
+  const isAdmin = role === 'ADMIN';
 
   const { data, error, isLoading, mutate } = useApiSWR<ServiceOrder>(
     id ? `/service-orders/${id}` : null,
@@ -110,8 +167,17 @@ export default function ServiceOrderDetailPage() {
     auth.tenantSlug
   );
   const { data: techs } = useApiSWR<User[]>(`/users?role=TECH`, auth.token, auth.tenantSlug);
+  const { data: pmPlans } = useApiSWR<PmPlan[]>(`/pm-plans`, auth.token, auth.tenantSlug);
 
   const [busy, setBusy] = useState(false);
+  const [uiErr, setUiErr] = useState<string>('');
+  const [editMode, setEditMode] = useState(false);
+  const [editTitle, setEditTitle] = useState('');
+  const [editDescription, setEditDescription] = useState('');
+  const [editStatus, setEditStatus] = useState('OPEN');
+  const [editType, setEditType] = useState<string>('');
+  const [editAssetCode, setEditAssetCode] = useState('');
+  const [editPmPlanId, setEditPmPlanId] = useState('');
   const [partQ, setPartQ] = useState('');
 
   // Timestamps controlados (para botón "Ahora")
@@ -144,7 +210,29 @@ export default function ServiceOrderDetailPage() {
     data?.deliveredAt,
   ]);
 
-  const invPath = useMemo(() => {
+  
+// Inicializa campos de edición (ADMIN) sin pisar cambios mientras editas
+useEffect(() => {
+  if (!data) return;
+  if (editMode) return;
+  setEditTitle(data.title || '');
+  setEditDescription(data.description ?? '');
+  setEditStatus(String(data.status || 'OPEN'));
+  setEditType(String(data.serviceOrderType || ''));
+  setEditAssetCode(String(data.assetCode || ''));
+              setEditPmPlanId(String(data.pmPlan?.id || ''));
+  setEditPmPlanId(String(data.pmPlan?.id || ''));
+}, [data?.id, editMode]);
+
+// Si vienes con #edit desde el listado, abre el panel
+useEffect(() => {
+  if (typeof window === 'undefined') return;
+  if (window.location.hash === '#edit') {
+    setEditMode(true);
+    setTimeout(() => document.getElementById('edit-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0);
+  }
+}, []);
+const invPath = useMemo(() => {
     const q = partQ.trim();
     if (!q) return null;
     const qs = new URLSearchParams({ q });
@@ -161,6 +249,12 @@ export default function ServiceOrderDetailPage() {
 
   async function patch(path: string, body: any) {
     setBusy(true);
+    setUiErr('');
+              if (editType === 'PREVENTIVO' && !editPmPlanId) {
+                setUiErr('Debes seleccionar un PM Plan para órdenes PREVENTIVO.');
+                setBusy(false);
+                return;
+              }
     try {
       await apiFetch(path, { method: 'PATCH', token: auth.token!, tenantSlug: auth.tenantSlug!, body });
       await mutate();
@@ -175,54 +269,39 @@ export default function ServiceOrderDetailPage() {
       technicianId: technicianId || undefined,
     });
   }
-
-  async function setTimestamp(key: TsKey, localValue: string) {
-    // UI inmediato
-    setTs((s) => ({ ...s, [key]: localValue }));
-
-    const iso = localInputToIso(localValue);
-
-    setBusy(true);
-    try {
-      // 1) guardar timestamp
-      await apiFetch(`/service-orders/${id}/timestamps`, {
-        method: 'PATCH',
-        token: auth.token!,
-        tenantSlug: auth.tenantSlug!,
-        body: { [key]: iso },
-      });
-
-      // 2) reglas simples de estado (solo las que pediste)
-      const currentStatus = (data.status || 'OPEN').toUpperCase();
-
-      if (key === 'takenAt' && iso) {
-        // no forzar si ya está finalizada/cancelada/cerrada
-        if (!['COMPLETED', 'CLOSED', 'CANCELED'].includes(currentStatus)) {
-          await apiFetch(`/service-orders/${id}`, {
-            method: 'PATCH',
-            token: auth.token!,
-            tenantSlug: auth.tenantSlug!,
-            body: { status: 'IN_PROGRESS' },
-          });
-        }
-      }
-
-      if (key === 'activityFinishedAt' && iso) {
-        if (!['CLOSED', 'CANCELED'].includes(currentStatus)) {
-          await apiFetch(`/service-orders/${id}`, {
-            method: 'PATCH',
-            token: auth.token!,
-            tenantSlug: auth.tenantSlug!,
-            body: { status: 'COMPLETED' },
-          });
-        }
-      }
-
-      await mutate();
-    } finally {
-      setBusy(false);
-    }
+async function setTimestamp(key: TsKey, localValue: string) {
+  const msg = validateTsChange(ts, key, localValue);
+  if (msg) {
+    setUiErr(msg);
+    // revert a valor del backend
+    setTs((s) => ({ ...s, [key]: isoToLocal((data as any)[key]) }));
+    return;
   }
+
+  setTs((s) => ({ ...s, [key]: localValue }));
+  const iso = localInputToIso(localValue); // '' => null (borrar)
+
+  setBusy(true);
+  setUiErr('');
+  try {
+    // Backend aplica validaciones + cambios de estado automáticamente
+    await apiFetch(`/service-orders/${id}/timestamps`, {
+      method: 'PATCH',
+      token: auth.token!,
+      tenantSlug: auth.tenantSlug!,
+      body: { [key]: iso },
+    });
+
+    await mutate();
+  } catch (e: any) {
+    setUiErr(e?.message ?? 'Error guardando tiempo');
+    await mutate(); // resync
+    throw e;
+  } finally {
+    setBusy(false);
+  }
+}
+
 
   async function addPart(item?: InventoryItem) {
     await apiFetch(`/service-orders/${id}/parts`, {
@@ -249,10 +328,25 @@ export default function ServiceOrderDetailPage() {
 
   return (
     <div className="p-4 space-y-6 max-w-4xl">
+      {uiErr ? (
+        <div className="p-3 border rounded bg-red-50 text-red-700 text-sm whitespace-pre-wrap">{uiErr}</div>
+      ) : null}
+
       <div className="space-y-1">
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <h1 className="text-xl font-semibold">{data.title}</h1>
-          <span className={`px-2 py-1 text-xs border rounded ${statusPillClass(data.status)}`}>{data.status}</span>
+          <div className="flex items-center gap-2">
+            {isAdmin ? (
+              <button
+                type="button"
+                className="px-3 py-2 border rounded text-sm"
+                onClick={() => setEditMode((v) => !v)}
+              >
+                {editMode ? 'Cerrar edición' : 'Editar'}
+              </button>
+            ) : null}
+            <span className={`px-2 py-1 text-xs border rounded ${statusPillClass(data.status)}`}>{data.status}</span>
+          </div>
         </div>
         <div className="text-sm text-gray-700">
           <span className="font-medium">Activo:</span> {data.assetCode} · {data.asset?.name ?? ''}
@@ -262,6 +356,159 @@ export default function ServiceOrderDetailPage() {
           {data.asset?.serialNumber ?? '-'}
         </div>
       </div>
+{/* Edición OS (ADMIN) */}
+{isAdmin ? (
+  <section id="edit-panel" className="border rounded p-4 space-y-3">
+    <div className="flex items-center justify-between gap-2 flex-wrap">
+      <h2 className="font-semibold">Edición (ADMIN)</h2>
+      <button
+        type="button"
+        className="px-3 py-2 border rounded text-sm"
+        onClick={() => setEditMode((v) => !v)}
+      >
+        {editMode ? 'Cerrar' : 'Editar'}
+      </button>
+    </div>
+
+    {editMode ? (
+      <div className="space-y-3">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+          <div className="space-y-1">
+            <label className="text-sm font-medium">Activo</label>
+            <AssetSearchSelect value={editAssetCode} onChange={(code) => setEditAssetCode(code)} />
+            <p className="text-xs text-gray-500">Busca por serial/cliente/nombre y asigna el activo a la OS.</p>
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-sm font-medium">Estado</label>
+            <select
+              className="border rounded px-3 py-2 w-full"
+              value={editStatus}
+              onChange={(e) => setEditStatus(e.target.value)}
+            >
+              <option value="OPEN">OPEN</option>
+              <option value="SCHEDULED">SCHEDULED</option>
+              <option value="IN_PROGRESS">IN_PROGRESS</option>
+              <option value="ON_HOLD">ON_HOLD</option>
+              <option value="COMPLETED">COMPLETED</option>
+              <option value="CLOSED">CLOSED</option>
+              <option value="CANCELED">CANCELED</option>
+            </select>
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-sm font-medium">Tipo OS</label>
+            <select
+              className="border rounded px-3 py-2 w-full"
+              value={editType}
+              onChange={(e) => setEditType(e.target.value)}
+            >
+              <option value="">(sin tipo)</option>
+              <option value="ALISTAMIENTO">ALISTAMIENTO</option>
+              <option value="DIAGNOSTICO">DIAGNOSTICO</option>
+              <option value="PREVENTIVO">PREVENTIVO</option>
+              <option value="CORRECTIVO">CORRECTIVO</option>
+              <option value="ENTREGA">ENTREGA</option>
+              <option value="OTRO">OTRO</option>
+            </select>
+          </div>
+{editType === 'PREVENTIVO' ? (
+  <div className="space-y-1">
+    <label className="text-sm font-medium">Plan preventivo (PM Plan)</label>
+    <select
+      className="border rounded px-3 py-2 w-full"
+      value={editPmPlanId}
+      onChange={(e) => setEditPmPlanId(e.target.value)}
+    >
+      <option value="">(seleccionar)</option>
+      {(pmPlans ?? []).map((p) => (
+        <option key={p.id} value={p.id}>
+          {p.intervalHours ? `PM ${p.intervalHours}h` : p.name}
+        </option>
+      ))}
+    </select>
+    <p className="text-xs text-gray-500">Obligatorio para órdenes PREVENTIVO.</p>
+  </div>
+) : null}
+
+          <div className="space-y-1">
+            <label className="text-sm font-medium">Título</label>
+            <input
+              className="border rounded px-3 py-2 w-full"
+              value={editTitle}
+              onChange={(e) => setEditTitle(e.target.value)}
+            />
+          </div>
+        </div>
+
+        <div className="space-y-1">
+          <label className="text-sm font-medium">Descripción</label>
+          <textarea
+            className="border rounded px-3 py-2 w-full"
+            rows={3}
+            value={editDescription}
+            onChange={(e) => setEditDescription(e.target.value)}
+          />
+        </div>
+
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            className="px-3 py-2 border rounded bg-black text-white text-sm disabled:opacity-50"
+            disabled={busy}
+            onClick={async () => {
+              setBusy(true);
+              setUiErr('');
+              try {
+                await apiFetch(`/service-orders/${id}`, {
+                  method: 'PATCH',
+                  token: auth.token!,
+                  tenantSlug: auth.tenantSlug!,
+                  body: {
+                    assetCode: editAssetCode || undefined,
+                    title: editTitle || undefined,
+                    description: editDescription,
+                    status: editStatus || undefined,
+                    serviceOrderType: editType || undefined,
+                    pmPlanId: editType === 'PREVENTIVO' ? (editPmPlanId || null) : null,
+},
+                });
+                await mutate();
+                setEditMode(false);
+              } catch (e: any) {
+                setUiErr(e?.message ?? 'Error guardando edición');
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            Guardar cambios
+          </button>
+
+          <button
+            type="button"
+            className="px-3 py-2 border rounded text-sm"
+            disabled={busy}
+            onClick={() => {
+              setEditMode(false);
+              setEditTitle(data.title || '');
+              setEditDescription(data.description ?? '');
+              setEditStatus(String(data.status || 'OPEN'));
+              setEditType(String(data.serviceOrderType || ''));
+              setEditAssetCode(String(data.assetCode || ''));
+              setEditPmPlanId(String(data.pmPlan?.id || ''));
+            }}
+          >
+            Cancelar
+          </button>
+        </div>
+      </div>
+    ) : (
+      <p className="text-sm text-gray-600">Activa “Editar” para modificar campos de la orden.</p>
+    )}
+  </section>
+) : null}
+
 
       {/* Programación */}
       <section className="border rounded p-4 space-y-3">
@@ -458,6 +705,10 @@ export default function ServiceOrderDetailPage() {
           </div>
         )}
       </section>
+
+      {/* Adjuntos adicionales */}
+      <ServiceOrderFilesSection serviceOrderId={id} type="VIDEO" title="Videos" />
+      <ServiceOrderFilesSection serviceOrderId={id} type="DOCUMENT" title="Documentos" />
 
       {/* Galería (miniaturas compactas) - antes de Firmas */}
       <section className="border rounded p-4 space-y-3">

@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Res, UploadedFiles, UseInterceptors } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Res, Req, UploadedFiles, UseInterceptors } from '@nestjs/common';
 import { ServiceOrdersService } from './service-orders.service';
 import { CreateServiceOrderDto } from './dto/create-service-order.dto';
 import { UpdateServiceOrderDto } from './dto/update-service-order.dto';
@@ -9,7 +9,12 @@ import { ServiceOrderSignaturesDto } from './dto/signatures.dto';
 import { AddServiceOrderPartDto } from './dto/parts.dto';
 import { ListServiceOrdersQuery } from './dto/list-service-orders.query';
 import { FilesInterceptor } from '@nestjs/platform-express';
-import { memoryStorage } from 'multer';
+import { memoryStorage, diskStorage } from 'multer';
+import * as path from 'path';
+import { randomUUID } from 'crypto';
+import { createReadStream } from 'fs';
+import { stat } from 'fs/promises';
+import type { Request } from 'express';
 import type { Response } from 'express';
 
 @Controller('service-orders')
@@ -87,6 +92,94 @@ uploadImages(@Param('id') id: string, @UploadedFiles() files: any[]) {
 async getImage(@Param('id') id: string, @Param('filename') filename: string, @Res() res: Response) {
   const p = await this.svc.getImagePath(id, filename);
   return res.sendFile(p);
+}
+
+@Delete(':id/images/:filename')
+deleteImage(@Param('id') id: string, @Param('filename') filename: string) {
+  return this.svc.deleteImage(id, filename);
+}
+
+// ---------------------------
+// Adjuntos (nuevo): IMAGE | VIDEO | DOCUMENT
+// ---------------------------
+@Get(':id/attachments')
+listAttachments(@Param('id') id: string, @Query('type') type?: string) {
+  return this.svc.listAttachments(id, type ?? 'IMAGE');
+}
+
+@Post(':id/attachments')
+@UseInterceptors(
+  FilesInterceptor('files', 10, {
+    // diskStorage evita cargar archivos grandes (videos) en memoria RAM
+    storage: diskStorage({
+      destination: (_req, _file, cb) => {
+        const dir = path.join(process.cwd(), 'uploads', 'tmp');
+        cb(null, dir);
+      },
+      filename: (_req, file, cb) => {
+        const extRaw = path.extname(String(file?.originalname || '')).toLowerCase();
+        const ext = extRaw && extRaw.length <= 10 ? extRaw : '';
+        cb(null, `${Date.now()}-${randomUUID()}${ext}`);
+      },
+    }),
+    limits: { fileSize: 500 * 1024 * 1024 }, // 500MB (ajusta según tu caso)
+    // Validación fina se hace en el service según "type"
+    fileFilter: (_req, file, cb) => cb(null, !!file),
+  }),
+)
+uploadAttachments(@Param('id') id: string, @Query('type') type: string, @UploadedFiles() files: any[]) {
+  return this.svc.uploadAttachments(id, type ?? 'IMAGE', files ?? []);
+}
+
+@Get(':id/attachments/:type/:filename')
+async getAttachment(
+  @Param('id') id: string,
+  @Param('type') type: string,
+  @Param('filename') filename: string,
+  @Req() req: Request,
+  @Res() res: Response,
+) {
+  const p = await this.svc.getAttachmentPath(id, type, filename);
+
+  // Para VIDEO soportamos Range (streaming parcial) para que el navegador pueda hacer seek.
+  if (String(type).toUpperCase() === 'VIDEO') {
+    const st = await stat(p);
+    const fileSize = st.size;
+    const range = (req.headers as any)?.range as string | undefined;
+
+    res.setHeader('Accept-Ranges', 'bytes');
+    res.type(p);
+
+    if (range) {
+      const parts = range.replace(/bytes=/, '').split('-');
+      const start = Math.max(0, parseInt(parts[0] || '0', 10) || 0);
+      const end = parts[1] ? Math.min(fileSize - 1, parseInt(parts[1], 10) || fileSize - 1) : fileSize - 1;
+
+      if (start >= fileSize) {
+        res.status(416);
+        res.setHeader('Content-Range', `bytes */${fileSize}`);
+        return res.end();
+      }
+
+      const chunkSize = end - start + 1;
+      res.status(206);
+      res.setHeader('Content-Range', `bytes ${start}-${end}/${fileSize}`);
+      res.setHeader('Content-Length', String(chunkSize));
+
+      return createReadStream(p, { start, end }).pipe(res);
+    }
+
+    res.status(200);
+    res.setHeader('Content-Length', String(fileSize));
+    return createReadStream(p).pipe(res);
+  }
+
+  return res.sendFile(p);
+}
+
+@Delete(':id/attachments/:type/:filename')
+deleteAttachment(@Param('id') id: string, @Param('type') type: string, @Param('filename') filename: string) {
+  return this.svc.deleteAttachment(id, type, filename);
 }
 
 }

@@ -291,6 +291,7 @@ model WorkOrder {
 
 enum WorkOrderStatus {
   OPEN
+  SCHEDULED
   IN_PROGRESS
   ON_HOLD
   COMPLETED

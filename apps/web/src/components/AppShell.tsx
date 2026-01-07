@@ -22,7 +22,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const { data: session } = useSession();
 
-  // Puedes mapear roles si los guardas en session.user.role.
+  // Debe existir en session.user.role; si no, conectarlo en NextAuth callbacks.
   const role = (session as any)?.user?.role as string | undefined;
   const isAdmin = role === 'ADMIN';
 
@@ -35,11 +35,10 @@ export default function AppShell({ children }: { children: ReactNode }) {
       { href: '/service-orders', label: 'Órdenes de servicio' },
       { href: '/assets', label: 'Activos' },
       { href: '/pm-plans', label: 'PM Plans' },
-      // Rutas administrativas
       { href: '/users', label: 'Usuarios', adminOnly: true },
       { href: '/tenants', label: 'Tenants', adminOnly: true },
     ],
-    []
+    [],
   );
 
   const filtered = items.filter((it) => (it.adminOnly ? isAdmin : true));
@@ -47,7 +46,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
   return (
     <div className="min-h-screen bg-white">
       {/* Topbar */}
-      <header className="sticky top-0 z-30 border-b bg-white/90 backdrop-blur">
+      <header className="sticky top-0 z-50 border-b bg-white/90 backdrop-blur">
         <div className="h-14 px-3 flex items-center gap-2">
           <button
             className="lg:hidden px-2 py-1 border rounded"
@@ -88,7 +87,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
         {/* Sidebar desktop */}
         <aside
           className={[
-            'hidden lg:flex flex-col border-r bg-white',
+            'hidden lg:flex flex-col border-r bg-white relative z-40 pointer-events-auto',
             collapsed ? 'w-16' : 'w-64',
           ].join(' ')}
         >
@@ -117,9 +116,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
             })}
           </nav>
 
-          <div className="mt-auto p-3 border-t text-[11px] text-gray-500">
-            {collapsed ? 'v0.1' : 'CMMS IoT · v0.1'}
-          </div>
+          <div className="mt-auto p-3 border-t text-[11px] text-gray-500">{collapsed ? 'v0.1' : 'CMMS IoT · v0.1'}</div>
         </aside>
 
         {/* Mobile overlay */}
@@ -158,9 +155,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
         ) : null}
 
         {/* Content */}
-        <main className="flex-1 min-w-0">
-          {children}
-        </main>
+        <main className="flex-1 min-w-0 relative z-0">{children}</main>
       </div>
     </div>
   );

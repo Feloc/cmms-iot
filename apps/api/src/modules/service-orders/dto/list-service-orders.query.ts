@@ -1,8 +1,8 @@
 export type ListServiceOrdersQuery = {
   q?: string;
-  status?: string;
-  type?: string;
-  technicianId?: string;
+  status?: string | string[];
+  type?: string | string[];
+  technicianId?: string | string[];
   start?: string; // ISO
   end?: string;   // ISO
   page?: string | number;
