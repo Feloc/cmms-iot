@@ -8,4 +8,5 @@ export type ListServiceOrdersQuery = {
   page?: string | number;
   size?: string | number
   scheduledOnly?: string | number;
+  unscheduledOnly?: string | number;
 };

@@ -3,6 +3,7 @@ import { PrismaService } from '../../prisma.service';
 import { tenantStorage } from '../../common/tenant-context';
 import { CreateServiceOrderDto } from './dto/create-service-order.dto';
 import { ListServiceOrdersQuery } from './dto/list-service-orders.query';
+import { ServiceOrdersCalendarQuery } from './dto/calendar.query';
 import { UpdateServiceOrderDto } from './dto/update-service-order.dto';
 import { ScheduleServiceOrderDto } from './dto/schedule-service-order.dto';
 import { ServiceOrderTimestampsDto } from './dto/timestamps.dto';
@@ -148,18 +149,38 @@ else if (types.length > 1) where.serviceOrderType = { in: types } as any;
       }
     }
 
+    const truthy = (v: any) => String(v ?? '').trim() === '1' || String(v ?? '').trim().toLowerCase() === 'true';
+
+    // Filtro por programadas / sin programar
+    // - scheduledOnly=1 => dueDate NOT NULL
+    // - unscheduledOnly=1 => dueDate IS NULL
+    const scheduledOnly = truthy((q as any).scheduledOnly);
+    const unscheduledOnly = truthy((q as any).unscheduledOnly);
+
     // Rango por fecha programada (dueDate)
     const start = this.coerceDate(q.start ?? undefined);
     const end = this.coerceDate(q.end ?? undefined);
-    if (start || end) {
+
+    if (unscheduledOnly) {
+      where.dueDate = null;
+    } else if (scheduledOnly || start || end) {
       where.dueDate = {};
+      if (scheduledOnly) (where.dueDate as any).not = null;
       if (start) (where.dueDate as any).gte = start;
       if (end) (where.dueDate as any).lte = end;
     }
 
     // Filtro por técnico: buscamos assignments ACTIVAS de rol TECHNICIAN
 const techIds = normalizeQueryArray((q as any).technicianId);
-if (techIds.length === 1) {
+if (techIds.length === 1 && String(techIds[0]).toUpperCase() === 'UNASSIGNED') {
+  where.assignments = {
+    none: {
+      tenantId,
+      state: 'ACTIVE',
+      role: 'TECHNICIAN',
+    },
+  };
+} else if (techIds.length === 1) {
   where.assignments = {
     some: {
       tenantId,
@@ -208,6 +229,63 @@ const [items, total] = await this.prisma.$transaction([
     return { items: enriched, total, page, size };
   }
 
+  async calendar(q: ServiceOrdersCalendarQuery) {
+    const tenantId = this.getTenantId();
+
+    const start = this.coerceDate(q?.start);
+    const end = this.coerceDate(q?.end);
+    if (!start || !end) throw new BadRequestException('start and end are required');
+
+    const where: Prisma.WorkOrderWhereInput = {
+      tenantId,
+      kind: 'SERVICE_ORDER',
+      dueDate: { not: null, gte: start, lte: end } as any,
+    };
+
+    const techId = String(q?.technicianId ?? '').trim();
+    if (techId) {
+      if (techId.toUpperCase() === 'UNASSIGNED') {
+        where.assignments = {
+          none: {
+            tenantId,
+            state: 'ACTIVE',
+            role: 'TECHNICIAN',
+          },
+        };
+      } else {
+        where.assignments = {
+          some: {
+            tenantId,
+            state: 'ACTIVE',
+            role: 'TECHNICIAN',
+            userId: techId,
+          },
+        };
+      }
+    }
+
+    const items = await this.prisma.workOrder.findMany({
+      where,
+      orderBy: [{ dueDate: 'asc' }, { createdAt: 'desc' }],
+      take: 2000,
+      include: {
+        assignments: { where: { state: 'ACTIVE' }, include: { user: { select: { id: true, name: true } } } },
+      },
+    });
+
+    const assetCodes = Array.from(new Set(items.map(i => String((i as any).assetCode || '').trim()).filter(Boolean)));
+    const assets = await this.prisma.asset.findMany({
+      where: { tenantId, code: { in: assetCodes } },
+      select: { code: true, customer: true, name: true, brand: true, model: true, serialNumber: true },
+    });
+    const assetByCode = new Map(assets.map(a => [String((a as any).code || '').trim(), a]));
+
+    return items.map((it: any) => ({
+      ...it,
+      asset: assetByCode.get(String(it.assetCode || '').trim()) ?? null,
+    }));
+  }
+ 
   async get(id: string) {
     const tenantId = this.getTenantId();
     const so = await this.prisma.workOrder.findFirst({

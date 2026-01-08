@@ -8,6 +8,7 @@ import { ServiceOrderFormDataDto } from './dto/form-data.dto';
 import { ServiceOrderSignaturesDto } from './dto/signatures.dto';
 import { AddServiceOrderPartDto } from './dto/parts.dto';
 import { ListServiceOrdersQuery } from './dto/list-service-orders.query';
+import { ServiceOrdersCalendarQuery } from './dto/calendar.query';
 import { FilesInterceptor } from '@nestjs/platform-express';
 import { memoryStorage, diskStorage } from 'multer';
 import * as path from 'path';
@@ -20,6 +21,11 @@ import type { Response } from 'express';
 @Controller('service-orders')
 export class ServiceOrdersController {
   constructor(private svc: ServiceOrdersService) {}
+
+  @Get('calendar')
+  calendar(@Query() q: ServiceOrdersCalendarQuery) {
+    return this.svc.calendar(q);
+  }
 
   @Get()
   list(@Query() q: ListServiceOrdersQuery) {
