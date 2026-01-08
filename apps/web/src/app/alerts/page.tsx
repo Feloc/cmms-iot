@@ -6,7 +6,7 @@ import { apiFetch } from '@/lib/api';
 
 type Alert = {
   id: string;
-  type: 'THRESHOLD' | 'ROC';
+  kind: string;
   assetCode: string;
   sensor: string;
   message: string;
@@ -16,12 +16,23 @@ type Alert = {
 
 export default function AlertsPage() {
   const { data: session } = useSession();
-  const token = (session as any)?.backendToken as string | undefined;
-  const tenantSlug = (session as any)?.tenant?.slug as string | undefined;
+  const token =
+    (session as any)?.token ||
+    (session as any)?.accessToken ||
+    (session as any)?.user?.token ||
+    (session as any)?.jwt ||
+    undefined;
+
+  const tenantSlug =
+    (session as any)?.user?.tenant?.slug ||
+    (session as any)?.tenant?.slug ||
+    (session as any)?.tenantSlug ||
+    process.env.NEXT_PUBLIC_TENANT_SLUG ||
+    undefined;
 
   const { data: alerts } = useSWR<Alert[]>(
     token && tenantSlug ? ['/alerts/recent', token, tenantSlug] : null,
-    ([url, t, slug]) => apiFetch(url, { token: t, tenant: slug }),
+    ([url, t, slug]) => apiFetch(url, { token: t, tenantSlug: slug }),
     { refreshInterval: 5000 }
   );
 
@@ -33,7 +44,7 @@ export default function AlertsPage() {
         {alerts?.map(a => (
           <li key={a.id} className="p-3 rounded border">
             <div className="text-sm">
-              <span className="font-mono">[{a.type}]</span>{' '}
+              <span className="font-mono">[{a.kind}]</span>{' '}
               <span className="font-semibold">{a.assetCode}/{a.sensor}</span>{' '}
               – {a.message}
             </div>

@@ -17,6 +17,8 @@ import { AttachmentsModule } from './modules/attachments/attachments.module';
 import { DevicesModule } from './modules/devices/devices.module';
 import { TenantsModule } from './modules/tenants/tenants.module';
 import { AdminUsersModule } from './modules/admin-users/admin-users.module';
+import { DashboardModule } from './modules/dashboard/dashboard.module';
+
 
 @Module({
   imports: [
@@ -38,6 +40,7 @@ import { AdminUsersModule } from './modules/admin-users/admin-users.module';
     DevicesModule,
     TenantsModule,
     AdminUsersModule,
+    DashboardModule,
   ],
 })
 export class AppModule {}
