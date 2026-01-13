@@ -274,7 +274,8 @@ CREATE TYPE "public"."WorkOrderStatus" AS ENUM (
     'ON_HOLD',
     'COMPLETED',
     'CANCELED',
-    'CLOSED'
+    'CLOSED',
+    'SCHEDULED'
 );
 
 
