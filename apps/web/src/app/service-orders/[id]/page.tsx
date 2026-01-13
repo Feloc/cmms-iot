@@ -16,6 +16,17 @@ type User = { id: string; name: string; email: string; role: string };
 type InventoryItem = { id: string; sku: string; name: string; model?: string | null };
 type Part = { id: string; qty: number; notes?: string | null; freeText?: string | null; inventoryItem?: InventoryItem | null };
 
+type WorkLog = {
+  id: string;
+  userId: string;
+  startedAt: string;
+  endedAt?: string | null;
+  note?: string | null;
+  source?: string | null;
+  user?: User | null;
+};
+
+
 type PmPlan = { id: string; name: string; intervalHours?: number | null; defaultDurationMin?: number | null };
 
 type ServiceOrder = {
@@ -40,6 +51,7 @@ type ServiceOrder = {
   technicianSignature?: string | null;
   receiverSignature?: string | null;
   serviceOrderParts?: Part[];
+  workLogs?: WorkLog[];
 };
 
 // ---- Fecha/hora helpers (datetime-local) ----
@@ -72,6 +84,27 @@ function localInputToIso(v: string): string | null {
 }
 function nowLocalInputValue() {
   return toLocalInput(new Date());
+}
+
+
+function fmtDateTime(iso?: string | null) {
+  if (!iso) return '-';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '-';
+  return d.toLocaleString();
+}
+
+function fmtDuration(startIso?: string | null, endIso?: string | null) {
+  if (!startIso) return '-';
+  const a = new Date(startIso);
+  const b = endIso ? new Date(endIso) : new Date();
+  if (isNaN(a.getTime()) || isNaN(b.getTime())) return '-';
+  const ms = Math.max(0, b.getTime() - a.getTime());
+  const mins = Math.round(ms / 60000);
+  if (mins < 60) return `${mins} min`;
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return `${h} h ${m} min`;
 }
 
 function statusPillClass(status: string) {
@@ -246,6 +279,11 @@ const invPath = useMemo(() => {
   if (!data) return <div className="p-6">No encontrado.</div>;
 
   const tech = data.assignments?.find((a) => a.role === 'TECHNICIAN' && a.state === 'ACTIVE')?.user;
+
+const myUserId = (session as any)?.user?.id as string | undefined;
+const isAssignedTech = !!myUserId && (data.assignments ?? []).some((a) => a.role === 'TECHNICIAN' && a.state === 'ACTIVE' && a.userId === myUserId);
+const canChangeStatus = isAdmin || (role === 'TECH' && isAssignedTech);
+
 
   async function patch(path: string, body: any) {
     setBusy(true);
@@ -610,6 +648,40 @@ async function setTimestamp(key: TsKey, localValue: string) {
             </div>
           ))}
         </div>
+
+{/* WorkLogs */}
+<section className="border rounded p-4 space-y-3">
+  <h2 className="font-semibold">Work Logs (tiempos por técnico)</h2>
+
+  {(data.workLogs ?? []).length > 0 ? (
+    <div className="overflow-x-auto">
+      <table className="min-w-full text-sm">
+        <thead>
+          <tr className="text-left border-b">
+            <th className="py-2 pr-4">Técnico</th>
+            <th className="py-2 pr-4">Inicio</th>
+            <th className="py-2 pr-4">Fin</th>
+            <th className="py-2 pr-4">Duración</th>
+          </tr>
+        </thead>
+        <tbody>
+          {(data.workLogs ?? []).map((wl) => (
+            <tr key={wl.id} className="border-b last:border-b-0">
+              <td className="py-2 pr-4">{wl.user?.name ?? wl.userId}</td>
+              <td className="py-2 pr-4">{fmtDateTime(wl.startedAt)}</td>
+              <td className="py-2 pr-4">
+                {wl.endedAt ? fmtDateTime(wl.endedAt) : <span className="text-amber-700">En curso</span>}
+              </td>
+              <td className="py-2 pr-4">{fmtDuration(wl.startedAt, wl.endedAt ?? null)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  ) : (
+    <div className="text-sm text-gray-600">Sin registros todavía.</div>
+  )}
+</section>
       </section>
 
       {/* Formulario técnico */}

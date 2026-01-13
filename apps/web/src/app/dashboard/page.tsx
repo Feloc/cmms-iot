@@ -64,8 +64,14 @@ type Summary = {
 	    technicianWorkload: Array<{ userId: string; name: string; openAssigned: number }>;
     technicianPerformance: Array<{ userId: string; name: string; closedInRange: number; workedOrdersInRange: number; totalWorkHours: number; avgWorkHoursPerSO: number | null; avgCycleHours: number | null; avgResponseHours: number | null; onTimeRate: number | null; openAssigned: number; overdueOpenAssigned: number; }>;
     technicianWeeklyProductivity: Array<{ weekStart: string; userId: string; name: string; closedCount: number; workHours: number }>;
+    operationalTimes: Array<{ key: string; label: string; count: number; avgHours: number | null; p50Hours: number | null; p90Hours: number | null }>;
   };
 };
+
+function fmtHours(n: number | null | undefined) {
+  if (n == null || Number.isNaN(n)) return '—';
+  return n.toFixed(2);
+}
 
 function StatCard(props: { title: string; value: ReactNode; hint?: string; href?: string }) {
   const inner = (
@@ -359,6 +365,55 @@ export default function Dashboard() {
               </CardContent>
             </Card>
           </div>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Tiempos operativos (timestamps)</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {!data?.service.operationalTimes?.length ? (
+                <div className="text-sm text-neutral-500">Sin datos</div>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Tramo</TableHead>
+                      <TableHead className="text-right">Muestras</TableHead>
+                      <TableHead className="text-right">Avg (h)</TableHead>
+                      <TableHead className="text-right hidden md:table-cell">Mediana (h)</TableHead>
+                      <TableHead className="text-right hidden md:table-cell">P90 (h)</TableHead>
+                      <TableHead className="text-right hidden lg:table-cell">Cobertura</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {data.service.operationalTimes.map(r => {
+                      const denom = data?.service.closedInRange ?? 0;
+                      const coverage = denom ? Math.round((r.count / denom) * 100) : null;
+                      return (
+                        <TableRow key={r.key}>
+                          <TableCell className="font-medium">{r.label}</TableCell>
+                          <TableCell className="text-right">
+                            <Badge variant="secondary">{r.count}</Badge>
+                          </TableCell>
+                          <TableCell className="text-right">{fmtHours(r.avgHours)}</TableCell>
+                          <TableCell className="text-right hidden md:table-cell">{fmtHours(r.p50Hours)}</TableCell>
+                          <TableCell className="text-right hidden md:table-cell">{fmtHours(r.p90Hours)}</TableCell>
+                          <TableCell className="text-right hidden lg:table-cell">
+                            {coverage == null ? '—' : `${coverage}%`}
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              )}
+
+              <div className="text-xs text-neutral-500 mt-2">
+                Nota: para los tramos que terminan en <span className="font-mono">deliveredAt</span>, si este campo no existe se usa
+                <span className="font-mono"> completedAt</span> (o <span className="font-mono">updatedAt</span>) para no perder cierres.
+              </div>
+            </CardContent>
+          </Card>
 
           <Card>
             <CardHeader>

@@ -121,6 +121,58 @@ private async assertSo(id: string) {
 }
 
 
+
+private async getCurrentUserRole(tx: any, tenantId: string, userId: string): Promise<string | null> {
+  const u = await tx.user.findFirst({ where: { id: userId, tenantId }, select: { role: true } });
+  return u?.role ? String(u.role) : null;
+}
+
+private async isActiveTechnicianAssignment(tx: any, tenantId: string, workOrderId: string, userId: string): Promise<boolean> {
+  const a = await tx.wOAssignment.findFirst({
+    where: { tenantId, workOrderId, userId, role: 'TECHNICIAN', state: 'ACTIVE' as any },
+    select: { id: true },
+  });
+  return !!a;
+}
+
+private async closeOpenWorkLogs(tx: any, tenantId: string, workOrderId: string, endedAt: Date) {
+  await tx.workLog.updateMany({
+    where: { tenantId, workOrderId, endedAt: null },
+    data: { endedAt },
+  });
+}
+
+private async ensureOpenWorkLog(tx: any, tenantId: string, workOrderId: string, userId: string, startedAt: Date) {
+  const open = await tx.workLog.findFirst({
+    where: { tenantId, workOrderId, userId, endedAt: null },
+    orderBy: { startedAt: 'desc' },
+    select: { id: true, startedAt: true },
+  });
+
+  if (open) {
+    // Si el técnico corrigió activityStartedAt, ajusta el startedAt del log abierto
+    if (open.startedAt.getTime() !== startedAt.getTime()) {
+      await tx.workLog.update({ where: { id: open.id }, data: { startedAt } });
+    }
+    return open.id;
+  }
+
+  const created = await tx.workLog.create({
+    data: {
+      tenantId,
+      workOrderId,
+      userId,
+      startedAt,
+      source: 'MANUAL',
+      note: 'AUTO',
+    } as any,
+    select: { id: true },
+  });
+
+  return created.id;
+}
+
+
   async list(q: ListServiceOrdersQuery) {
     const tenantId = this.getTenantId();
 
@@ -287,24 +339,39 @@ const [items, total] = await this.prisma.$transaction([
   }
  
   async get(id: string) {
-    const tenantId = this.getTenantId();
-    const so = await this.prisma.workOrder.findFirst({
-      where: { id, tenantId, kind: 'SERVICE_ORDER' },
-      include: {
-        assignments: { where: { state: 'ACTIVE' }, include: { user: true } },
-        pmPlan: true,
-        serviceOrderParts: { include: { inventoryItem: true } },
-      },
-    });
-    if (!so) throw new NotFoundException('Service order not found');
+  const tenantId = this.getTenantId();
+  const so = await this.prisma.workOrder.findFirst({
+    where: { id, tenantId, kind: 'SERVICE_ORDER' },
+    include: {
+      assignments: { where: { state: 'ACTIVE' }, include: { user: true } },
+      pmPlan: true,
+      serviceOrderParts: { include: { inventoryItem: true } },
+      workLogs: { orderBy: { startedAt: 'asc' } },
+    },
+  });
+  if (!so) throw new NotFoundException('Service order not found');
 
-    const asset = await this.prisma.asset.findFirst({
-      where: { tenantId, code: so.assetCode },
-      select: { code: true, customer: true, name: true, brand: true, model: true, serialNumber: true },
-    });
+  const asset = await this.prisma.asset.findFirst({
+    where: { tenantId, code: so.assetCode },
+    select: { code: true, customer: true, name: true, brand: true, model: true, serialNumber: true },
+  });
 
-    return { ...so, asset: asset ?? null };
-  }
+  // WorkLog no tiene relación directa con User en el schema actual.
+  const workLogs = (so as any).workLogs ?? [];
+  const userIds = Array.from(new Set(workLogs.map((w: any) => w.userId).filter(Boolean)));
+
+  const users = userIds.length
+    ? await this.prisma.user.findMany({
+        where: { tenantId, id: { in: userIds } },
+        select: { id: true, name: true, email: true, role: true },
+      })
+    : [];
+
+  const userById = new Map(users.map((u: any) => [u.id, u]));
+  const enrichedLogs = workLogs.map((w: any) => ({ ...w, user: userById.get(w.userId) ?? null }));
+
+  return { ...(so as any), workLogs: enrichedLogs, asset: asset ?? null };
+}
 
   async create(dto: CreateServiceOrderDto) {
     const tenantId = this.getTenantId();
@@ -329,24 +396,58 @@ const [items, total] = await this.prisma.$transaction([
   }
 
   async update(id: string, dto: UpdateServiceOrderDto) {
-  // Solo campos "administrativos" requieren ADMIN.
-  // Campos operativos (ej: hasIssue) pueden ser modificados por cualquier rol.
-  const adminOnlyKeys = ['assetCode','title','description','status','serviceOrderType','pmPlanId','durationMin'] as const;
+  const tenantId = this.getTenantId();
+  const actorUserId = this.getUserId();
+
+  // Campos administrativos: solo ADMIN
+  const adminOnlyKeys = ['assetCode', 'title', 'description', 'serviceOrderType', 'pmPlanId', 'durationMin'] as const;
   const wantsAdminChange = adminOnlyKeys.some((k) => (dto as any)[k] !== undefined);
   if (wantsAdminChange) await this.assertAdmin();
-  const { tenantId } = await this.assertSo(id);
 
-  // Si cambia el activo, valida que exista en el tenant.
-  if (dto.assetCode !== undefined) {
-    const code = String(dto.assetCode || '').trim();
-    if (!code) throw new BadRequestException('assetCode is required');
-    const asset = await this.prisma.asset.findFirst({ where: { tenantId, code }, select: { code: true } });
-    if (!asset) throw new BadRequestException('Asset not found for given assetCode');
-  }
+  return this.prisma.$transaction(async (tx) => {
+    const current = await tx.workOrder.findFirst({
+      where: { id, tenantId, kind: 'SERVICE_ORDER' },
+      select: { id: true, status: true, activityFinishedAt: true },
+    });
+    if (!current) throw new NotFoundException('Service order not found');
 
-  return this.prisma.workOrder.update({
-    where: { id },
-    data: {
+    const role = await this.getCurrentUserRole(tx, tenantId, actorUserId);
+
+    const wantsStatusChange = (dto as any).status !== undefined;
+    if (wantsStatusChange) {
+      const nextStatus = String((dto as any).status || '').toUpperCase();
+      const curStatus = String(current.status || 'OPEN').toUpperCase();
+
+      if (role !== 'ADMIN') {
+        if (role !== 'TECH') throw new ForbiddenException('Only technicians can change status');
+
+        const assigned = await this.isActiveTechnicianAssignment(tx, tenantId, id, actorUserId);
+        if (!assigned) throw new ForbiddenException('You are not assigned to this service order');
+
+        const allowed = new Set(['IN_PROGRESS', 'ON_HOLD', 'COMPLETED']);
+        if (!allowed.has(nextStatus)) throw new ForbiddenException('Invalid status change');
+
+        const allowedTransitions =
+          ((curStatus === 'OPEN' || curStatus === 'SCHEDULED') && nextStatus === 'IN_PROGRESS') ||
+          (curStatus === 'IN_PROGRESS' && nextStatus === 'ON_HOLD') ||
+          (curStatus === 'ON_HOLD' && nextStatus === 'IN_PROGRESS') ||
+          ((curStatus === 'IN_PROGRESS' || curStatus === 'ON_HOLD') && nextStatus === 'COMPLETED');
+
+        if (!allowedTransitions) {
+          throw new ForbiddenException(`Transition ${curStatus} -> ${nextStatus} not allowed`);
+        }
+      }
+    }
+
+    // Si cambia el activo, valida que exista en el tenant.
+    if ((dto as any).assetCode !== undefined) {
+      const code = String((dto as any).assetCode || '').trim();
+      if (!code) throw new BadRequestException('assetCode is required');
+      const asset = await tx.asset.findFirst({ where: { tenantId, code }, select: { code: true } });
+      if (!asset) throw new BadRequestException('Asset not found for given assetCode');
+    }
+
+    const data: any = {
       ...(dto.assetCode !== undefined ? { assetCode: String(dto.assetCode).trim() } : {}),
       ...(dto.title !== undefined ? { title: dto.title } : {}),
       ...(dto.description !== undefined ? { description: dto.description } : {}),
@@ -355,7 +456,35 @@ const [items, total] = await this.prisma.$transaction([
       ...(dto.pmPlanId !== undefined ? { pmPlanId: dto.pmPlanId } : {}),
       ...(dto.hasIssue !== undefined ? { hasIssue: dto.hasIssue } : {}),
       ...(dto.durationMin !== undefined ? { durationMin: dto.durationMin } : {}),
-    } as any,
+    };
+
+    const updated = await tx.workOrder.update({ where: { id }, data } as any);
+
+    // ---- WorkLogs automáticos por estados ----
+    if ((dto as any).status !== undefined) {
+      const prev = String(current.status || 'OPEN').toUpperCase();
+      const next = String((dto as any).status || '').toUpperCase();
+
+      if (next === 'ON_HOLD' && prev !== 'ON_HOLD') {
+        // Pausa: cerrar cualquier WorkLog abierto (de cualquier técnico)
+        await this.closeOpenWorkLogs(tx, tenantId, id, new Date());
+      }
+
+      if (prev === 'ON_HOLD' && next === 'IN_PROGRESS') {
+        // Reanuda: abre un nuevo tramo para el técnico que reanuda
+        if (role === 'TECH') {
+          await this.ensureOpenWorkLog(tx, tenantId, id, actorUserId, new Date());
+        }
+      }
+
+      if (['COMPLETED', 'CLOSED', 'CANCELED'].includes(next) && !['COMPLETED', 'CLOSED', 'CANCELED'].includes(prev)) {
+        // Cierre: cerrar todo WorkLog abierto
+        const endedAt = current.activityFinishedAt ?? new Date();
+        await this.closeOpenWorkLogs(tx, tenantId, id, endedAt);
+      }
+    }
+
+    return updated;
   });
 }
 async schedule(id: string, dto: ScheduleServiceOrderDto) {
@@ -444,63 +573,84 @@ if (dto.dueDate === null) {
 }
 async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
   const { tenantId } = await this.assertSo(id);
+  const actorUserId = this.getUserId();
 
-  const current = await this.prisma.workOrder.findFirst({
-    where: { id, tenantId, kind: 'SERVICE_ORDER' },
-    select: {
-      status: true,
-      takenAt: true,
-      arrivedAt: true,
-      checkInAt: true,
-      activityStartedAt: true,
-      activityFinishedAt: true,
-      deliveredAt: true,
-    },
-  });
-  if (!current) throw new NotFoundException('Service order not found');
+  return this.prisma.$transaction(async (tx) => {
+    const current = await tx.workOrder.findFirst({
+      where: { id, tenantId, kind: 'SERVICE_ORDER' },
+      select: {
+        status: true,
+        takenAt: true,
+        arrivedAt: true,
+        checkInAt: true,
+        activityStartedAt: true,
+        activityFinishedAt: true,
+        deliveredAt: true,
+      },
+    });
+    if (!current) throw new NotFoundException('Service order not found');
 
-  const next: Record<string, Date | null> = {
-    takenAt: current.takenAt,
-    arrivedAt: current.arrivedAt,
-    checkInAt: current.checkInAt,
-    activityStartedAt: current.activityStartedAt,
-    activityFinishedAt: current.activityFinishedAt,
-    deliveredAt: current.deliveredAt,
-  };
+    const next: Record<string, Date | null> = {
+      takenAt: current.takenAt,
+      arrivedAt: current.arrivedAt,
+      checkInAt: current.checkInAt,
+      activityStartedAt: current.activityStartedAt,
+      activityFinishedAt: current.activityFinishedAt,
+      deliveredAt: current.deliveredAt,
+    };
 
-  const data: any = {};
-  const explicitClears = new Set<string>();
+    const data: any = {};
+    const explicitClears = new Set<string>();
 
-  for (const k of this.TS_ORDER as unknown as string[]) {
-    if ((dto as any)[k] === undefined) continue;
+    for (const k of this.TS_ORDER as unknown as string[]) {
+      if ((dto as any)[k] === undefined) continue;
 
-    const coerced = this.coerceNullableDate((dto as any)[k]);
-    data[k] = coerced; // Date | null
+      const coerced = this.coerceNullableDate((dto as any)[k]);
+      data[k] = coerced; // Date | null
 
-    if (coerced === null) explicitClears.add(k);
-    next[k] = coerced === undefined ? next[k] : coerced;
-  }
-
-  this.validateTimestampChain(next, explicitClears);
-
-  // Estados automáticos por timestamps (no requiere ADMIN)
-  const currentStatus = String(current.status || 'OPEN').toUpperCase();
-
-  if ((dto as any).takenAt !== undefined && next.takenAt) {
-    if (!['COMPLETED', 'CLOSED', 'CANCELED'].includes(currentStatus)) {
-      data.status = 'IN_PROGRESS';
+      if (coerced === null) explicitClears.add(k);
+      next[k] = coerced === undefined ? next[k] : coerced;
     }
-  }
 
-  if ((dto as any).activityFinishedAt !== undefined && next.activityFinishedAt) {
-    if (!['CLOSED', 'CANCELED'].includes(currentStatus)) {
-      data.status = 'COMPLETED';
+    this.validateTimestampChain(next, explicitClears);
+
+    // Estados automáticos por timestamps (no requiere ADMIN)
+    const currentStatus = String(current.status || 'OPEN').toUpperCase();
+
+    if ((dto as any).takenAt !== undefined && next.takenAt) {
+      if (!['COMPLETED', 'CLOSED', 'CANCELED'].includes(currentStatus)) {
+        data.status = 'IN_PROGRESS';
+      }
     }
-  }
 
-  return this.prisma.workOrder.update({
-    where: { id },
-    data,
+    if ((dto as any).activityFinishedAt !== undefined && next.activityFinishedAt) {
+      if (!['CLOSED', 'CANCELED'].includes(currentStatus)) {
+        data.status = 'COMPLETED';
+      }
+    }
+
+    const updated = await tx.workOrder.update({
+      where: { id },
+      data,
+    });
+
+    // ---- WorkLogs automáticos por timestamps ----
+    const role = await this.getCurrentUserRole(tx, tenantId, actorUserId);
+    const statusAfter = String((data.status ?? current.status ?? 'OPEN')).toUpperCase();
+
+    // Cuando el técnico registra/modifica activityStartedAt => crea/ajusta WorkLog abierto
+    if (role === 'TECH' && (dto as any).activityStartedAt !== undefined && next.activityStartedAt) {
+      if (!['ON_HOLD', 'COMPLETED', 'CLOSED', 'CANCELED'].includes(statusAfter)) {
+        await this.ensureOpenWorkLog(tx, tenantId, id, actorUserId, next.activityStartedAt);
+      }
+    }
+
+    // Cuando se registra activityFinishedAt => cerrar todos los WorkLogs abiertos
+    if ((dto as any).activityFinishedAt !== undefined && next.activityFinishedAt) {
+      await this.closeOpenWorkLogs(tx, tenantId, id, next.activityFinishedAt);
+    }
+
+    return updated;
   });
 }
 
