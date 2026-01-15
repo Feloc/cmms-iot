@@ -729,7 +729,7 @@ export default function CalendarPage() {
               style={{ height: isFullscreen ? '100vh' : 760 }}
               onDoubleClickEvent={(e: any) => { router.push(`/service-orders/${e.id}`); }}
               eventPropGetter={(event: any) => {
-                const base = view === Views.DAY ? { whiteSpace: 'normal', lineHeight: 1.15 } : undefined;
+                const base = { whiteSpace: 'normal', wordBreak: 'break-word', overflow: 'hidden', lineHeight: 1.15 };
                 const st = statusToStyle(event?.so?.status);
                 return { style: { ...(base as any), ...(st as any) } };
               }}
@@ -839,6 +839,56 @@ function EventBox({ event, view, onUnschedule }: { event: CalEvent; view: View; 
   const title = so.title?.trim() ? so.title.trim() : event.title;
   const desc = so.description?.trim() ? so.description.trim() : '';
 
+  const outerRef = useRef<HTMLDivElement | null>(null);
+  const innerRef = useRef<HTMLDivElement | null>(null);
+  const [scale, setScale] = useState(1);
+
+  useEffect(() => {
+    const outer = outerRef.current;
+    const inner = innerRef.current;
+    if (!outer || !inner) return;
+
+    let raf = 0;
+    const recompute = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        const h = outer.clientHeight;
+        const w = outer.clientWidth;
+        if (!h || !w) {
+          setScale(1);
+          return;
+        }
+
+        const contentH = inner.scrollHeight;
+        const contentW = inner.scrollWidth;
+
+        let next = 1;
+        if (contentH > 0) next = Math.min(next, h / contentH);
+        if (contentW > 0) next = Math.min(next, w / contentW);
+        next = Math.min(1, next);
+        if (!Number.isFinite(next) || next <= 0) next = 1;
+
+        setScale((prev) => (Math.abs(prev - next) < 0.02 ? prev : next));
+      });
+    };
+
+    recompute();
+
+    if (typeof ResizeObserver === 'undefined') {
+      return () => cancelAnimationFrame(raf);
+    }
+
+    const ro = new ResizeObserver(recompute);
+    ro.observe(outer);
+    ro.observe(inner);
+
+    return () => {
+      cancelAnimationFrame(raf);
+      ro.disconnect();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, event.id, event.title, serial, assetName, assetModel, customer, title, desc]);
+
   const Button = (
     <button
       className="text-xs opacity-80 hover:opacity-100"
@@ -855,21 +905,43 @@ function EventBox({ event, view, onUnschedule }: { event: CalEvent; view: View; 
 
   if (view !== Views.DAY) {
     return (
-      <div className="flex items-start justify-between gap-2">
+      <div ref={outerRef} className="h-full overflow-hidden">
+        <div
+          ref={innerRef}
+          style={{
+            transform: `scale(${scale})`,
+            transformOrigin: 'top left',
+            width: scale < 1 ? `${100 / scale}%` : '100%',
+          }}
+          className="h-full"
+        >
+          <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <div className="truncate">{event.title}</div>
-          <div className="text-[11px] opacity-90 truncate">
+          <div className="leading-tight whitespace-normal break-words">{event.title}</div>
+          <div className="text-[11px] opacity-90 leading-tight whitespace-normal break-words">
             {[assetName || so.assetCode, assetModel, customer].filter(Boolean).join(' · ')}
           </div>
         </div>
         {Button}
+          </div>
+        </div>
       </div>
     );
   }
 
   return (
-    <div style={{ whiteSpace: 'normal' }}>
-      <div className="flex items-start justify-between gap-2">
+    <div ref={outerRef} className="h-full overflow-hidden">
+      <div
+        ref={innerRef}
+        style={{
+          transform: `scale(${scale})`,
+          transformOrigin: 'top left',
+          width: scale < 1 ? `${100 / scale}%` : '100%',
+          whiteSpace: 'normal',
+        }}
+        className="h-full"
+      >
+        <div className="flex items-start justify-between gap-2">
         <div>
           {serial ? <div style={{ fontWeight: 700 }}>{serial}</div> : null}
           <div style={{ fontWeight: 700 }}>{[assetName || so.assetCode, assetModel].filter(Boolean).join(' · ')}</div>
@@ -878,7 +950,8 @@ function EventBox({ event, view, onUnschedule }: { event: CalEvent; view: View; 
         </div>
         {Button}
       </div>
-      {desc ? <div style={{ fontSize: 12, opacity: 0.9 }}>{desc}</div> : null}
+        {desc ? <div style={{ fontSize: 12, opacity: 0.9 }}>{desc}</div> : null}
+      </div>
     </div>
   );
 }

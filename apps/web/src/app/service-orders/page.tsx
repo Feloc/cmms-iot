@@ -39,6 +39,9 @@ type EditRow = { dueLocal: string; technicianId: string };
 
 const EMPTY_ITEMS: ServiceOrder[] = [];
 
+const STATUS_TABS = ['ALL', 'OPEN', 'SCHEDULED', 'IN_PROGRESS', 'ON_HOLD', 'COMPLETED', 'CLOSED', 'CANCELED'] as const;
+type StatusTab = (typeof STATUS_TABS)[number];
+
 function fmt(dt?: string | null) {
   if (!dt) return '';
   try {
@@ -56,6 +59,7 @@ export default function ServiceOrdersPage() {
 
   const [filters, setFilters] = useState<Filter[]>([{ id: 'f-q', field: 'q', value: '' }]);
   const [edits, setEdits] = useState<Record<string, EditRow>>({});
+  const [statusTab, setStatusTab] = useState<StatusTab>('ALL');
 
   const [data, setData] = useState<Paginated<ServiceOrder> | null>(null);
   const [loading, setLoading] = useState(false);
@@ -79,6 +83,17 @@ export default function ServiceOrdersPage() {
   }, [auth.token, auth.tenantSlug, filters]);
 
   const items = data?.items ?? EMPTY_ITEMS;
+
+  const statusCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const so of items) counts[so.status] = (counts[so.status] ?? 0) + 1;
+    return counts;
+  }, [items]);
+
+  const visibleItems = useMemo(() => {
+    if (statusTab === 'ALL') return items;
+    return items.filter((so) => so.status === statusTab);
+  }, [items, statusTab]);
 
   // Cargar técnicos una vez (y refrescar si cambia auth)
   useEffect(() => {
@@ -286,6 +301,31 @@ export default function ServiceOrdersPage() {
         <div className="text-xs text-gray-500">Tip: puedes agregar varios filtros. Se combinan con AND.</div>
       </div>
 
+      <div className="border rounded p-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          {STATUS_TABS.map((t) => {
+            const active = t === statusTab;
+            const n = t === 'ALL' ? items.length : statusCounts[t] ?? 0;
+            return (
+              <button
+                key={t}
+                type="button"
+                onClick={() => setStatusTab(t)}
+                className={`px-3 py-1.5 border rounded text-sm flex items-center gap-2 ${
+                  active ? 'bg-black text-white border-black' : 'bg-white text-gray-700 hover:bg-gray-50'
+                }`}
+              >
+                <span>{t}</span>
+                <span className={`text-[11px] px-1.5 py-0.5 rounded ${active ? 'bg-white/20' : 'bg-gray-100 text-gray-700'}`}>{n}</span>
+              </button>
+            );
+          })}
+          <div className="text-xs text-gray-500 ml-auto">
+            Mostrando {visibleItems.length} / {items.length}
+          </div>
+        </div>
+      </div>
+
       <div className="border rounded overflow-auto">
         <table className="min-w-[1100px] w-full text-sm">
           <thead className="bg-gray-50">
@@ -301,7 +341,7 @@ export default function ServiceOrdersPage() {
             </tr>
           </thead>
           <tbody>
-            {items.map((so) => {
+            {visibleItems.map((so) => {
               const row = edits[so.id] || { dueLocal: '', technicianId: '' };
               return (
                 <tr key={so.id} className="hover:bg-gray-50">
@@ -353,7 +393,7 @@ export default function ServiceOrdersPage() {
                 </tr>
               );
             })}
-            {items.length === 0 ? (
+            {visibleItems.length === 0 ? (
               <tr>
                 <td className="p-4 text-gray-600" colSpan={8}>
                   Sin resultados.
