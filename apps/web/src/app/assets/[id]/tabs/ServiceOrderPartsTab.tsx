@@ -8,6 +8,8 @@ import { useAssetsDetail } from '../assets-detail.context';
 type Row = {
   id: string;
   qty: number;
+  replacedAt?: string | null;
+  replacedByUser?: { id: string; name?: string | null; email?: string | null } | null;
   notes?: string | null;
   freeText?: string | null;
   inventoryItem?: {
@@ -19,6 +21,9 @@ type Row = {
   workOrder?: {
     id: string;
     dueDate?: string | null;
+    deliveredAt?: string | null;
+    completedAt?: string | null;
+    updatedAt?: string | null;
     title?: string | null;
     serviceOrderType?: string | null;
     status?: string | null;
@@ -64,11 +69,12 @@ export default function ServiceOrderPartsTab() {
         <table className="min-w-full text-sm">
           <thead className="bg-gray-50">
             <tr>
-              <th className="px-3 py-2 text-left">Fecha</th>
+              <th className="px-3 py-2 text-left">Fecha cambio</th>
               <th className="px-3 py-2 text-left">Orden</th>
               <th className="px-3 py-2 text-left">Tipo</th>
               <th className="px-3 py-2 text-left">Repuesto</th>
               <th className="px-3 py-2 text-left">Cantidad</th>
+              <th className="px-3 py-2 text-left">Cambiado por</th>
               <th className="px-3 py-2 text-left">Notas</th>
             </tr>
           </thead>
@@ -78,7 +84,9 @@ export default function ServiceOrderPartsTab() {
               const inv = r.inventoryItem;
               const partLabel =
                 inv?.sku ? `${inv.sku} - ${inv.name ?? ''}`.trim() : inv?.name ? inv.name : r.freeText ?? '(sin nombre)';
-              const dateStr = wo?.dueDate ? String(wo.dueDate).slice(0, 10) : '-';
+              const refDate = r.replacedAt || wo?.deliveredAt || wo?.completedAt || wo?.dueDate || wo?.updatedAt;
+              const dateStr = refDate ? String(refDate).slice(0, 10) : '-';
+              const who = r.replacedByUser?.name || r.replacedByUser?.email || '-';
 
               return (
                 <tr key={r.id} className="border-t">
@@ -95,6 +103,7 @@ export default function ServiceOrderPartsTab() {
                   <td className="px-3 py-2 whitespace-nowrap">{wo?.serviceOrderType ?? '-'}</td>
                   <td className="px-3 py-2">{partLabel}</td>
                   <td className="px-3 py-2">{r.qty ?? 1}</td>
+                  <td className="px-3 py-2">{who}</td>
                   <td className="px-3 py-2">{r.notes ?? ''}</td>
                 </tr>
               );

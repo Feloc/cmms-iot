@@ -10,6 +10,7 @@ import { ServiceOrderTimestampsDto } from './dto/timestamps.dto';
 import { ServiceOrderFormDataDto } from './dto/form-data.dto';
 import { ServiceOrderSignaturesDto } from './dto/signatures.dto';
 import { AddServiceOrderPartDto } from './dto/parts.dto';
+import { MarkServiceOrderPartReplacedDto } from './dto/mark-part-replaced.dto';
 import { Prisma } from '@prisma/client';
 import { normalizeQueryArray } from './utils/query-array';
 import * as fs from 'fs/promises';
@@ -345,7 +346,7 @@ const [items, total] = await this.prisma.$transaction([
     include: {
       assignments: { where: { state: 'ACTIVE' }, include: { user: true } },
       pmPlan: true,
-      serviceOrderParts: { include: { inventoryItem: true } },
+      serviceOrderParts: { orderBy: [{ stage: 'asc' }, { createdAt: 'asc' }], include: { inventoryItem: true } },
       workLogs: { orderBy: { startedAt: 'asc' } },
     },
   });
@@ -680,6 +681,8 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
     if (!so) throw new NotFoundException('Service order not found');
 
     if (!dto.inventoryItemId && !dto.freeText) throw new BadRequestException('inventoryItemId or freeText is required');
+    const qty = dto.qty ?? 1;
+    if (typeof qty !== 'number' || !isFinite(qty) || qty <= 0) throw new BadRequestException('qty must be > 0');
 
     return this.prisma.serviceOrderPart.create({
       data: {
@@ -687,10 +690,92 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
         workOrderId: id,
         inventoryItemId: dto.inventoryItemId ?? undefined,
         freeText: dto.freeText ?? undefined,
-        qty: dto.qty ?? 1,
+        qty,
         notes: dto.notes,
       },
       include: { inventoryItem: true },
+    });
+  }
+
+  /**
+   * Marca un repuesto (línea ServiceOrderPart) como "cambiado" (REPLACED) con manejo pro de cantidades:
+   * - Si qtyReplaced == qty => convierte la línea a REPLACED.
+   * - Si qtyReplaced < qty => reduce la línea REQUIRED y crea una nueva línea REPLACED.
+   * Permisos: ADMIN o TECH asignado (assignment ACTIVE role TECHNICIAN).
+   */
+  async markPartReplaced(id: string, partId: string, dto: MarkServiceOrderPartReplacedDto) {
+    const tenantId = this.getTenantId();
+    const actorUserId = this.getUserId();
+    const qtyReplaced = Number((dto as any)?.qtyReplaced);
+    if (!isFinite(qtyReplaced) || qtyReplaced <= 0) throw new BadRequestException('qtyReplaced must be > 0');
+
+    return this.prisma.$transaction(async (tx) => {
+      const so = await tx.workOrder.findFirst({
+        where: { id, tenantId, kind: 'SERVICE_ORDER' },
+        select: { id: true },
+      });
+      if (!so) throw new NotFoundException('Service order not found');
+
+      const role = await this.getCurrentUserRole(tx, tenantId, actorUserId);
+      const isAdmin = role === 'ADMIN';
+      const isAssignedTech = role === 'TECH' ? await this.isActiveTechnicianAssignment(tx, tenantId, id, actorUserId) : false;
+      if (!isAdmin && !isAssignedTech) throw new ForbiddenException('Not allowed');
+
+      const part = await tx.serviceOrderPart.findFirst({
+        where: { id: partId, tenantId, workOrderId: id },
+      });
+      if (!part) throw new NotFoundException('Part not found');
+
+      const curStage = String((part as any).stage || 'REQUIRED');
+      if (curStage !== 'REQUIRED') throw new BadRequestException('Only REQUIRED parts can be marked as REPLACED');
+
+      const curQty = Number((part as any).qty ?? 0);
+      if (!isFinite(curQty) || curQty <= 0) throw new BadRequestException('Invalid current qty');
+      if (qtyReplaced > curQty) throw new BadRequestException('qtyReplaced cannot exceed current qty');
+
+      const now = new Date();
+
+      // Copiamos campos para la nueva línea (si aplica)
+      const baseData: any = {
+        tenantId,
+        workOrderId: id,
+        inventoryItemId: (part as any).inventoryItemId ?? undefined,
+        freeText: (part as any).freeText ?? undefined,
+        notes: (part as any).notes ?? undefined,
+      };
+
+      if (qtyReplaced === curQty) {
+        const updated = await tx.serviceOrderPart.update({
+          where: { id: partId },
+          data: {
+            stage: 'REPLACED' as any,
+            replacedAt: now,
+            replacedByUserId: actorUserId,
+          } as any,
+          include: { inventoryItem: true },
+        });
+        return updated;
+      }
+
+      // qtyReplaced < curQty => reduce REQUIRED y crea REPLACED
+      const remaining = curQty - qtyReplaced;
+      await tx.serviceOrderPart.update({
+        where: { id: partId },
+        data: { qty: remaining } as any,
+      });
+
+      const created = await tx.serviceOrderPart.create({
+        data: {
+          ...baseData,
+          qty: qtyReplaced,
+          stage: 'REPLACED',
+          replacedAt: now,
+          replacedByUserId: actorUserId,
+        } as any,
+        include: { inventoryItem: true },
+      });
+
+      return created;
     });
   }
 

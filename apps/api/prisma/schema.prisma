@@ -28,6 +28,13 @@ enum ServiceOrderType {
   OTRO
 }
 
+// Repuestos en una Orden de Servicio: primero se registran como necesarios (diagnóstico)
+// y luego se marcan como cambiados (historial en el activo).
+enum ServiceOrderPartStage {
+  REQUIRED
+  REPLACED
+}
+
 model Tenant {
   id         String   @id @default(cuid())
   slug       String   @unique
@@ -72,6 +79,7 @@ model User {
   updatedAt DateTime @updatedAt
 
   assignments WOAssignment[]
+  serviceOrderParts ServiceOrderPart[]
 
   @@unique([tenantId, email])
 }
@@ -720,8 +728,15 @@ model ServiceOrderPart {
   qty      Float   @default(1)
   notes    String?
 
+  // REQUIRED: necesario por diagnóstico | REPLACED: repuesto ya cambiado/instalado
+  stage         ServiceOrderPartStage @default(REQUIRED)
+  replacedAt    DateTime?
+  replacedByUserId String?
+  replacedByUser   User? @relation(fields: [replacedByUserId], references: [id])
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([tenantId, workOrderId])
+  @@index([tenantId, stage])
 }

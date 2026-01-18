@@ -14,7 +14,16 @@ import { AssetSearchSelect } from '@/components/AssetSearchSelect';
 
 type User = { id: string; name: string; email: string; role: string };
 type InventoryItem = { id: string; sku: string; name: string; model?: string | null };
-type Part = { id: string; qty: number; notes?: string | null; freeText?: string | null; inventoryItem?: InventoryItem | null };
+type Part = {
+  id: string;
+  qty: number;
+  stage?: 'REQUIRED' | 'REPLACED';
+  replacedAt?: string | null;
+  replacedByUser?: User | null;
+  notes?: string | null;
+  freeText?: string | null;
+  inventoryItem?: InventoryItem | null;
+};
 
 type WorkLog = {
   id: string;
@@ -212,6 +221,7 @@ export default function ServiceOrderDetailPage() {
   const [editAssetCode, setEditAssetCode] = useState('');
   const [editPmPlanId, setEditPmPlanId] = useState('');
   const [partQ, setPartQ] = useState('');
+  const [partQty, setPartQty] = useState<number>(1);
 
   // Timestamps controlados (para botón "Ahora")
   const [ts, setTs] = useState<Record<TsKey, string>>({
@@ -342,14 +352,53 @@ async function setTimestamp(key: TsKey, localValue: string) {
 
 
   async function addPart(item?: InventoryItem) {
+    const qty = Number(partQty ?? 1);
+    if (!isFinite(qty) || qty <= 0) {
+      setUiErr('La cantidad debe ser mayor a 0');
+      return;
+    }
     await apiFetch(`/service-orders/${id}/parts`, {
       method: 'POST',
       token: auth.token!,
       tenantSlug: auth.tenantSlug!,
-      body: item ? { inventoryItemId: item.id, qty: 1 } : { freeText: partQ.trim(), qty: 1 },
+      body: item ? { inventoryItemId: item.id, qty } : { freeText: partQ.trim(), qty },
     });
     setPartQ('');
+    setPartQty(1);
     mutate();
+  }
+
+  async function markPartReplaced(part: Part) {
+    if (!canChangeStatus) {
+      setUiErr('No tienes permisos para marcar repuestos como cambiados');
+      return;
+    }
+    const max = Number(part.qty ?? 0);
+    if (!isFinite(max) || max <= 0) return;
+
+    const raw = window.prompt(`Cantidad a marcar como cambiada (max ${max}):`, String(max));
+    if (raw === null) return;
+    const qtyReplaced = Number(raw);
+    if (!isFinite(qtyReplaced) || qtyReplaced <= 0 || qtyReplaced > max) {
+      setUiErr('Cantidad inválida');
+      return;
+    }
+
+    setBusy(true);
+    setUiErr('');
+    try {
+      await apiFetch(`/service-orders/${id}/parts/${part.id}/mark-replaced`, {
+        method: 'PATCH',
+        token: auth.token!,
+        tenantSlug: auth.tenantSlug!,
+        body: { qtyReplaced },
+      });
+      await mutate();
+    } catch (e: any) {
+      setUiErr(e?.message ?? 'Error marcando repuesto como cambiado');
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function removePart(partId: string) {
@@ -363,6 +412,8 @@ async function setTimestamp(key: TsKey, localValue: string) {
 
   const fd = data.formData ?? {};
   const showChecklist = data.serviceOrderType === 'ALISTAMIENTO' || data.serviceOrderType === 'PREVENTIVO';
+  const requiredParts = (data.serviceOrderParts ?? []).filter((p) => (p as any).stage !== 'REPLACED');
+  const replacedParts = (data.serviceOrderParts ?? []).filter((p) => (p as any).stage === 'REPLACED');
 
   return (
     <div className="p-4 space-y-6 max-w-4xl">
@@ -740,7 +791,23 @@ async function setTimestamp(key: TsKey, localValue: string) {
           <div className="space-y-3">
             <div className="space-y-1">
               <label className="text-sm font-medium">Buscar repuesto (sku / nombre / modelo)</label>
-              <input className="border rounded px-3 py-2 w-full" value={partQ} onChange={(e) => setPartQ(e.target.value)} />
+	              <div className="flex gap-2 items-center">
+	                <input
+	                  className="border rounded px-3 py-2 w-full"
+	                  value={partQ}
+	                  onChange={(e) => setPartQ(e.target.value)}
+	                  placeholder="Ej: SKF 6204 / filtro / etc."
+	                />
+	                <input
+	                  type="number"
+	                  min={1}
+	                  step={1}
+	                  className="border rounded px-3 py-2 w-28"
+	                  value={String(partQty)}
+	                  onChange={(e) => setPartQty(Number(e.target.value))}
+	                  title="Cantidad"
+	                />
+	              </div>
               {partQ.trim() && (invMatches ?? []).length > 0 && (
                 <div className="border rounded mt-1">
                   {(invMatches ?? []).map((it) => (
@@ -761,19 +828,39 @@ async function setTimestamp(key: TsKey, localValue: string) {
               </button>
             </div>
 
-            <div className="space-y-2">
-              <div className="text-sm font-medium">Listado de repuestos necesarios</div>
-              {(data.serviceOrderParts ?? []).map((p) => (
-                <div key={p.id} className="flex items-center justify-between border rounded px-3 py-2">
-                  <div className="text-sm">
-                    {p.inventoryItem ? `${p.inventoryItem.sku} — ${p.inventoryItem.name}` : p.freeText ?? ''}
-                    <span className="text-gray-600"> · Qty: {p.qty}</span>
-                  </div>
-                  <button className="text-sm underline" onClick={() => removePart(p.id)}>Quitar</button>
-                </div>
-              ))}
-              {(data.serviceOrderParts ?? []).length === 0 && <div className="text-sm text-gray-600">Sin repuestos.</div>}
-            </div>
+	            <div className="space-y-2">
+	              <div className="text-sm font-medium">Repuestos necesarios (diagnóstico)</div>
+	              {requiredParts.map((p) => (
+	                <div key={p.id} className="flex items-center justify-between border rounded px-3 py-2">
+	                  <div className="text-sm">
+	                    {p.inventoryItem ? `${p.inventoryItem.sku} — ${p.inventoryItem.name}` : p.freeText ?? ''}
+	                    <span className="text-gray-600"> · Qty: {p.qty}</span>
+	                  </div>
+	                  <div className="flex items-center gap-3">
+	                    {(canChangeStatus) ? (
+	                      <button className="text-sm underline" onClick={() => markPartReplaced(p)}>Marcar como cambiado</button>
+	                    ) : null}
+	                    <button className="text-sm underline" onClick={() => removePart(p.id)}>Quitar</button>
+	                  </div>
+	                </div>
+	              ))}
+	              {requiredParts.length === 0 && <div className="text-sm text-gray-600">Sin repuestos necesarios.</div>}
+	            </div>
+
+	            <div className="space-y-2">
+	              <div className="text-sm font-medium">Repuestos cambiados (historial)</div>
+	              {replacedParts.map((p) => (
+	                <div key={p.id} className="flex items-center justify-between border rounded px-3 py-2">
+	                  <div className="text-sm">
+	                    {p.inventoryItem ? `${p.inventoryItem.sku} — ${p.inventoryItem.name}` : p.freeText ?? ''}
+	                    <span className="text-gray-600"> · Qty: {p.qty}</span>
+	                    {p.replacedAt ? <span className="text-gray-600"> · {String(p.replacedAt).slice(0, 10)}</span> : null}
+	                  </div>
+	                  {isAdmin ? <button className="text-sm underline" onClick={() => removePart(p.id)}>Quitar</button> : null}
+	                </div>
+	              ))}
+	              {replacedParts.length === 0 && <div className="text-sm text-gray-600">Sin repuestos cambiados.</div>}
+	            </div>
           </div>
         )}
       </section>

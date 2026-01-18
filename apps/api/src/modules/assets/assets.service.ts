@@ -190,6 +190,7 @@ async listServiceOrderParts(assetId: string) {
     const rows = await (tx as any).serviceOrderPart.findMany({
       where: {
         tenantId,
+        stage: 'REPLACED',
         workOrder: {
           tenantId,
           kind: 'SERVICE_ORDER',
@@ -198,11 +199,18 @@ async listServiceOrderParts(assetId: string) {
       },
       include: {
         inventoryItem: true,
-        workOrder: { select: { id: true, dueDate: true, title: true, serviceOrderType: true, status: true } },
+        workOrder: { select: { id: true, dueDate: true, title: true, serviceOrderType: true, status: true, deliveredAt: true, completedAt: true, updatedAt: true } },
       },
     });
 
-    return rows;
+    // Enriquecer replacedByUser (ServiceOrderPart no necesariamente tiene relación en todos los clientes)
+    const userIds = Array.from(new Set((rows ?? []).map((r: any) => r.replacedByUserId).filter(Boolean)));
+    const users = userIds.length
+      ? await tx.user.findMany({ where: { tenantId, id: { in: userIds } }, select: { id: true, name: true, email: true } })
+      : [];
+    const userById = new Map(users.map((u: any) => [u.id, u]));
+
+    return (rows ?? []).map((r: any) => ({ ...r, replacedByUser: r.replacedByUserId ? userById.get(r.replacedByUserId) ?? null : null }));
   });
 }
 }

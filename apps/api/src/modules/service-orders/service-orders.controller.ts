@@ -7,6 +7,7 @@ import { ServiceOrderTimestampsDto } from './dto/timestamps.dto';
 import { ServiceOrderFormDataDto } from './dto/form-data.dto';
 import { ServiceOrderSignaturesDto } from './dto/signatures.dto';
 import { AddServiceOrderPartDto } from './dto/parts.dto';
+import { MarkServiceOrderPartReplacedDto } from './dto/mark-part-replaced.dto';
 import { ListServiceOrdersQuery } from './dto/list-service-orders.query';
 import { ServiceOrdersCalendarQuery } from './dto/calendar.query';
 import { FilesInterceptor } from '@nestjs/platform-express';
@@ -75,6 +76,16 @@ export class ServiceOrdersController {
   @Delete(':id/parts/:partId')
   removePart(@Param('id') id: string, @Param('partId') partId: string) {
     return this.svc.removePart(id, partId);
+  }
+
+  // Marca un repuesto "necesario" como "cambiado" (manejo pro de cantidades)
+  @Patch(':id/parts/:partId/mark-replaced')
+  markPartReplaced(
+    @Param('id') id: string,
+    @Param('partId') partId: string,
+    @Body() dto: MarkServiceOrderPartReplacedDto,
+  ) {
+    return this.svc.markPartReplaced(id, partId, dto);
   }
 
 @Get(':id/images')
