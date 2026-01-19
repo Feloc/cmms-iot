@@ -8,6 +8,7 @@ import { ServiceOrderFormDataDto } from './dto/form-data.dto';
 import { ServiceOrderSignaturesDto } from './dto/signatures.dto';
 import { AddServiceOrderPartDto } from './dto/parts.dto';
 import { MarkServiceOrderPartReplacedDto } from './dto/mark-part-replaced.dto';
+import { CreateServiceOrderReportDto } from './dto/create-report.dto';
 import { ListServiceOrdersQuery } from './dto/list-service-orders.query';
 import { ServiceOrdersCalendarQuery } from './dto/calendar.query';
 import { FilesInterceptor } from '@nestjs/platform-express';
@@ -86,6 +87,24 @@ export class ServiceOrdersController {
     @Body() dto: MarkServiceOrderPartReplacedDto,
   ) {
     return this.svc.markPartReplaced(id, partId, dto);
+  }
+
+  // ---------------------------
+  // Reportes / Resumen de OS (versionado)
+  // ---------------------------
+  @Get(':id/reports')
+  listReports(@Param('id') id: string) {
+    return this.svc.listReports(id);
+  }
+
+  @Post(':id/reports')
+  createReport(@Param('id') id: string, @Body() dto: CreateServiceOrderReportDto) {
+    return this.svc.createReport(id, dto);
+  }
+
+  @Get(':id/reports/:reportId')
+  getReport(@Param('id') id: string, @Param('reportId') reportId: string) {
+    return this.svc.getReport(id, reportId);
   }
 
 @Get(':id/images')

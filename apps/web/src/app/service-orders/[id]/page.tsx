@@ -35,6 +35,14 @@ type WorkLog = {
   user?: User | null;
 };
 
+type WorkOrderReportRow = {
+  id: string;
+  audience: 'CUSTOMER' | 'INTERNAL';
+  version: number;
+  createdAt: string;
+  createdByUserId?: string;
+};
+
 
 type PmPlan = { id: string; name: string; intervalHours?: number | null; defaultDurationMin?: number | null };
 
@@ -210,6 +218,11 @@ export default function ServiceOrderDetailPage() {
   );
   const { data: techs } = useApiSWR<User[]>(`/users?role=TECH`, auth.token, auth.tenantSlug);
   const { data: pmPlans } = useApiSWR<PmPlan[]>(`/pm-plans`, auth.token, auth.tenantSlug);
+  const { data: reportsData, mutate: mutateReports } = useApiSWR<{ items: WorkOrderReportRow[] }>(
+    id ? `/service-orders/${id}/reports` : null,
+    auth.token,
+    auth.tenantSlug,
+  );
 
   const [busy, setBusy] = useState(false);
   const [uiErr, setUiErr] = useState<string>('');
@@ -293,6 +306,35 @@ const invPath = useMemo(() => {
 const myUserId = (session as any)?.user?.id as string | undefined;
 const isAssignedTech = !!myUserId && (data.assignments ?? []).some((a) => a.role === 'TECHNICIAN' && a.state === 'ACTIVE' && a.userId === myUserId);
 const canChangeStatus = isAdmin || (role === 'TECH' && isAssignedTech);
+
+  const canGenerateReport = ['COMPLETED', 'CLOSED'].includes(String(data.status || '').toUpperCase());
+  const reports = (reportsData?.items ?? []) as WorkOrderReportRow[];
+
+  function audienceLabel(aud: WorkOrderReportRow['audience']) {
+    return aud === 'CUSTOMER' ? 'Cliente' : 'Interno';
+  }
+
+  async function generateReport(audience: WorkOrderReportRow['audience']) {
+    if (!canGenerateReport) {
+      setUiErr('Solo puedes generar el resumen cuando la OS está COMPLETED o CLOSED.');
+      return;
+    }
+    setBusy(true);
+    setUiErr('');
+    try {
+      const created = await apiFetch<{ id: string }>(`/service-orders/${id}/reports`, {
+        method: 'POST',
+        token: auth.token!,
+        tenantSlug: auth.tenantSlug!,
+        body: { audience },
+      });
+      await mutateReports();
+      // Abre el reporte en una nueva pestaña (ideal para imprimir/Guardar PDF)
+      if (created?.id) window.open(`/service-orders/${id}/reports/${created.id}`, '_blank');
+    } finally {
+      setBusy(false);
+    }
+  }
 
 
   async function patch(path: string, body: any) {
@@ -829,7 +871,7 @@ async function setTimestamp(key: TsKey, localValue: string) {
             </div>
 
 	            <div className="space-y-2">
-	              <div className="text-sm font-medium">Repuestos necesarios (diagnóstico)</div>
+	              <div className="text-sm font-medium">Repuestos necesarios</div>
 	              {requiredParts.map((p) => (
 	                <div key={p.id} className="flex items-center justify-between border rounded px-3 py-2">
 	                  <div className="text-sm">
@@ -848,7 +890,7 @@ async function setTimestamp(key: TsKey, localValue: string) {
 	            </div>
 
 	            <div className="space-y-2">
-	              <div className="text-sm font-medium">Repuestos cambiados (historial)</div>
+	              <div className="text-sm font-medium">Repuestos cambiados</div>
 	              {replacedParts.map((p) => (
 	                <div key={p.id} className="flex items-center justify-between border rounded px-3 py-2">
 	                  <div className="text-sm">
@@ -892,6 +934,68 @@ async function setTimestamp(key: TsKey, localValue: string) {
             onChange={(sig) => patch(`/service-orders/${id}/signatures`, { receiverSignature: sig })}
           />
         </div>
+      </section>
+
+      {/* Resumen / Reportes (versionados) */}
+      <section className="border rounded p-4 space-y-3">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <h2 className="font-semibold">Resumen / Reporte</h2>
+          <div className="flex gap-2 flex-wrap">
+            <button
+              type="button"
+              className="px-3 py-2 border rounded"
+              onClick={() => generateReport('CUSTOMER')}
+              disabled={!canGenerateReport || busy}
+              title={!canGenerateReport ? 'Disponible solo cuando la OS está COMPLETED/CLOSED' : ''}
+            >
+              Generar reporte cliente
+            </button>
+            <button
+              type="button"
+              className="px-3 py-2 border rounded"
+              onClick={() => generateReport('INTERNAL')}
+              disabled={!canGenerateReport || busy}
+              title={!canGenerateReport ? 'Disponible solo cuando la OS está COMPLETED/CLOSED' : ''}
+            >
+              Generar reporte interno
+            </button>
+          </div>
+        </div>
+
+        {!canGenerateReport ? (
+          <div className="text-sm text-gray-600">El resumen se puede generar solo cuando la OS está <b>COMPLETED</b> o <b>CLOSED</b>.</div>
+        ) : null}
+
+        {reports.length > 0 ? (
+          <div className="border rounded">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b bg-gray-50">
+                  <th className="text-left p-2">Audiencia</th>
+                  <th className="text-left p-2">Versión</th>
+                  <th className="text-left p-2">Generado</th>
+                  <th className="text-right p-2">Acciones</th>
+                </tr>
+              </thead>
+              <tbody>
+                {reports.map((r) => (
+                  <tr key={r.id} className="border-b last:border-b-0">
+                    <td className="p-2">{audienceLabel(r.audience)}</td>
+                    <td className="p-2">v{r.version}</td>
+                    <td className="p-2">{fmtDateTime(r.createdAt)}</td>
+                    <td className="p-2 text-right">
+                      <a className="underline" href={`/service-orders/${id}/reports/${r.id}`} target="_blank">
+                        Ver / imprimir
+                      </a>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="text-sm text-gray-600">Aún no hay reportes generados.</div>
+        )}
       </section>
 
       {busy && <div className="text-sm text-gray-600">Guardando...</div>}

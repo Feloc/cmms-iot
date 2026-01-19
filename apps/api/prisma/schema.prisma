@@ -39,6 +39,15 @@ model Tenant {
   id         String   @id @default(cuid())
   slug       String   @unique
   name       String
+
+  // Branding opcional para reportes (resumen OS)
+  legalName  String?
+  taxId      String?
+  address    String?
+  phone      String?
+  email      String?
+  website    String?
+  logoUrl    String?
   users      User[]
   assets     Asset[]
   rules      Rule[]
@@ -65,6 +74,35 @@ model Tenant {
   ruleStates            RuleState[]
   assetEvents           AssetEvent[]
   pmPlans               PmPlan[]
+
+  workOrderReports      WorkOrderReport[]
+}
+
+enum WorkOrderReportAudience {
+  CUSTOMER
+  INTERNAL
+}
+
+model WorkOrderReport {
+  id          String   @id @default(cuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  workOrderId String
+  workOrder   WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+
+  audience    WorkOrderReportAudience
+  version     Int
+
+  // Snapshot (inmutable) del reporte al momento de generar
+  data        Json
+
+  createdByUserId String
+  createdAt   DateTime @default(now())
+
+  @@unique([tenantId, workOrderId, audience, version])
+  @@index([tenantId, workOrderId, audience])
+  @@index([tenantId, createdAt])
 }
 
 model User {
@@ -287,6 +325,7 @@ model WorkOrder {
   assignments WOAssignment[]
   serviceOrderParts ServiceOrderPart[]
   workLogs    WorkLog[]
+  reports     WorkOrderReport[]
   workOrderResolutions WorkOrderResolution[]
   workOrderPartUses WorkOrderPartUsed[]
   workMeasurements   WorkMeasurement[]

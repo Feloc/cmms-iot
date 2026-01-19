@@ -194,9 +194,6 @@ export default function ServiceOrdersPage() {
             {!loading && data ? `Total: ${data.total}` : null}
             {!loading && !data ? 'Sin datos aún' : null}
           </div>
-          <div className="text-[11px] text-gray-400 mt-1 font-mono">
-            {listPath ? `GET ${listPath}` : ''}
-          </div>
         </div>
 
         <div className="flex items-center gap-2">
@@ -298,7 +295,7 @@ export default function ServiceOrdersPage() {
           ))}
         </div>
 
-        <div className="text-xs text-gray-500">Tip: puedes agregar varios filtros. Se combinan con AND.</div>
+        <div className="text-xs text-gray-500">Tip: puedes agregar varios filtros.</div>
       </div>
 
       <div className="border rounded p-2">

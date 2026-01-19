@@ -11,6 +11,7 @@ import { ServiceOrderFormDataDto } from './dto/form-data.dto';
 import { ServiceOrderSignaturesDto } from './dto/signatures.dto';
 import { AddServiceOrderPartDto } from './dto/parts.dto';
 import { MarkServiceOrderPartReplacedDto } from './dto/mark-part-replaced.dto';
+import { CreateServiceOrderReportDto } from './dto/create-report.dto';
 import { Prisma } from '@prisma/client';
 import { normalizeQueryArray } from './utils/query-array';
 import * as fs from 'fs/promises';
@@ -785,6 +786,228 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
     if (!part) throw new NotFoundException('Part not found');
     await this.prisma.serviceOrderPart.delete({ where: { id: partId } });
     return { ok: true };
+  }
+
+  // ---------------------------
+  // Reportes / Resumen de OS (versionado)
+  // ---------------------------
+  private calcDurationMin(a?: Date | null, b?: Date | null): number | null {
+    if (!a || !b) return null;
+    const ms = b.getTime() - a.getTime();
+    if (!isFinite(ms) || ms < 0) return null;
+    return Math.round(ms / 60000);
+  }
+
+  private buildOperationalTimes(so: any) {
+    const takenAt = so.takenAt ? new Date(so.takenAt) : null;
+    const arrivedAt = so.arrivedAt ? new Date(so.arrivedAt) : null;
+    const checkInAt = so.checkInAt ? new Date(so.checkInAt) : null;
+    const activityStartedAt = so.activityStartedAt ? new Date(so.activityStartedAt) : null;
+    const activityFinishedAt = so.activityFinishedAt ? new Date(so.activityFinishedAt) : null;
+    const deliveredAt = so.deliveredAt ? new Date(so.deliveredAt) : null;
+
+    const seg = (key: string, label: string, a: Date | null, b: Date | null) => {
+      const durationMin = this.calcDurationMin(a, b);
+      return {
+        key,
+        label,
+        start: a ? a.toISOString() : null,
+        end: b ? b.toISOString() : null,
+        durationMin,
+      };
+    };
+
+    return {
+      segments: [
+        seg('taken_arrived', 'Desplazamiento', takenAt, arrivedAt),
+        seg('arrived_checkin', 'Proceso de ingreso', arrivedAt, checkInAt),
+        seg('checkin_start', 'Entrega del equipo', checkInAt, activityStartedAt),
+        seg('start_finish', 'Trabajo en sitio', activityStartedAt, activityFinishedAt),
+        seg('finish_delivered', 'Entrega final', activityFinishedAt, deliveredAt),
+        seg('arrived_delivered', 'Duración del servicio', arrivedAt, deliveredAt),
+      ],
+    };
+  }
+
+  async listReports(serviceOrderId: string) {
+    const tenantId = this.getTenantId();
+    await this.assertSo(serviceOrderId);
+    const items = await this.prisma.workOrderReport.findMany({
+      where: { tenantId, workOrderId: serviceOrderId },
+      orderBy: [{ audience: 'asc' }, { version: 'desc' }],
+      select: { id: true, audience: true, version: true, createdAt: true, createdByUserId: true },
+    });
+    return { items };
+  }
+
+  async getReport(serviceOrderId: string, reportId: string) {
+    const tenantId = this.getTenantId();
+    await this.assertSo(serviceOrderId);
+    const rep = await this.prisma.workOrderReport.findFirst({
+      where: { id: reportId, tenantId, workOrderId: serviceOrderId },
+      select: { id: true, audience: true, version: true, createdAt: true, createdByUserId: true, data: true },
+    });
+    if (!rep) throw new NotFoundException('Report not found');
+    return rep;
+  }
+
+  async createReport(serviceOrderId: string, dto: CreateServiceOrderReportDto) {
+    const tenantId = this.getTenantId();
+    const actorUserId = this.getUserId();
+    const audience = String((dto as any)?.audience || '').toUpperCase();
+    if (audience !== 'CUSTOMER' && audience !== 'INTERNAL') throw new BadRequestException('Invalid audience');
+
+    // Solo generar cuando está cerrada
+    const so = await this.prisma.workOrder.findFirst({
+      where: { id: serviceOrderId, tenantId, kind: 'SERVICE_ORDER' },
+      include: {
+        assignments: { where: { state: 'ACTIVE' }, include: { user: true } },
+        pmPlan: true,
+        serviceOrderParts: {
+          orderBy: [{ stage: 'asc' }, { createdAt: 'asc' }],
+          include: { inventoryItem: true, replacedByUser: { select: { id: true, name: true, email: true, role: true } } },
+        },
+        workLogs: { orderBy: { startedAt: 'asc' } },
+      },
+    });
+    if (!so) throw new NotFoundException('Service order not found');
+    const st = String((so as any).status || '').toUpperCase();
+    if (st !== 'COMPLETED' && st !== 'CLOSED') {
+      throw new BadRequestException('Solo puedes generar el resumen cuando la OS está COMPLETED o CLOSED');
+    }
+
+    const tenant = await this.prisma.tenant.findFirst({
+      where: { id: tenantId },
+      select: {
+        id: true,
+        slug: true,
+        name: true,
+        legalName: true,
+        taxId: true,
+        address: true,
+        phone: true,
+        email: true,
+        website: true,
+        logoUrl: true,
+      },
+    });
+
+    const asset = await this.prisma.asset.findFirst({
+      where: { tenantId, code: (so as any).assetCode },
+      select: { code: true, customer: true, name: true, brand: true, model: true, serialNumber: true },
+    });
+
+    // Enriquecer workLogs con user (WorkLog no tiene relación directa en el schema actual)
+    const rawLogs = ((so as any).workLogs ?? []) as any[];
+    const logUserIds = Array.from(new Set(rawLogs.map((w) => w.userId).filter(Boolean)));
+    const logUsers = logUserIds.length
+      ? await this.prisma.user.findMany({
+          where: { tenantId, id: { in: logUserIds } },
+          select: { id: true, name: true, email: true, role: true },
+        })
+      : [];
+    const logUserById = new Map(logUsers.map((u) => [u.id, u]));
+    const enrichedLogs = rawLogs.map((w) => ({
+      id: w.id,
+      userId: w.userId,
+      startedAt: w.startedAt,
+      endedAt: w.endedAt,
+      note: w.note ?? null,
+      source: w.source ?? null,
+      user: logUserById.get(w.userId) ?? null,
+    }));
+
+    const opTimes = this.buildOperationalTimes(so);
+
+    // Fotos (adjuntos tipo IMAGE). Guardamos solo filenames en el snapshot.
+    const imagesRes = await this.listAttachments(serviceOrderId, 'IMAGE');
+    const imageFilenames = Array.isArray((imagesRes as any)?.items) ? (imagesRes as any).items : [];
+
+    const requiredParts = ((so as any).serviceOrderParts ?? []).filter((p: any) => String(p.stage || 'REQUIRED') === 'REQUIRED');
+    const replacedParts = ((so as any).serviceOrderParts ?? []).filter((p: any) => String(p.stage || 'REQUIRED') === 'REPLACED');
+
+    const payload: any = {
+      generatedAt: new Date().toISOString(),
+      tenant: tenant ?? null,
+      audience,
+      images: imageFilenames,
+      serviceOrder: {
+        id: (so as any).id,
+        title: (so as any).title,
+        description: (so as any).description ?? null,
+        status: (so as any).status,
+        serviceOrderType: (so as any).serviceOrderType ?? null,
+        hasIssue: !!(so as any).hasIssue,
+        dueDate: (so as any).dueDate ?? null,
+        formData: (so as any).formData ?? null,
+        takenAt: (so as any).takenAt ?? null,
+        arrivedAt: (so as any).arrivedAt ?? null,
+        checkInAt: (so as any).checkInAt ?? null,
+        activityStartedAt: (so as any).activityStartedAt ?? null,
+        activityFinishedAt: (so as any).activityFinishedAt ?? null,
+        deliveredAt: (so as any).deliveredAt ?? null,
+        technicianSignature: (so as any).technicianSignature ?? null,
+        receiverSignature: (so as any).receiverSignature ?? null,
+        completedAt: (so as any).completedAt ?? null,
+        createdAt: (so as any).createdAt ?? null,
+        updatedAt: (so as any).updatedAt ?? null,
+        assignments: ((so as any).assignments ?? []).map((a: any) => ({
+          id: a.id,
+          userId: a.userId,
+          role: a.role,
+          state: a.state,
+          user: a.user ? { id: a.user.id, name: a.user.name, email: a.user.email, role: a.user.role } : null,
+        })),
+      },
+      asset: asset ?? null,
+      operationalTimes: opTimes,
+      parts: {
+        required: requiredParts.map((p: any) => ({
+          id: p.id,
+          qty: p.qty,
+          notes: p.notes ?? null,
+          freeText: p.freeText ?? null,
+          inventoryItem: p.inventoryItem ? { id: p.inventoryItem.id, sku: p.inventoryItem.sku, name: p.inventoryItem.name, model: p.inventoryItem.model ?? null } : null,
+        })),
+        replaced: replacedParts.map((p: any) => ({
+          id: p.id,
+          qty: p.qty,
+          notes: p.notes ?? null,
+          freeText: p.freeText ?? null,
+          replacedAt: p.replacedAt ?? null,
+          replacedByUser: p.replacedByUser ? { id: p.replacedByUser.id, name: p.replacedByUser.name, email: p.replacedByUser.email, role: p.replacedByUser.role } : null,
+          inventoryItem: p.inventoryItem ? { id: p.inventoryItem.id, sku: p.inventoryItem.sku, name: p.inventoryItem.name, model: p.inventoryItem.model ?? null } : null,
+        })),
+      },
+    };
+
+    if (audience === 'INTERNAL') {
+      payload.workLogs = enrichedLogs;
+    }
+
+    const created = await this.prisma.$transaction(async (tx) => {
+      const last = await tx.workOrderReport.findFirst({
+        where: { tenantId, workOrderId: serviceOrderId, audience: audience as any },
+        orderBy: { version: 'desc' },
+        select: { version: true },
+      });
+      const version = (last?.version ?? 0) + 1;
+      payload.version = version;
+
+      return tx.workOrderReport.create({
+        data: {
+          tenantId,
+          workOrderId: serviceOrderId,
+          audience: audience as any,
+          version,
+          data: payload,
+          createdByUserId: actorUserId,
+        } as any,
+        select: { id: true, audience: true, version: true, createdAt: true },
+      });
+    });
+
+    return created;
   }
 
   // ---------------------------

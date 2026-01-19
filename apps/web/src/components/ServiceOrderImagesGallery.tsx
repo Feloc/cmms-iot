@@ -136,7 +136,7 @@ export function ServiceOrderImagesGallery({ serviceOrderId }: Props) {
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <div>
           <div className="font-semibold">Fotos</div>
-          <div className="text-xs text-gray-600">Miniaturas (click para ampliar). Subida con headers (tenant/auth).</div>
+          <div className="text-xs text-gray-600">Miniaturas (click para ampliar)</div>
         </div>
         <div className="flex items-center gap-2">
           <input
