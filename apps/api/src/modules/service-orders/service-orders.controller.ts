@@ -69,6 +69,16 @@ export class ServiceOrdersController {
     return this.svc.setSignatures(id, dto);
   }
 
+  @Post(':id/worklogs/start')
+  startWorkLog(@Param('id') id: string) {
+    return this.svc.startWorkLog(id);
+  }
+
+  @Post(':id/worklogs/:workLogId/close')
+  closeWorkLog(@Param('id') id: string, @Param('workLogId') workLogId: string) {
+    return this.svc.closeWorkLog(id, workLogId);
+  }
+
   @Post(':id/parts')
   addPart(@Param('id') id: string, @Body() dto: AddServiceOrderPartDto) {
     return this.svc.addPart(id, dto);

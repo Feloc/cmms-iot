@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../../prisma.service';
 import { tenantStorage } from '../../common/tenant-context';
 import { CreateServiceOrderDto } from './dto/create-service-order.dto';
@@ -144,7 +144,39 @@ private async closeOpenWorkLogs(tx: any, tenantId: string, workOrderId: string, 
   });
 }
 
+private async findOtherOpenWorkLog(
+  tx: any,
+  tenantId: string,
+  userId: string,
+  excludeWorkOrderId: string,
+): Promise<{ id: string; workOrderId: string; startedAt: Date; workOrder?: { title?: string | null } | null } | null> {
+  return tx.workLog.findFirst({
+    where: {
+      tenantId,
+      userId,
+      endedAt: null,
+      NOT: { workOrderId: excludeWorkOrderId },
+    },
+    orderBy: { startedAt: 'desc' },
+    select: {
+      id: true,
+      workOrderId: true,
+      startedAt: true,
+      workOrder: { select: { title: true } },
+    },
+  });
+}
+
 private async ensureOpenWorkLog(tx: any, tenantId: string, workOrderId: string, userId: string, startedAt: Date) {
+  // Un técnico no puede tener 2 WorkLogs abiertos en diferentes OS
+  const otherOpen = await this.findOtherOpenWorkLog(tx, tenantId, userId, workOrderId);
+  if (otherOpen) {
+    const t = otherOpen?.workOrder?.title ? ` (${otherOpen.workOrder.title})` : '';
+    throw new ConflictException(
+      `Tienes un WorkLog abierto en otra OS${t}. Cierra ese WorkLog antes de iniciar uno nuevo.`,
+    );
+  }
+
   const open = await tx.workLog.findFirst({
     where: { tenantId, workOrderId, userId, endedAt: null },
     orderBy: { startedAt: 'desc' },
@@ -173,6 +205,160 @@ private async ensureOpenWorkLog(tx: any, tenantId: string, workOrderId: string, 
 
   return created.id;
 }
+
+// ---------------------------
+// Bloqueo global: TECH con WorkLog abierto en otra OS no puede modificar esta OS
+// ---------------------------
+private async getOpenWorkLogElsewhere(
+  tx: any,
+  tenantId: string,
+  userId: string,
+  currentWorkOrderId: string,
+): Promise<{ workOrderId: string; workOrderTitle: string | null; workLogId: string; startedAt: string } | null> {
+  const other = await tx.workLog.findFirst({
+    where: {
+      tenantId,
+      userId,
+      endedAt: null,
+      NOT: { workOrderId: currentWorkOrderId },
+    },
+    orderBy: { startedAt: 'desc' },
+    select: { id: true, workOrderId: true, startedAt: true },
+  });
+  if (!other) return null;
+
+  const otherWo = await tx.workOrder.findFirst({
+    where: { id: other.workOrderId, tenantId, kind: 'SERVICE_ORDER' },
+    select: { id: true, title: true },
+  });
+  if (!otherWo) return null;
+
+  return {
+    workOrderId: otherWo.id,
+    workOrderTitle: otherWo.title ?? null,
+    workLogId: other.id,
+    startedAt: other.startedAt ? new Date(other.startedAt).toISOString() : new Date().toISOString(),
+  };
+}
+
+private async assertTechCanMutateServiceOrder(
+  tx: any,
+  tenantId: string,
+  actorUserId: string,
+  serviceOrderId: string,
+  role?: string | null,
+) {
+  const r = role ?? (await this.getCurrentUserRole(tx, tenantId, actorUserId));
+  if (r !== 'TECH') return;
+
+  const openWorkLog = await this.getOpenWorkLogElsewhere(tx, tenantId, actorUserId, serviceOrderId);
+  if (!openWorkLog) return;
+
+  const t = openWorkLog.workOrderTitle ? ` (${openWorkLog.workOrderTitle})` : '';
+  throw new ConflictException({
+    code: 'WORKLOG_OPEN_OTHER_OS',
+    message: `Tienes un WorkLog abierto en otra OS${t}. Cierra ese WorkLog antes de continuar.`,
+    openWorkLog,
+  });
+}
+
+
+  // ---------------------------
+  // Audit trail (nota al pie)
+  // Guardamos un historial ligero en formData._audit para identificar
+  // qué campo (y qué parte del campo) modificó cada usuario.
+  // ---------------------------
+  private auditValue(v: any) {
+    if (v === undefined) return undefined;
+    if (v === null) return null;
+    if (v instanceof Date) return v.toISOString();
+    const t = typeof v;
+    if (t === 'string' || t === 'number' || t === 'boolean') return v;
+    try {
+      const s = JSON.stringify(v);
+      return s.length > 800 ? s.slice(0, 800) + '…' : s;
+    } catch {
+      return String(v);
+    }
+  }
+
+  private buildAuditEntry(actorUserId: string, field: string, part?: string, from?: any, to?: any) {
+    return {
+      at: new Date().toISOString(),
+      byUserId: actorUserId,
+      field,
+      part,
+      from: this.auditValue(from),
+      to: this.auditValue(to),
+    };
+  }
+
+  private async appendAuditMany(tx: any, tenantId: string, workOrderId: string, entries: any[]) {
+    if (!entries?.length) return;
+
+    const cur = await tx.workOrder.findFirst({
+      where: { id: workOrderId, tenantId },
+      select: { formData: true },
+    });
+
+    const fd = cur?.formData && typeof cur.formData === 'object' ? (cur.formData as any) : {};
+    const prev = Array.isArray((fd as any)._audit) ? (fd as any)._audit : [];
+    const next = [...prev, ...entries].slice(-200);
+
+    await tx.workOrder.update({
+      where: { id: workOrderId },
+      data: { formData: { ...(fd ?? {}), _audit: next } } as any,
+    });
+  }
+
+  private diffFormData(prev: any, next: any) {
+    const changes: Array<{ field: string; part?: string; from?: any; to?: any }> = [];
+
+    const pNotes = (prev?.notes ?? '');
+    const nNotes = (next?.notes ?? '');
+    if (pNotes !== nNotes) changes.push({ field: 'formData', part: 'notes', from: pNotes, to: nNotes });
+
+    const pRes = (prev?.result ?? '');
+    const nRes = (next?.result ?? '');
+    if (pRes !== nRes) changes.push({ field: 'formData', part: 'result', from: pRes, to: nRes });
+
+    const pCL = prev?.checklists && typeof prev.checklists === 'object' ? prev.checklists : {};
+    const nCL = next?.checklists && typeof next.checklists === 'object' ? next.checklists : {};
+
+    for (const k of Object.keys(nCL)) {
+      const p = pCL?.[k];
+      const n = nCL?.[k];
+      if (!n || typeof n !== 'object') continue;
+
+      const pItems = Array.isArray(p?.items) ? p.items : [];
+      const nItems = Array.isArray(n?.items) ? n.items : [];
+      const pByLabel = new Map<string, any>();
+      for (const it of pItems) if (it?.label) pByLabel.set(String(it.label), it);
+
+      for (const it of nItems) {
+        const label = it?.label ? String(it.label) : '';
+        if (!label) continue;
+        const prevIt = pByLabel.get(label);
+
+        const pdone = !!prevIt?.done;
+        const ndone = !!it?.done;
+        if (pdone != ndone) {
+          changes.push({ field: 'formData', part: `checklists.${k}.${label}.done`, from: pdone, to: ndone });
+        }
+
+        const pnote = String(prevIt?.notes ?? '');
+        const nnote = String(it?.notes ?? '');
+        if (pnote != nnote) {
+          changes.push({ field: 'formData', part: `checklists.${k}.${label}.notes`, from: pnote, to: nnote });
+        }
+
+        if (changes.length >= 30) break;
+      }
+      if (changes.length >= 30) break;
+    }
+
+    return changes;
+  }
 
 
   async list(q: ListServiceOrdersQuery) {
@@ -360,7 +546,17 @@ const [items, total] = await this.prisma.$transaction([
 
   // WorkLog no tiene relación directa con User en el schema actual.
   const workLogs = (so as any).workLogs ?? [];
-  const userIds = Array.from(new Set(workLogs.map((w: any) => w.userId).filter(Boolean)));
+
+  // Audit trail vive en formData._audit (si existe)
+  const rawFormData = (so as any).formData && typeof (so as any).formData === 'object' ? ((so as any).formData as any) : {};
+  const audit = Array.isArray(rawFormData?._audit) ? (rawFormData._audit as any[]) : [];
+
+  const userIds = Array.from(
+    new Set([
+      ...workLogs.map((w: any) => w.userId),
+      ...audit.map((a: any) => a?.byUserId),
+    ].filter(Boolean)),
+  );
 
   const users = userIds.length
     ? await this.prisma.user.findMany({
@@ -371,8 +567,18 @@ const [items, total] = await this.prisma.$transaction([
 
   const userById = new Map(users.map((u: any) => [u.id, u]));
   const enrichedLogs = workLogs.map((w: any) => ({ ...w, user: userById.get(w.userId) ?? null }));
+  const enrichedAudit = audit.map((a: any) => ({ ...a, user: userById.get(a?.byUserId) ?? null }));
 
-  return { ...(so as any), workLogs: enrichedLogs, asset: asset ?? null };
+  const formData = { ...(rawFormData ?? {}), _audit: enrichedAudit };
+
+  const actorUserId = this.getUserId();
+const actor = await this.prisma.user.findFirst({ where: { id: actorUserId, tenantId }, select: { role: true } });
+const openWorkLogElsewhere =
+  actor?.role === 'TECH' ? await this.getOpenWorkLogElsewhere(this.prisma as any, tenantId, actorUserId, id) : null;
+
+const _meta = openWorkLogElsewhere ? { openWorkLogElsewhere } : {};
+
+return { ...(so as any), workLogs: enrichedLogs, formData, asset: asset ?? null, _meta };
 }
 
   async create(dto: CreateServiceOrderDto) {
@@ -409,11 +615,27 @@ const [items, total] = await this.prisma.$transaction([
   return this.prisma.$transaction(async (tx) => {
     const current = await tx.workOrder.findFirst({
       where: { id, tenantId, kind: 'SERVICE_ORDER' },
-      select: { id: true, status: true, activityFinishedAt: true },
+      select: {
+        id: true,
+        status: true,
+        activityFinishedAt: true,
+        assetCode: true,
+        title: true,
+        description: true,
+        serviceOrderType: true,
+        pmPlanId: true,
+        hasIssue: true,
+        durationMin: true,
+      },
     });
     if (!current) throw new NotFoundException('Service order not found');
 
     const role = await this.getCurrentUserRole(tx, tenantId, actorUserId);
+
+    await this.assertTechCanMutateServiceOrder(tx, tenantId, actorUserId, id, role);
+
+    let skipStatusChange = false;
+    let infoMessage: string | null = null;
 
     const wantsStatusChange = (dto as any).status !== undefined;
     if (wantsStatusChange) {
@@ -424,10 +646,19 @@ const [items, total] = await this.prisma.$transaction([
         if (role !== 'TECH') throw new ForbiddenException('Only technicians can change status');
 
         const assigned = await this.isActiveTechnicianAssignment(tx, tenantId, id, actorUserId);
-        if (!assigned) throw new ForbiddenException('You are not assigned to this service order');
+        if (!assigned) {
+          // Caso especial: un TECH no asignado intentando poner en pausa.
+          // No lanzamos error; devolvemos un mensaje informativo y no aplicamos el cambio.
+          if (nextStatus === 'ON_HOLD') {
+            skipStatusChange = true;
+            infoMessage = 'No estás asignado a esta OS. Solo el técnico asignado (o un ADMIN) puede ponerla en ON_HOLD.';
+          } else {
+            throw new ForbiddenException('You are not assigned to this service order');
+          }
+        }
 
         const allowed = new Set(['IN_PROGRESS', 'ON_HOLD', 'COMPLETED']);
-        if (!allowed.has(nextStatus)) throw new ForbiddenException('Invalid status change');
+        if (!skipStatusChange && !allowed.has(nextStatus)) throw new ForbiddenException('Invalid status change');
 
         const allowedTransitions =
           ((curStatus === 'OPEN' || curStatus === 'SCHEDULED') && nextStatus === 'IN_PROGRESS') ||
@@ -435,7 +666,7 @@ const [items, total] = await this.prisma.$transaction([
           (curStatus === 'ON_HOLD' && nextStatus === 'IN_PROGRESS') ||
           ((curStatus === 'IN_PROGRESS' || curStatus === 'ON_HOLD') && nextStatus === 'COMPLETED');
 
-        if (!allowedTransitions) {
+        if (!skipStatusChange && !allowedTransitions) {
           throw new ForbiddenException(`Transition ${curStatus} -> ${nextStatus} not allowed`);
         }
       }
@@ -449,21 +680,26 @@ const [items, total] = await this.prisma.$transaction([
       if (!asset) throw new BadRequestException('Asset not found for given assetCode');
     }
 
+    const applyStatus = (dto as any).status !== undefined && !skipStatusChange;
+
     const data: any = {
       ...(dto.assetCode !== undefined ? { assetCode: String(dto.assetCode).trim() } : {}),
       ...(dto.title !== undefined ? { title: dto.title } : {}),
       ...(dto.description !== undefined ? { description: dto.description } : {}),
-      ...(dto.status !== undefined ? { status: dto.status as any } : {}),
+      ...(applyStatus ? { status: dto.status as any } : {}),
       ...(dto.serviceOrderType !== undefined ? { serviceOrderType: dto.serviceOrderType as any } : {}),
       ...(dto.pmPlanId !== undefined ? { pmPlanId: dto.pmPlanId } : {}),
       ...(dto.hasIssue !== undefined ? { hasIssue: dto.hasIssue } : {}),
       ...(dto.durationMin !== undefined ? { durationMin: dto.durationMin } : {}),
     };
 
-    const updated = await tx.workOrder.update({ where: { id }, data } as any);
+    const hasChanges = Object.keys(data).length > 0;
+    const updated = hasChanges
+      ? await tx.workOrder.update({ where: { id }, data } as any)
+      : await tx.workOrder.findFirst({ where: { id, tenantId, kind: 'SERVICE_ORDER' } });
 
     // ---- WorkLogs automáticos por estados ----
-    if ((dto as any).status !== undefined) {
+    if (applyStatus) {
       const prev = String(current.status || 'OPEN').toUpperCase();
       const next = String((dto as any).status || '').toUpperCase();
 
@@ -486,15 +722,57 @@ const [items, total] = await this.prisma.$transaction([
       }
     }
 
+
+
+    // ---- Audit trail (quién cambió qué) ----
+    const auditEntries: any[] = [];
+
+    // status
+    if (applyStatus) {
+      const prev = String(current.status || 'OPEN').toUpperCase();
+      const next = String((dto as any).status || '').toUpperCase();
+      if (prev !== next) auditEntries.push(this.buildAuditEntry(actorUserId, 'status', undefined, prev, next));
+    }
+
+    // cambios simples de campos (cuando vengan en dto)
+    const fieldMap: Array<[string, any, any]> = [
+      ['assetCode', (current as any).assetCode, (dto as any).assetCode],
+      ['title', (current as any).title, (dto as any).title],
+      ['description', (current as any).description, (dto as any).description],
+      ['serviceOrderType', (current as any).serviceOrderType, (dto as any).serviceOrderType],
+      ['pmPlanId', (current as any).pmPlanId, (dto as any).pmPlanId],
+      ['hasIssue', (current as any).hasIssue, (dto as any).hasIssue],
+      ['durationMin', (current as any).durationMin, (dto as any).durationMin],
+    ];
+
+    for (const [field, prev, next] of fieldMap) {
+      if (next === undefined) continue;
+      if (prev !== next) auditEntries.push(this.buildAuditEntry(actorUserId, field, undefined, prev, next));
+    }
+
+    if (auditEntries.length) {
+      await this.appendAuditMany(tx, tenantId, id, auditEntries);
+    }
+    if (infoMessage) return { ...(updated as any), _info: infoMessage };
     return updated;
   });
 }
 async schedule(id: string, dto: ScheduleServiceOrderDto) {
   const tenantId = this.getTenantId();
+  const actorUserId = this.getUserId();
 
   return this.prisma.$transaction(async (tx) => {
     const wo = await tx.workOrder.findFirst({ where: { id, tenantId, kind: 'SERVICE_ORDER' } });
     if (!wo) throw new NotFoundException('Service order not found');
+
+
+const role = await this.getCurrentUserRole(tx, tenantId, actorUserId);
+await this.assertTechCanMutateServiceOrder(tx, tenantId, actorUserId, id, role);
+
+    const prevTech = await tx.wOAssignment.findFirst({
+      where: { tenantId, workOrderId: id, role: 'TECHNICIAN', state: 'ACTIVE' as any },
+      select: { userId: true },
+    });
 
     const data: Prisma.WorkOrderUpdateInput = {};
 
@@ -534,6 +812,7 @@ if (dto.dueDate === null) {
     // - string: reemplazar asignación
     const shouldClearTechWhenUnscheduling = dto.dueDate === null && dto.technicianId === undefined;
     const hasTechInstruction = dto.technicianId !== undefined || shouldClearTechWhenUnscheduling;
+    let nextTechnicianId: string | null | undefined = undefined;
 
     if (hasTechInstruction) {
       const technicianId = shouldClearTechWhenUnscheduling
@@ -541,6 +820,8 @@ if (dto.dueDate === null) {
         : dto.technicianId
           ? String(dto.technicianId).trim()
           : '';
+
+      nextTechnicianId = technicianId || null;
 
       // Borra asignaciones TECHNICIAN previas (evita depender de enums como INACTIVE/REMOVED)
       await tx.wOAssignment.deleteMany({
@@ -570,6 +851,45 @@ if (dto.dueDate === null) {
       ? await tx.workOrder.update({ where: { id }, data })
       : wo;
 
+    // ---- Audit trail ----
+    const auditEntries: any[] = [];
+
+    // dueDate
+    if (dto.dueDate !== undefined) {
+      const prevDue = (wo as any).dueDate ?? null;
+      const nextDue = (data as any).dueDate ?? (dto.dueDate === null ? null : prevDue);
+      if ((prevDue ? new Date(prevDue).toISOString() : null) !== (nextDue ? new Date(nextDue).toISOString() : null)) {
+        auditEntries.push(this.buildAuditEntry(actorUserId, 'dueDate', 'schedule', prevDue, nextDue));
+      }
+    }
+
+    // durationMin
+    if ((dto as any).durationMin !== undefined) {
+      const prevDur = (wo as any).durationMin ?? null;
+      const nextDur = (data as any).durationMin ?? null;
+      if (prevDur !== nextDur) auditEntries.push(this.buildAuditEntry(actorUserId, 'durationMin', 'schedule', prevDur, nextDur));
+    }
+
+    // technician assignment
+    if (hasTechInstruction) {
+      const prevId = (prevTech as any)?.userId ?? null;
+      const nextId = nextTechnicianId ?? null;
+      if (prevId !== nextId) auditEntries.push(this.buildAuditEntry(actorUserId, 'technicianId', 'schedule', prevId, nextId));
+    }
+
+    // auto-status por schedule
+    if ((data as any).status !== undefined) {
+      const prevStatus = String((wo as any).status ?? '').toUpperCase();
+      const nextStatus = String((data as any).status ?? '').toUpperCase();
+      if (prevStatus && nextStatus && prevStatus !== nextStatus) {
+        auditEntries.push(this.buildAuditEntry(actorUserId, 'status', 'auto(schedule)', prevStatus, nextStatus));
+      }
+    }
+
+    if (auditEntries.length) {
+      await this.appendAuditMany(tx, tenantId, id, auditEntries);
+    }
+
     return updated;
   });
 }
@@ -591,6 +911,10 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
       },
     });
     if (!current) throw new NotFoundException('Service order not found');
+
+
+    const role = await this.getCurrentUserRole(tx, tenantId, actorUserId);
+    await this.assertTechCanMutateServiceOrder(tx, tenantId, actorUserId, id, role);
 
     const next: Record<string, Date | null> = {
       takenAt: current.takenAt,
@@ -637,7 +961,7 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
     });
 
     // ---- WorkLogs automáticos por timestamps ----
-    const role = await this.getCurrentUserRole(tx, tenantId, actorUserId);
+
     const statusAfter = String((data.status ?? current.status ?? 'OPEN')).toUpperCase();
 
     // Cuando el técnico registra/modifica activityStartedAt => crea/ajusta WorkLog abierto
@@ -652,51 +976,255 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
       await this.closeOpenWorkLogs(tx, tenantId, id, next.activityFinishedAt);
     }
 
+    // ---- Audit trail ----
+    const auditEntries: any[] = [];
+
+    for (const k of this.TS_ORDER as unknown as string[]) {
+      if ((dto as any)[k] === undefined) continue;
+      const prevV = (current as any)[k] ?? null;
+      const nextV = (data as any)[k] !== undefined ? (data as any)[k] : (next as any)[k] ?? null;
+      const prevIso = prevV ? new Date(prevV).toISOString() : null;
+      const nextIso = nextV ? new Date(nextV).toISOString() : null;
+      if (prevIso !== nextIso) {
+        auditEntries.push(this.buildAuditEntry(actorUserId, 'timestamps', k, prevV, nextV));
+      }
+    }
+
+    if ((data as any).status !== undefined) {
+      const prevS = String(current.status || 'OPEN').toUpperCase();
+      const nextS = String((data as any).status || '').toUpperCase();
+      if (prevS !== nextS) auditEntries.push(this.buildAuditEntry(actorUserId, 'status', 'auto(timestamps)', prevS, nextS));
+    }
+
+    if (auditEntries.length) {
+      await this.appendAuditMany(tx, tenantId, id, auditEntries);
+    }
+
     return updated;
   });
 }
 
+  // ---------------------------
+  // WorkLogs manuales (técnico auxiliar)
+  // ---------------------------
+  async startWorkLog(id: string) {
+    const { tenantId } = await this.assertSo(id);
+    const actorUserId = this.getUserId();
+
+    return this.prisma.$transaction(async (tx) => {
+      const so = await tx.workOrder.findFirst({
+        where: { id, tenantId, kind: 'SERVICE_ORDER' },
+        select: { status: true },
+      });
+      if (!so) throw new NotFoundException('Service order not found');
+
+      const role = await this.getCurrentUserRole(tx, tenantId, actorUserId);
+      if (role !== 'ADMIN' && role !== 'TECH') throw new ForbiddenException('Only technicians can start work logs');
+
+      const status = String((so as any).status || 'OPEN').toUpperCase();
+      if (['COMPLETED', 'CLOSED', 'CANCELED'].includes(status)) {
+        throw new BadRequestException('Service order is closed');
+      }
+
+      await this.assertTechCanMutateServiceOrder(tx, tenantId, actorUserId, id, role);
+
+      const existing = await tx.workLog.findFirst({
+        where: { tenantId, workOrderId: id, userId: actorUserId, endedAt: null },
+        select: { id: true, startedAt: true, endedAt: true, userId: true, note: true },
+      });
+      if (existing) return existing as any;
+
+      const now = new Date();
+
+      // Si la OS está en pausa (o aún no está en progreso), al iniciar un WorkLog la reanudamos.
+      const auditEntries: any[] = [this.buildAuditEntry(actorUserId, 'workLogs', 'start', null, 'MANUAL_START')];
+
+      if (!['IN_PROGRESS'].includes(status)) {
+        await tx.workOrder.update({ where: { id }, data: { status: 'IN_PROGRESS' as any } });
+        auditEntries.push(this.buildAuditEntry(actorUserId, 'status', 'auto(worklog-start)', status, 'IN_PROGRESS'));
+      }
+
+      const created = await tx.workLog.create({
+        data: { tenantId, workOrderId: id, userId: actorUserId, startedAt: now, note: 'MANUAL_START' },
+        select: { id: true, startedAt: true, endedAt: true, userId: true, note: true },
+      });
+
+      await this.appendAuditMany(tx, tenantId, id, auditEntries);
+
+      return created as any;
+    });
+  }
+
+  async closeWorkLog(id: string, workLogId: string) {
+    const { tenantId } = await this.assertSo(id);
+    const actorUserId = this.getUserId();
+
+    return this.prisma.$transaction(async (tx) => {
+      const role = await this.getCurrentUserRole(tx, tenantId, actorUserId);
+      if (role !== 'ADMIN' && role !== 'TECH') throw new ForbiddenException('Only technicians can close work logs');
+
+
+      await this.assertTechCanMutateServiceOrder(tx, tenantId, actorUserId, id, role);
+
+      const log = await tx.workLog.findFirst({
+        where: { id: workLogId, tenantId, workOrderId: id },
+      });
+      if (!log) throw new NotFoundException('Work log not found');
+
+      if (role !== 'ADMIN' && (log as any).userId !== actorUserId) {
+        throw new ForbiddenException('You can only close your own work log');
+      }
+
+      if ((log as any).endedAt) return log as any;
+
+      const endedAt = new Date();
+      const updated = await tx.workLog.update({
+        where: { id: workLogId },
+        data: { endedAt, note: ((log as any).note || '') + (String((log as any).note || '').includes('MANUAL_STOP') ? '' : ' MANUAL_STOP') },
+      });
+
+      const auditEntries: any[] = [this.buildAuditEntry(actorUserId, 'workLogs', 'close', workLogId, endedAt)];
+
+      // Si no queda ningún WorkLog abierto y ya se había iniciado actividad, la OS pasa automáticamente a ON_HOLD
+      const remainingOpen = await tx.workLog.count({ where: { tenantId, workOrderId: id, endedAt: null } });
+      if (remainingOpen === 0) {
+        const so = await tx.workOrder.findFirst({
+          where: { id, tenantId, kind: 'SERVICE_ORDER' },
+          select: { status: true, activityStartedAt: true },
+        });
+
+        const s = String((so as any)?.status || 'OPEN').toUpperCase();
+        if (so?.activityStartedAt && s === 'IN_PROGRESS') {
+          await tx.workOrder.update({ where: { id }, data: { status: 'ON_HOLD' as any } });
+          auditEntries.push(this.buildAuditEntry(actorUserId, 'status', 'auto(no-open-worklog)', 'IN_PROGRESS', 'ON_HOLD'));
+        }
+      }
+
+      await this.appendAuditMany(tx, tenantId, id, auditEntries);
+
+      return updated as any;
+    });
+  }
 
   async setFormData(id: string, dto: ServiceOrderFormDataDto) {
-    await this.assertSo(id);
-    return this.prisma.workOrder.update({
-      where: { id },
-      data: { formData: dto.formData } as any,
+    const { tenantId } = await this.assertSo(id);
+    const actorUserId = this.getUserId();
+
+    return this.prisma.$transaction(async (tx) => {
+      const current = await tx.workOrder.findFirst({
+        where: { id, tenantId, kind: 'SERVICE_ORDER' },
+        select: { formData: true },
+      });
+      if (!current) throw new NotFoundException('Service order not found');
+
+      const role = await this.getCurrentUserRole(tx, tenantId, actorUserId);
+      await this.assertTechCanMutateServiceOrder(tx, tenantId, actorUserId, id, role);
+
+      const prevFormData =
+        current.formData && typeof current.formData === 'object' ? (current.formData as any) : {};
+      const nextFormData =
+        dto.formData && typeof dto.formData === 'object' ? (dto.formData as any) : {};
+
+      const updated = await tx.workOrder.update({
+        where: { id },
+        data: { formData: dto.formData } as any,
+      });
+
+      const diffs = this.diffFormData(prevFormData, nextFormData);
+      const entries = diffs.map((d) => this.buildAuditEntry(actorUserId, d.field, d.part, d.from, d.to));
+      if (entries.length) await this.appendAuditMany(tx, tenantId, id, entries);
+
+      return updated;
     });
   }
 
   async setSignatures(id: string, dto: ServiceOrderSignaturesDto) {
-    await this.assertSo(id);
-    return this.prisma.workOrder.update({
-      where: { id },
-      data: {
+    const { tenantId } = await this.assertSo(id);
+    const actorUserId = this.getUserId();
+
+    return this.prisma.$transaction(async (tx) => {
+      const current = await tx.workOrder.findFirst({
+        where: { id, tenantId, kind: 'SERVICE_ORDER' },
+        select: { technicianSignature: true, receiverSignature: true },
+      });
+      if (!current) throw new NotFoundException('Service order not found');
+
+      const role = await this.getCurrentUserRole(tx, tenantId, actorUserId);
+      await this.assertTechCanMutateServiceOrder(tx, tenantId, actorUserId, id, role);
+
+      const data: any = {
         ...(dto.technicianSignature !== undefined ? { technicianSignature: dto.technicianSignature } : {}),
         ...(dto.receiverSignature !== undefined ? { receiverSignature: dto.receiverSignature } : {}),
-      } as any,
+      };
+
+      const updated = await tx.workOrder.update({ where: { id }, data: data as any });
+
+      const entries: any[] = [];
+      if (dto.technicianSignature !== undefined) {
+        entries.push(
+          this.buildAuditEntry(
+            actorUserId,
+            'technicianSignature',
+            undefined,
+            !!(current as any).technicianSignature,
+            !!dto.technicianSignature,
+          ),
+        );
+      }
+      if (dto.receiverSignature !== undefined) {
+        entries.push(
+          this.buildAuditEntry(
+            actorUserId,
+            'receiverSignature',
+            undefined,
+            !!(current as any).receiverSignature,
+            !!dto.receiverSignature,
+          ),
+        );
+      }
+      if (entries.length) await this.appendAuditMany(tx, tenantId, id, entries);
+
+      return updated;
     });
   }
 
   async addPart(id: string, dto: AddServiceOrderPartDto) {
     const tenantId = this.getTenantId();
-    const so = await this.prisma.workOrder.findFirst({ where: { id, tenantId, kind: 'SERVICE_ORDER' } });
-    if (!so) throw new NotFoundException('Service order not found');
+    const actorUserId = this.getUserId();
 
     if (!dto.inventoryItemId && !dto.freeText) throw new BadRequestException('inventoryItemId or freeText is required');
     const qty = dto.qty ?? 1;
     if (typeof qty !== 'number' || !isFinite(qty) || qty <= 0) throw new BadRequestException('qty must be > 0');
 
-    return this.prisma.serviceOrderPart.create({
-      data: {
-        tenantId,
-        workOrderId: id,
-        inventoryItemId: dto.inventoryItemId ?? undefined,
-        freeText: dto.freeText ?? undefined,
-        qty,
-        notes: dto.notes,
-      },
-      include: { inventoryItem: true },
+    return this.prisma.$transaction(async (tx) => {
+      const so = await tx.workOrder.findFirst({ where: { id, tenantId, kind: 'SERVICE_ORDER' } });
+      if (!so) throw new NotFoundException('Service order not found');
+
+      const role = await this.getCurrentUserRole(tx, tenantId, actorUserId);
+      await this.assertTechCanMutateServiceOrder(tx, tenantId, actorUserId, id, role);
+
+      const created = await tx.serviceOrderPart.create({
+        data: {
+          tenantId,
+          workOrderId: id,
+          inventoryItemId: dto.inventoryItemId ?? undefined,
+          freeText: dto.freeText ?? undefined,
+          qty,
+          notes: dto.notes,
+          stage: (dto as any).stage ?? 'REQUIRED',
+        } as any,
+        include: { inventoryItem: true },
+      });
+
+      const itemLabel = created.inventoryItemId ? `inventoryItem:${created.inventoryItemId}` : `freeText:${created.freeText ?? ''}`;
+      await this.appendAuditMany(tx, tenantId, id, [
+        this.buildAuditEntry(actorUserId, 'parts', 'add', null, { id: created.id, qty: created.qty, stage: (created as any).stage, item: itemLabel }),
+      ]);
+
+      return created;
     });
   }
+
 
   /**
    * Marca un repuesto (línea ServiceOrderPart) como "cambiado" (REPLACED) con manejo pro de cantidades:
@@ -719,6 +1247,8 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
 
       const role = await this.getCurrentUserRole(tx, tenantId, actorUserId);
       const isAdmin = role === 'ADMIN';
+      await this.assertTechCanMutateServiceOrder(tx, tenantId, actorUserId, id, role);
+
       const isAssignedTech = role === 'TECH' ? await this.isActiveTechnicianAssignment(tx, tenantId, id, actorUserId) : false;
       if (!isAdmin && !isAssignedTech) throw new ForbiddenException('Not allowed');
 
@@ -755,6 +1285,11 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
           } as any,
           include: { inventoryItem: true },
         });
+
+        await this.appendAuditMany(tx, tenantId, id, [
+          this.buildAuditEntry(actorUserId, 'parts', 'markReplaced', { id: partId, stage: 'REQUIRED', qty: curQty }, { id: partId, stage: 'REPLACED', qty: qtyReplaced }),
+        ]);
+
         return updated;
       }
 
@@ -776,16 +1311,34 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
         include: { inventoryItem: true },
       });
 
+      await this.appendAuditMany(tx, tenantId, id, [
+        this.buildAuditEntry(actorUserId, 'parts', 'markReplaced:split', { id: partId, stage: 'REQUIRED', qty: curQty }, { requiredRemaining: remaining, replacedCreatedId: created.id, replacedQty: qtyReplaced }),
+      ]);
+
       return created;
     });
   }
 
   async removePart(id: string, partId: string) {
     const tenantId = this.getTenantId();
-    const part = await this.prisma.serviceOrderPart.findFirst({ where: { id: partId, tenantId, workOrderId: id } });
-    if (!part) throw new NotFoundException('Part not found');
-    await this.prisma.serviceOrderPart.delete({ where: { id: partId } });
-    return { ok: true };
+    const actorUserId = this.getUserId();
+
+    return this.prisma.$transaction(async (tx) => {
+      const part = await tx.serviceOrderPart.findFirst({ where: { id: partId, tenantId, workOrderId: id } });
+      if (!part) throw new NotFoundException('Part not found');
+
+      await tx.serviceOrderPart.delete
+
+      const role = await this.getCurrentUserRole(tx, tenantId, actorUserId);
+      await this.assertTechCanMutateServiceOrder(tx, tenantId, actorUserId, id, role);
+
+      await tx.serviceOrderPart.delete({ where: { id: partId } });
+      await this.appendAuditMany(tx, tenantId, id, [
+        this.buildAuditEntry(actorUserId, 'parts', 'remove', { id: partId, qty: (part as any).qty, stage: (part as any).stage }, null),
+      ]);
+
+      return { ok: true };
+    });
   }
 
   // ---------------------------
@@ -819,12 +1372,12 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
 
     return {
       segments: [
-        seg('taken_arrived', 'Desplazamiento', takenAt, arrivedAt),
-        seg('arrived_checkin', 'Proceso de ingreso', arrivedAt, checkInAt),
-        seg('checkin_start', 'Entrega del equipo', checkInAt, activityStartedAt),
-        seg('start_finish', 'Trabajo en sitio', activityStartedAt, activityFinishedAt),
-        seg('finish_delivered', 'Entrega final', activityFinishedAt, deliveredAt),
-        seg('arrived_delivered', 'Duración del servicio', arrivedAt, deliveredAt),
+        seg('taken_arrived', 'Desplazamiento (takenAt → arrivedAt)', takenAt, arrivedAt),
+        seg('arrived_checkin', 'Proceso de ingreso (arrivedAt → checkInAt)', arrivedAt, checkInAt),
+        seg('checkin_start', 'Entrega del equipo (checkInAt → activityStartedAt)', checkInAt, activityStartedAt),
+        seg('start_finish', 'Trabajo en sitio (activityStartedAt → activityFinishedAt)', activityStartedAt, activityFinishedAt),
+        seg('finish_delivered', 'Entrega final (activityFinishedAt → deliveredAt)', activityFinishedAt, deliveredAt),
+        seg('arrived_delivered', 'Duración del servicio (arrivedAt → deliveredAt)', arrivedAt, deliveredAt),
       ],
     };
   }
@@ -919,10 +1472,6 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
 
     const opTimes = this.buildOperationalTimes(so);
 
-    // Fotos (adjuntos tipo IMAGE). Guardamos solo filenames en el snapshot.
-    const imagesRes = await this.listAttachments(serviceOrderId, 'IMAGE');
-    const imageFilenames = Array.isArray((imagesRes as any)?.items) ? (imagesRes as any).items : [];
-
     const requiredParts = ((so as any).serviceOrderParts ?? []).filter((p: any) => String(p.stage || 'REQUIRED') === 'REQUIRED');
     const replacedParts = ((so as any).serviceOrderParts ?? []).filter((p: any) => String(p.stage || 'REQUIRED') === 'REPLACED');
 
@@ -930,7 +1479,6 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
       generatedAt: new Date().toISOString(),
       tenant: tenant ?? null,
       audience,
-      images: imageFilenames,
       serviceOrder: {
         id: (so as any).id,
         title: (so as any).title,

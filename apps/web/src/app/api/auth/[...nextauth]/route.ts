@@ -92,6 +92,11 @@ const handler = NextAuth({
 
       // proyección cómoda en session.user
       session.user = session.user || {};
+      // Importante: incluir el id real del usuario para permisos/UI (ej. WorkLogs)
+      // NextAuth expone el id del usuario como token.sub (derivado de "user.id" en authorize).
+      (session.user as any).id = (token as any)?.sub;
+      (session.user as any).email = (token as any)?.email;
+      (session.user as any).name = (token as any)?.name;
       (session.user as any).tenantSlug = (token as any)?.tenant?.slug;
       (session.user as any).role = token.role;
 

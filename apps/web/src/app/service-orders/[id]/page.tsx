@@ -35,6 +35,16 @@ type WorkLog = {
   user?: User | null;
 };
 
+type AuditEntry = {
+  at: string;
+  byUserId: string;
+  field: string;
+  part?: string | null;
+  from?: any;
+  to?: any;
+  user?: User | null;
+};
+
 type WorkOrderReportRow = {
   id: string;
   audience: 'CUSTOMER' | 'INTERNAL';
@@ -43,6 +53,14 @@ type WorkOrderReportRow = {
   createdByUserId?: string;
 };
 
+
+
+type OpenWorkLogElsewhere = {
+  workOrderId: string;
+  workOrderTitle?: string | null;
+  workLogId: string;
+  startedAt: string;
+};
 
 type PmPlan = { id: string; name: string; intervalHours?: number | null; defaultDurationMin?: number | null };
 
@@ -69,6 +87,7 @@ type ServiceOrder = {
   receiverSignature?: string | null;
   serviceOrderParts?: Part[];
   workLogs?: WorkLog[];
+  _meta?: { openWorkLogElsewhere?: OpenWorkLogElsewhere | null };
 };
 
 // ---- Fecha/hora helpers (datetime-local) ----
@@ -210,6 +229,23 @@ export default function ServiceOrderDetailPage() {
 
   const role = (session as any)?.user?.role as string | undefined;
   const isAdmin = role === 'ADMIN';
+  const isTech = role === 'TECH';
+  const currentUserId = (session as any)?.user?.id as string | undefined;
+
+  const [busy, setBusy] = useState(false);
+  const [uiErr, setUiErr] = useState<string>('');
+  const [uiInfo, setUiInfo] = useState<string>('');
+  const [openElsewhere, setOpenElsewhere] = useState<OpenWorkLogElsewhere | null>(null);
+
+  const [editMode, setEditMode] = useState(false);
+  const [editTitle, setEditTitle] = useState('');
+  const [editDescription, setEditDescription] = useState('');
+  const [editStatus, setEditStatus] = useState('OPEN');
+  const [editType, setEditType] = useState<string>('');
+  const [editAssetCode, setEditAssetCode] = useState('');
+  const [editPmPlanId, setEditPmPlanId] = useState('');
+  const [partQ, setPartQ] = useState('');
+  const [partQty, setPartQty] = useState<number>(1);
 
   const { data, error, isLoading, mutate } = useApiSWR<ServiceOrder>(
     id ? `/service-orders/${id}` : null,
@@ -224,17 +260,113 @@ export default function ServiceOrderDetailPage() {
     auth.tenantSlug,
   );
 
-  const [busy, setBusy] = useState(false);
-  const [uiErr, setUiErr] = useState<string>('');
-  const [editMode, setEditMode] = useState(false);
-  const [editTitle, setEditTitle] = useState('');
-  const [editDescription, setEditDescription] = useState('');
-  const [editStatus, setEditStatus] = useState('OPEN');
-  const [editType, setEditType] = useState<string>('');
-  const [editAssetCode, setEditAssetCode] = useState('');
-  const [editPmPlanId, setEditPmPlanId] = useState('');
-  const [partQ, setPartQ] = useState('');
-  const [partQty, setPartQty] = useState<number>(1);
+  useEffect(() => {
+    const ow = (data as any)?._meta?.openWorkLogElsewhere as OpenWorkLogElsewhere | null | undefined;
+    if (ow && ow.workOrderId && ow.workOrderId !== id) setOpenElsewhere(ow);
+    else setOpenElsewhere(null);
+  }, [
+    id,
+    (data as any)?._meta?.openWorkLogElsewhere?.workOrderId,
+    (data as any)?._meta?.openWorkLogElsewhere?.workLogId,
+  ]);
+
+  const techBlocked = isTech && !!openElsewhere?.workOrderId && openElsewhere.workOrderId !== id;
+
+  const statusUpper = (data?.status ?? 'OPEN').toUpperCase();
+  const isClosedStatus = ['COMPLETED', 'CLOSED', 'CANCELED'].includes(statusUpper);
+
+  const myOpenLog = useMemo(() => {
+    if (!currentUserId) return null;
+    const logs = data?.workLogs ?? [];
+    return logs.find((w) => w.userId === currentUserId && !w.endedAt) ?? null;
+  }, [data?.workLogs, currentUserId]);
+
+  const auditTrail = useMemo(() => {
+    const fd = (data?.formData ?? {}) as any;
+    const raw = Array.isArray(fd?._audit) ? (fd._audit as AuditEntry[]) : [];
+    // Mostrar los últimos 8 (más recientes primero)
+    return raw.slice(-8).reverse();
+  }, [data?.formData]);
+
+  function parseApiError(e: any): { status?: number; message: string; payload?: any } {
+    const raw = String(e?.message ?? e ?? '');
+    const m = raw.match(/->\s(\d{3})\s([\s\S]+)$/);
+    if (!m) return { message: raw || 'Error' };
+    const status = Number(m[1]);
+    const tail = m[2];
+    try {
+      const j = JSON.parse(tail);
+      const msg = Array.isArray(j?.message) ? j.message.join('\n') : (j?.message ?? tail);
+      return { status, message: String(msg), payload: j };
+    } catch {
+      return { status, message: tail };
+    }
+  }
+
+
+function applyWorkLogBlockIfPresent(parsed: { status?: number; message: string; payload?: any }) {
+  if (parsed.status !== 409) return false;
+  const p = parsed.payload;
+  if (p?.code !== 'WORKLOG_OPEN_OTHER_OS') return false;
+  const ow = p?.openWorkLog as OpenWorkLogElsewhere | undefined;
+  if (ow?.workOrderId) setOpenElsewhere(ow);
+  setUiInfo(String(p?.message ?? parsed.message));
+  return true;
+}
+
+  async function startMyWorkLog() {
+    if (!id || !auth.token || !auth.tenantSlug) return;
+    if (techBlocked) {
+      setUiInfo('Tienes un WorkLog abierto en otra OS. Debes cerrarlo antes de modificar esta OS.');
+      return;
+    }
+    setUiErr('');
+    setUiInfo('');
+    setBusy(true);
+    try {
+      const resp: any = await apiFetch(`/service-orders/${id}/worklogs/start`, {
+        method: 'POST',
+        token: auth.token,
+        tenantSlug: auth.tenantSlug,
+      });
+      if (resp?._info) setUiInfo(String(resp._info));
+      await mutate();
+    } catch (e: any) {
+      const parsed = parseApiError(e);
+      if (applyWorkLogBlockIfPresent(parsed)) return;
+      if (parsed.status === 403 || parsed.status === 409) setUiInfo(parsed.message);
+      else setUiErr(parsed.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function closeWorkLog(workLogId: string) {
+    if (!id || !auth.token || !auth.tenantSlug) return;
+    if (techBlocked) {
+      setUiInfo('Tienes un WorkLog abierto en otra OS. Debes cerrarlo antes de modificar esta OS.');
+      return;
+    }
+    setUiErr('');
+    setUiInfo('');
+    setBusy(true);
+    try {
+      const resp: any = await apiFetch(`/service-orders/${id}/worklogs/${workLogId}/close`, {
+        method: 'POST',
+        token: auth.token,
+        tenantSlug: auth.tenantSlug,
+      });
+      if (resp?._info) setUiInfo(String(resp._info));
+      await mutate();
+    } catch (e: any) {
+      const parsed = parseApiError(e);
+      if (applyWorkLogBlockIfPresent(parsed)) return;
+      if (parsed.status === 403 || parsed.status === 409) setUiInfo(parsed.message);
+      else setUiErr(parsed.message);
+    } finally {
+      setBusy(false);
+    }
+  }
 
   // Timestamps controlados (para botón "Ahora")
   const [ts, setTs] = useState<Record<TsKey, string>>({
@@ -338,16 +470,36 @@ const canChangeStatus = isAdmin || (role === 'TECH' && isAssignedTech);
 
 
   async function patch(path: string, body: any) {
+    if (techBlocked) {
+      setUiErr('');
+      setUiInfo('Tienes un WorkLog abierto en otra OS. Debes cerrarlo antes de modificar esta OS.');
+      return;
+    }
     setBusy(true);
     setUiErr('');
-              if (editType === 'PREVENTIVO' && !editPmPlanId) {
-                setUiErr('Debes seleccionar un PM Plan para órdenes PREVENTIVO.');
-                setBusy(false);
-                return;
-              }
+    setUiInfo('');
+
+    // Validación (solo cuando el patch incluye PREVENTIVO en el payload)
+    if (body && body.serviceOrderType === 'PREVENTIVO' && !body.pmPlanId) {
+      setUiErr('Debes seleccionar un PM Plan para órdenes PREVENTIVO.');
+      setBusy(false);
+      return;
+    }
+
     try {
-      await apiFetch(path, { method: 'PATCH', token: auth.token!, tenantSlug: auth.tenantSlug!, body });
+      const resp: any = await apiFetch(path, {
+        method: 'PATCH',
+        token: auth.token!,
+        tenantSlug: auth.tenantSlug!,
+        body,
+      });
+      if (resp?._info) setUiInfo(String(resp._info));
       await mutate();
+    } catch (e: any) {
+      const parsed = parseApiError(e);
+      if (applyWorkLogBlockIfPresent(parsed)) return;
+      if (parsed.status === 403 || parsed.status === 409) setUiInfo(parsed.message);
+      else setUiErr(parsed.message);
     } finally {
       setBusy(false);
     }
@@ -368,11 +520,19 @@ async function setTimestamp(key: TsKey, localValue: string) {
     return;
   }
 
+  if (techBlocked) {
+    setUiInfo('Tienes un WorkLog abierto en otra OS. Debes cerrarlo antes de modificar esta OS.');
+    // revert a valor del backend
+    setTs((s) => ({ ...s, [key]: isoToLocal((data as any)[key]) }));
+    return;
+  }
+
   setTs((s) => ({ ...s, [key]: localValue }));
   const iso = localInputToIso(localValue); // '' => null (borrar)
 
   setBusy(true);
   setUiErr('');
+  setUiInfo('');
   try {
     // Backend aplica validaciones + cambios de estado automáticamente
     await apiFetch(`/service-orders/${id}/timestamps`, {
@@ -384,9 +544,11 @@ async function setTimestamp(key: TsKey, localValue: string) {
 
     await mutate();
   } catch (e: any) {
-    setUiErr(e?.message ?? 'Error guardando tiempo');
+    const parsed = parseApiError(e);
+    if (applyWorkLogBlockIfPresent(parsed)) return;
+    if (parsed.status === 403 || parsed.status === 409) setUiInfo(parsed.message);
+    else setUiErr(parsed.message || 'Error guardando tiempo');
     await mutate(); // resync
-    throw e;
   } finally {
     setBusy(false);
   }
@@ -394,23 +556,38 @@ async function setTimestamp(key: TsKey, localValue: string) {
 
 
   async function addPart(item?: InventoryItem) {
+    if (techBlocked) {
+      setUiInfo('Tienes un WorkLog abierto en otra OS. Debes cerrarlo antes de modificar esta OS.');
+      return;
+    }
     const qty = Number(partQty ?? 1);
     if (!isFinite(qty) || qty <= 0) {
       setUiErr('La cantidad debe ser mayor a 0');
       return;
     }
-    await apiFetch(`/service-orders/${id}/parts`, {
-      method: 'POST',
-      token: auth.token!,
-      tenantSlug: auth.tenantSlug!,
-      body: item ? { inventoryItemId: item.id, qty } : { freeText: partQ.trim(), qty },
-    });
-    setPartQ('');
-    setPartQty(1);
-    mutate();
+    try {
+  await apiFetch(`/service-orders/${id}/parts`, {
+    method: 'POST',
+    token: auth.token!,
+    tenantSlug: auth.tenantSlug!,
+    body: item ? { inventoryItemId: item.id, qty } : { freeText: partQ.trim(), qty },
+  });
+  setPartQ('');
+  setPartQty(1);
+  mutate();
+} catch (e: any) {
+  const parsed = parseApiError(e);
+  if (applyWorkLogBlockIfPresent(parsed)) return;
+  if (parsed.status === 403 || parsed.status === 409) setUiInfo(parsed.message);
+  else setUiErr(parsed.message || 'Error agregando repuesto');
+}
   }
 
   async function markPartReplaced(part: Part) {
+    if (techBlocked) {
+      setUiInfo('Tienes un WorkLog abierto en otra OS. Debes cerrarlo antes de modificar esta OS.');
+      return;
+    }
     if (!canChangeStatus) {
       setUiErr('No tienes permisos para marcar repuestos como cambiados');
       return;
@@ -437,19 +614,33 @@ async function setTimestamp(key: TsKey, localValue: string) {
       });
       await mutate();
     } catch (e: any) {
-      setUiErr(e?.message ?? 'Error marcando repuesto como cambiado');
+      const parsed = parseApiError(e);
+      if (applyWorkLogBlockIfPresent(parsed)) return;
+      if (parsed.status === 403 || parsed.status === 409) setUiInfo(parsed.message);
+      else setUiErr(parsed.message || 'Error marcando repuesto como cambiado');
     } finally {
       setBusy(false);
     }
   }
 
   async function removePart(partId: string) {
-    await apiFetch(`/service-orders/${id}/parts/${partId}`, {
-      method: 'DELETE',
-      token: auth.token!,
-      tenantSlug: auth.tenantSlug!,
-    });
-    mutate();
+    if (techBlocked) {
+      setUiInfo('Tienes un WorkLog abierto en otra OS. Debes cerrarlo antes de modificar esta OS.');
+      return;
+    }
+    try {
+  await apiFetch(`/service-orders/${id}/parts/${partId}`, {
+    method: 'DELETE',
+    token: auth.token!,
+    tenantSlug: auth.tenantSlug!,
+  });
+  mutate();
+} catch (e: any) {
+  const parsed = parseApiError(e);
+  if (applyWorkLogBlockIfPresent(parsed)) return;
+  if (parsed.status === 403 || parsed.status === 409) setUiInfo(parsed.message);
+  else setUiErr(parsed.message || 'Error eliminando repuesto');
+}
   }
 
   const fd = data.formData ?? {};
@@ -463,6 +654,23 @@ async function setTimestamp(key: TsKey, localValue: string) {
         <div className="p-3 border rounded bg-red-50 text-red-700 text-sm whitespace-pre-wrap">{uiErr}</div>
       ) : null}
 
+      {uiInfo ? (
+        <div className="p-3 border rounded bg-blue-50 text-blue-700 text-sm whitespace-pre-wrap">{uiInfo}</div>
+      ) : null}
+
+
+{techBlocked ? (
+  <div className="p-3 border rounded bg-amber-50 text-amber-900 text-sm">
+    <div className="font-medium">Tienes un WorkLog abierto en otra OS.</div>
+    <div className="mt-1">
+      <a className="underline" href={`/service-orders/${openElsewhere?.workOrderId}`}>
+        Ir a la OS donde tienes el WorkLog abierto
+      </a>
+      {openElsewhere?.workOrderTitle ? <span className="ml-2">· {openElsewhere.workOrderTitle}</span> : null}
+      {openElsewhere?.startedAt ? <span className="ml-2 text-amber-800">· Inicio: {fmtDateTime(openElsewhere.startedAt)}</span> : null}
+    </div>
+  </div>
+) : null}
       <div className="space-y-1">
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <h1 className="text-xl font-semibold">{data.title}</h1>
@@ -744,7 +952,43 @@ async function setTimestamp(key: TsKey, localValue: string) {
 
 {/* WorkLogs */}
 <section className="border rounded p-4 space-y-3">
-  <h2 className="font-semibold">Work Logs (tiempos por técnico)</h2>
+  <div className="flex items-center justify-between gap-2">
+    <h2 className="font-semibold">Work Logs (tiempos por técnico)</h2>
+
+    <div className="flex items-center gap-2">
+      {/* Iniciar mi WorkLog (técnico auxiliar o técnico principal) */}
+      {(isTech || isAdmin) && !isClosedStatus && !myOpenLog ? (
+        <button
+          type="button"
+          className="px-3 py-2 border rounded whitespace-nowrap disabled:opacity-50"
+          disabled={busy}
+          onClick={startMyWorkLog}
+          title="Iniciar mi WorkLog"
+        >
+          Iniciar mi WorkLog
+        </button>
+      ) : null}
+
+      {/* Cerrar mi WorkLog si está en curso */}
+      {(isTech || isAdmin) && myOpenLog ? (
+        <button
+          type="button"
+          className="px-3 py-2 border rounded whitespace-nowrap disabled:opacity-50"
+          disabled={busy}
+          onClick={() => closeWorkLog(myOpenLog.id)}
+          title="Cerrar mi WorkLog"
+        >
+          Cerrar mi WorkLog
+        </button>
+      ) : null}
+    </div>
+  </div>
+
+  {myOpenLog ? (
+    <div className="text-sm text-amber-800">
+      Tienes un WorkLog en curso desde <span className="font-medium">{fmtDateTime(myOpenLog.startedAt)}</span>.
+    </div>
+  ) : null}
 
   {(data.workLogs ?? []).length > 0 ? (
     <div className="overflow-x-auto">
@@ -755,19 +999,37 @@ async function setTimestamp(key: TsKey, localValue: string) {
             <th className="py-2 pr-4">Inicio</th>
             <th className="py-2 pr-4">Fin</th>
             <th className="py-2 pr-4">Duración</th>
+            <th className="py-2 pr-4">Acciones</th>
           </tr>
         </thead>
         <tbody>
-          {(data.workLogs ?? []).map((wl) => (
-            <tr key={wl.id} className="border-b last:border-b-0">
-              <td className="py-2 pr-4">{wl.user?.name ?? wl.userId}</td>
-              <td className="py-2 pr-4">{fmtDateTime(wl.startedAt)}</td>
-              <td className="py-2 pr-4">
-                {wl.endedAt ? fmtDateTime(wl.endedAt) : <span className="text-amber-700">En curso</span>}
-              </td>
-              <td className="py-2 pr-4">{fmtDuration(wl.startedAt, wl.endedAt ?? null)}</td>
-            </tr>
-          ))}
+          {(data.workLogs ?? []).map((wl) => {
+            const canClose = !wl.endedAt && (isAdmin || (currentUserId && wl.userId === currentUserId));
+            return (
+              <tr key={wl.id} className="border-b last:border-b-0">
+                <td className="py-2 pr-4">{wl.user?.name ?? wl.userId}</td>
+                <td className="py-2 pr-4">{fmtDateTime(wl.startedAt)}</td>
+                <td className="py-2 pr-4">
+                  {wl.endedAt ? fmtDateTime(wl.endedAt) : <span className="text-amber-700">En curso</span>}
+                </td>
+                <td className="py-2 pr-4">{fmtDuration(wl.startedAt, wl.endedAt ?? null)}</td>
+                <td className="py-2 pr-4">
+                  {canClose ? (
+                    <button
+                      type="button"
+                      className="px-3 py-1 border rounded disabled:opacity-50"
+                      disabled={busy}
+                      onClick={() => closeWorkLog(wl.id)}
+                    >
+                      Cerrar
+                    </button>
+                  ) : (
+                    <span className="text-gray-400">—</span>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>
@@ -871,7 +1133,7 @@ async function setTimestamp(key: TsKey, localValue: string) {
             </div>
 
 	            <div className="space-y-2">
-	              <div className="text-sm font-medium">Repuestos necesarios</div>
+	              <div className="text-sm font-medium">Repuestos necesarios (diagnóstico)</div>
 	              {requiredParts.map((p) => (
 	                <div key={p.id} className="flex items-center justify-between border rounded px-3 py-2">
 	                  <div className="text-sm">
@@ -890,7 +1152,7 @@ async function setTimestamp(key: TsKey, localValue: string) {
 	            </div>
 
 	            <div className="space-y-2">
-	              <div className="text-sm font-medium">Repuestos cambiados</div>
+	              <div className="text-sm font-medium">Repuestos cambiados (historial)</div>
 	              {replacedParts.map((p) => (
 	                <div key={p.id} className="flex items-center justify-between border rounded px-3 py-2">
 	                  <div className="text-sm">
@@ -997,6 +1259,28 @@ async function setTimestamp(key: TsKey, localValue: string) {
           <div className="text-sm text-gray-600">Aún no hay reportes generados.</div>
         )}
       </section>
+
+      {/* Nota al pie: quién cambió qué */}
+      {auditTrail.length > 0 ? (
+        <section className="border rounded p-3 text-xs text-gray-600">
+          <div className="font-semibold mb-2">Cambios recientes</div>
+          <ul className="space-y-1">
+            {auditTrail.map((a, idx) => (
+              <li key={idx} className="flex flex-wrap gap-x-2">
+                <span className="font-medium">{a.user?.name ?? a.byUserId}</span>
+                <span className="text-gray-500">{fmtDateTime(a.at)}</span>
+                <span>·</span>
+                <span className="font-mono">{a.field}{a.part ? `.${a.part}` : ''}</span>
+                {a.from !== undefined || a.to !== undefined ? (
+                  <span className="text-gray-500">
+                    {a.from !== undefined ? ` ${String(a.from)}` : ''}{a.to !== undefined ? ` → ${String(a.to)}` : ''}
+                  </span>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
 
       {busy && <div className="text-sm text-gray-600">Guardando...</div>}
     </div>
