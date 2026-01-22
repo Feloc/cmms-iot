@@ -1,0 +1,98 @@
+services:
+  db:
+    image: timescale/timescaledb:2.17.2-pg15
+    container_name: cmms_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      TZ: ${TZ:-America/Bogota}
+    volumes:
+      - /srv/cmms-iot/data/postgres:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    networks:
+      - cmms_net
+
+  api:
+    container_name: cmms_api
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile.prod
+    env_file:
+      - /srv/cmms-iot/env/.env.production
+    environment:
+      NODE_ENV: production
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "${API_PORT:-3001}:3001"
+    volumes:
+      - /srv/cmms-iot/data/attachments:/app/storage/attachments
+      - /srv/cmms-iot/data/uploads:/app/uploads
+    networks:
+      - cmms_net
+
+  web:
+    container_name: cmms_web
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile.prod
+    env_file:
+      - /srv/cmms-iot/env/.env.production
+    environment:
+      NODE_ENV: production
+      API_INTERNAL_URL: "http://api:3001"
+    depends_on:
+      - api
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    networks:
+      - cmms_net
+
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: cmms_mosquitto
+    restart: unless-stopped
+    profiles: ["mqtt"]
+    ports:
+      - "1883:1883"
+    volumes:
+      - /srv/cmms-iot/data/mosquitto/config:/mosquitto/config
+      - /srv/cmms-iot/data/mosquitto/data:/mosquitto/data
+      - /srv/cmms-iot/logs/mosquitto:/mosquitto/log
+    networks:
+      - cmms_net
+
+  ingest:
+    container_name: cmms_ingest
+    restart: unless-stopped
+    profiles: ["mqtt"]
+    build:
+      context: .
+      dockerfile: apps/ingest/Dockerfile
+      target: prod
+    env_file:
+      - /srv/cmms-iot/env/.env.production
+    environment:
+      NODE_ENV: production
+      MQTT_URL: ${MQTT_URL:-mqtt://mosquitto:1883}
+    depends_on:
+      db:
+        condition: service_healthy
+      mosquitto:
+        condition: service_started
+    networks:
+      - cmms_net
+
+networks:
+  cmms_net:
+    name: cmms_net
