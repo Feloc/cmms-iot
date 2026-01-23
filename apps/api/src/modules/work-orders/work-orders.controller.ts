@@ -7,7 +7,6 @@ import { StartWorkDto, PauseWorkDto, StopWorkDto } from './dto/worklog.dto';
 import { UpsertResolutionDto } from "./dto/resolution.dto";
 import { CreatePartDto, UpdatePartDto } from "./dto/part.dto";
 import { CreateMeasurementDto, UpdateMeasurementDto } from "./dto/measurement.dto";
-import { CreateAttachmentDto } from "./dto/attachment.dto";
 import { CreateNoteDto } from "./dto/note.dto";
 
 

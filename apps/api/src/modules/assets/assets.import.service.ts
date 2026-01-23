@@ -4,6 +4,7 @@ import { tenantStorage } from '../../common/tenant-context';
 import * as fs from 'fs';
 import * as crypto from 'crypto';
 import * as XLSX from 'xlsx';
+import type { MulterFile } from '../../common/types/multer-file';
 
 function excelSerialToISO(v: any): string | undefined {
   if (v === null || v === undefined || v === '') return undefined;
@@ -20,7 +21,7 @@ export class AssetsImportService {
   private readonly logger = new Logger(AssetsImportService.name);
   constructor(private readonly prisma: PrismaService) {}
 
-  async handlePreview(file: Express.Multer.File) {
+  async handlePreview(file: MulterFile) {
     const ctx = tenantStorage.getStore();
     const tenantId = ctx?.tenantId;
     if (!tenantId) throw new BadRequestException('No tenant in context');

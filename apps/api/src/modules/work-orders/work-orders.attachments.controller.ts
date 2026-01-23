@@ -14,6 +14,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { randomUUID } from 'crypto';
 import { AttachmentsService } from '../attachments/attachments.service';
+import type { MulterFile } from '../../common/types/multer-file';
 
 // Reutilizamos el mismo directorio que el módulo de attachments
 const STORAGE_DIR = process.env.ATTACHMENTS_DIR || path.resolve('./storage/attachments');
@@ -58,7 +59,7 @@ export class WorkOrderAttachmentsController {
   )
   async upload(
     @Param('workOrderId') workOrderId: string,
-    @UploadedFile() file?: Express.Multer.File,
+    @UploadedFile() file?: MulterFile,
   ) {
     if (!workOrderId) throw new BadRequestException('workOrderId is required');
     if (!file) throw new BadRequestException('file is required');

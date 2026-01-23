@@ -12,6 +12,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { randomUUID } from 'crypto';
 import { AssetsImportService } from './assets.import.service';
+import type { MulterFile } from '../../common/types/multer-file';
 
 const TMP_DIR = process.env.ASSETS_IMPORT_TMP || path.resolve('./storage/tmp/assets-imports');
 fs.mkdirSync(TMP_DIR, { recursive: true });
@@ -33,7 +34,7 @@ export class AssetsImportController {
       limits: { fileSize: 30 * 1024 * 1024 },
     })
   )
-  async preview(@UploadedFile() file?: Express.Multer.File) {
+  async preview(@UploadedFile() file?: MulterFile) {
     if (!file) throw new BadRequestException('file is required');
     return this.svc.handlePreview(file);
   }

@@ -18,6 +18,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { randomUUID } from 'crypto';
 import { AttachmentsService } from './attachments.service';
+import type { MulterFile } from '../../common/types/multer-file';
 
 const STORAGE_DIR = process.env.ATTACHMENTS_DIR || path.resolve('./storage/attachments');
 fs.mkdirSync(STORAGE_DIR, { recursive: true });
@@ -87,7 +88,7 @@ export class AttachmentsController {
     })
   )
   async upload(
-    @UploadedFile() file?: Express.Multer.File,
+    @UploadedFile() file?: MulterFile,
     @Body('entityType') entityType?: 'asset' | 'work_order',
     @Body('entityId') entityId?: string,
     @Body('workOrderId') workOrderId?: string,
