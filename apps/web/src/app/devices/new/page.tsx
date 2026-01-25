@@ -6,8 +6,25 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 
+type SessionLike = {
+  user?: {
+    tenantSlug?: string;
+    accessToken?: string;
+    token?: string;
+  };
+  accessToken?: string;
+  token?: string;
+};
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+
 export default function NewDevicePage() {
   const { data: session } = useSession();
+  const s = session as unknown as SessionLike | null;
+
+  const tenantSlug = s?.user?.tenantSlug;
+  const accessToken = s?.user?.accessToken || s?.accessToken || s?.token || s?.user?.token;
+
   const router = useRouter();
   const [form, setForm] = useState({
     name: '',
@@ -19,14 +36,19 @@ export default function NewDevicePage() {
   const [loading, setLoading] = useState(false);
 
   async function save() {
+    if (!tenantSlug || !accessToken) {
+      alert('Sesión inválida: falta tenant o token');
+      return;
+    }
+
     setLoading(true);
     try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'}/devices`, {
+      const res = await fetch(`${API_BASE}/devices`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${session?.user?.accessToken}`,
-          'x-tenant': session?.user?.tenantSlug || '',
+          Authorization: `Bearer ${accessToken}`,
+          'x-tenant': tenantSlug,
         },
         body: JSON.stringify(form),
       });

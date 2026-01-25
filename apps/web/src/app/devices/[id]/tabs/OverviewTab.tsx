@@ -2,22 +2,40 @@
 import { useEffect, useState } from 'react';
 import { useSession } from 'next-auth/react';
 
+type SessionLike = {
+  user?: {
+    tenantSlug?: string;
+    accessToken?: string;
+    token?: string;
+  };
+  accessToken?: string;
+  token?: string;
+};
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+
 export default function OverviewTab({ deviceId }: { deviceId: string }) {
   const { data: session } = useSession();
+  const s = session as unknown as SessionLike | null;
+
+  const tenantSlug = s?.user?.tenantSlug;
+  const accessToken = s?.user?.accessToken || s?.accessToken || s?.token || s?.user?.token;
+
   const [device, setDevice] = useState<any>(null);
 
   useEffect(() => {
-    if (!session?.user?.tenantSlug) return;
-    fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'}/devices/${deviceId}`, {
+    if (!tenantSlug || !accessToken) return;
+
+    fetch(`${API_BASE}/devices/${deviceId}`, {
       headers: {
-        Authorization: `Bearer ${session.user.accessToken}`,
-        'x-tenant': session.user.tenantSlug,
+        Authorization: `Bearer ${accessToken}`,
+        'x-tenant': tenantSlug,
       },
     })
       .then((r) => r.json())
       .then(setDevice)
       .catch(console.error);
-  }, [deviceId, session]);
+  }, [deviceId, tenantSlug, accessToken]);
 
   if (!device) return <div className="text-sm text-gray-500">Cargando información...</div>;
 

@@ -12,31 +12,42 @@ import {
 } from '@/components/ui/select';
 import { Loader2 } from 'lucide-react';
 
+type SessionLike = {
+  user?: {
+    tenantSlug?: string;
+    accessToken?: string;
+    token?: string;
+  };
+  accessToken?: string;
+  token?: string;
+};
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+
 export default function ConfigTab({ deviceId }: { deviceId: string }) {
   const { data: session } = useSession();
+  const s = session as unknown as SessionLike | null;
+
+  const tenantSlug = s?.user?.tenantSlug;
+  const accessToken = s?.user?.accessToken || s?.accessToken || s?.token || s?.user?.token;
+
   const [device, setDevice] = useState<any>(null);
   const [assets, setAssets] = useState<any[]>([]);
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
 
   async function load() {
-    if (!session?.user?.tenantSlug) return;
+    if (!tenantSlug || !accessToken) return;
     setLoading(true);
-    const headers = {
-      Authorization: `Bearer ${session?.user?.accessToken}`,
-      'x-tenant': session?.user?.tenantSlug || '',
+
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${accessToken}`,
+      'x-tenant': tenantSlug,
     };
 
     try {
-      const d = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'}/devices/${deviceId}`,
-        { headers }
-      ).then((r) => r.json());
-
-      const a = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'}/assets`,
-        { headers }
-      ).then((r) => r.json());
+      const d = await fetch(`${API_BASE}/devices/${deviceId}`, { headers }).then((r) => r.json());
+      const a = await fetch(`${API_BASE}/assets`, { headers }).then((r) => r.json());
 
       setDevice(d);
       setAssets(a.items || []);
@@ -48,25 +59,22 @@ export default function ConfigTab({ deviceId }: { deviceId: string }) {
   }
 
   async function save() {
-    if (!device) return;
+    if (!device || !tenantSlug || !accessToken) return;
     setSaving(true);
 
     try {
-      const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'}/devices/${deviceId}`,
-        {
-          method: 'PATCH',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${session?.user?.accessToken}`,
-            'x-tenant': session?.user?.tenantSlug || '',
-          },
-          body: JSON.stringify({
-            assetId: device.assetId || null,
-            status: device.status,
-          }),
-        }
-      );
+      const res = await fetch(`${API_BASE}/devices/${deviceId}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${accessToken}`,
+          'x-tenant': tenantSlug,
+        },
+        body: JSON.stringify({
+          assetId: device.assetId || null,
+          status: device.status,
+        }),
+      });
 
       if (!res.ok) {
         throw new Error(await res.text());
@@ -83,7 +91,8 @@ export default function ConfigTab({ deviceId }: { deviceId: string }) {
 
   useEffect(() => {
     load();
-  }, [session]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deviceId, tenantSlug, accessToken]);
 
   if (loading)
     return (
@@ -102,9 +111,7 @@ export default function ConfigTab({ deviceId }: { deviceId: string }) {
         <label className="text-sm font-semibold">Activo asociado</label>
         <Select
           value={device.assetId || 'none'}
-          onValueChange={(v) =>
-            setDevice({ ...device, assetId: v === 'none' ? null : v })
-          }
+          onValueChange={(v) => setDevice({ ...device, assetId: v === 'none' ? null : v })}
         >
           <SelectTrigger className="w-full">
             <SelectValue placeholder="Seleccionar activo" />

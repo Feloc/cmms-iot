@@ -1,11 +1,15 @@
-import React, { useEffect, useState } from 'react';
+'use client';
+
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { DateRangePicker } from '@/components/ui/date-range-picker';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
-import { addDays, subDays } from 'date-fns';
+import { subDays } from 'date-fns';
 import { useSession } from 'next-auth/react';
+import type { ValueType, NameType } from 'recharts/types/component/DefaultTooltipContent';
+
 
 interface TelemetryPoint {
   ts: string;
@@ -18,21 +22,53 @@ interface MetricOption {
   label: string;
 }
 
+type SessionLike = {
+  user?: {
+    tenantId?: string;
+    tenantSlug?: string;
+    accessToken?: string;
+    token?: string;
+  };
+  token?: string;
+  accessToken?: string;
+};
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+
 export default function TelemetryTab({ assetId }: { assetId: string }) {
   const { data: session } = useSession();
+  const s = session as unknown as SessionLike | null;
+
+  const token =
+    s?.user?.accessToken ||
+    s?.accessToken ||
+    s?.token ||
+    s?.user?.token ||
+    undefined;
+
+  const tenantSlug = s?.user?.tenantSlug || undefined;
+
   const [metric, setMetric] = useState('temp_c');
   const [bucket, setBucket] = useState<'raw' | '5m'>('5m');
-  const [range, setRange] = useState<{ from: Date; to: Date }>({ from: subDays(new Date(), 1), to: new Date() });
+  const [range, setRange] = useState<{ from: Date; to: Date }>({
+    from: subDays(new Date(), 1),
+    to: new Date(),
+  });
   const [data, setData] = useState<TelemetryPoint[]>([]);
   const [loading, setLoading] = useState(false);
-  const [metrics, setMetrics] = useState<MetricOption[]>([
-    { key: 'temp_c', label: 'Temperatura (°C)' },
-    { key: 'rms_g', label: 'Vibración RMS (g)' },
-    { key: 'speed_rpm', label: 'Velocidad (RPM)' }
-  ]);
+
+  const metrics: MetricOption[] = useMemo(
+    () => [
+      { key: 'temp_c', label: 'Temperatura (°C)' },
+      { key: 'rms_g', label: 'Vibración RMS (g)' },
+      { key: 'speed_rpm', label: 'Velocidad (RPM)' },
+    ],
+    []
+  );
 
   async function loadTelemetry() {
-    if (!assetId || !session?.user?.tenantId) return;
+    if (!assetId || !tenantSlug || !token) return;
+
     setLoading(true);
     try {
       const qs = new URLSearchParams({
@@ -41,17 +77,16 @@ export default function TelemetryTab({ assetId }: { assetId: string }) {
         from: range.from.toISOString(),
         to: range.to.toISOString(),
       });
-      const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'}/assets/${assetId}/telemetry?${qs.toString()}`,
-        {
-          headers: {
-            Authorization: `Bearer ${session?.user?.accessToken}`,
-            'x-tenant': session?.user?.tenantSlug || '',
-          },
+
+      const res = await fetch(`${API_BASE}/assets/${assetId}/telemetry?${qs.toString()}`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'x-tenant': tenantSlug,
         },
-      );
+      });
+
       if (!res.ok) throw new Error(await res.text());
-      const json = await res.json();
+      const json = (await res.json()) as TelemetryPoint[];
       setData(json);
     } catch (err) {
       console.error('Error loading telemetry', err);
@@ -62,7 +97,8 @@ export default function TelemetryTab({ assetId }: { assetId: string }) {
 
   useEffect(() => {
     loadTelemetry();
-  }, [metric, bucket, range]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [assetId, metric, bucket, range, tenantSlug, token]);
 
   return (
     <Card className="w-full">
@@ -81,6 +117,7 @@ export default function TelemetryTab({ assetId }: { assetId: string }) {
               ))}
             </SelectContent>
           </Select>
+
           <Select value={bucket} onValueChange={(v: 'raw' | '5m') => setBucket(v)}>
             <SelectTrigger className="w-28">
               <SelectValue />
@@ -90,23 +127,40 @@ export default function TelemetryTab({ assetId }: { assetId: string }) {
               <SelectItem value="5m">5 min</SelectItem>
             </SelectContent>
           </Select>
+
           <DateRangePicker value={range} onChange={setRange} maxDate={new Date()} />
+
           <Button onClick={loadTelemetry} disabled={loading}>
             {loading ? 'Cargando…' : 'Actualizar'}
           </Button>
         </div>
       </CardHeader>
+
       <CardContent className="h-96">
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={data} margin={{ top: 10, right: 20, left: 10, bottom: 10 }}>
             <CartesianGrid strokeDasharray="3 3" />
-            <XAxis dataKey="ts" tickFormatter={(t) => new Date(t).toLocaleTimeString()} minTickGap={50} />
+            <XAxis
+              dataKey="ts"
+              tickFormatter={(t: string) => new Date(t).toLocaleTimeString()}
+              minTickGap={50}
+            />
             <YAxis />
             <Tooltip
-              labelFormatter={(t) => new Date(t).toLocaleString()}
-              formatter={(v, name, props) => [v, `${metric}${props.payload.unit ? ' (' + props.payload.unit + ')' : ''}`]}
+              labelFormatter={(t: unknown) => new Date(String(t)).toLocaleString()}
+              formatter={(value: ValueType, _name: NameType, props: any): [React.ReactNode, NameType] => {
+                const unit = props?.payload?.unit ? ` (${props.payload.unit})` : '';
+                const label: NameType = `${metric}${unit}`;
+
+                const valueNode: React.ReactNode = Array.isArray(value)
+                  ? value.join(', ')
+                  : (value ?? '-');
+
+                return [valueNode, label];
+              }}
             />
-            <Line type="monotone" dataKey="value" stroke="#2563eb" dot={false} strokeWidth={1.5} />
+
+            <Line type="monotone" dataKey="value" dot={false} strokeWidth={1.5} />
           </LineChart>
         </ResponsiveContainer>
       </CardContent>

@@ -5,9 +5,6 @@ import { AssetsService } from './assets.service';
 import { CreateAssetDto } from './dto/create-asset.dto';
 import { UpdateAssetDto } from './dto/update-asset.dto';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { ImportCommitOptionsDto } from './dto/import.dto';
-
-
 type FindAllQuery = {
   search?: string;
   serial?: string;

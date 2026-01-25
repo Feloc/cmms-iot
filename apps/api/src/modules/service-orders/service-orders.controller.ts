@@ -127,7 +127,7 @@ listImages(@Param('id') id: string) {
   FilesInterceptor('files', 10, {
     storage: memoryStorage(),
     limits: { fileSize: 10 * 1024 * 1024 },
-    fileFilter: (_req, file, cb) => cb(null, !!file?.mimetype?.startsWith('image/')),
+    fileFilter: (_req: any, file: any, cb: any) => cb(null, !!file?.mimetype?.startsWith('image/')),
   }),
 )
 uploadImages(@Param('id') id: string, @UploadedFiles() files: any[]) {
@@ -158,11 +158,11 @@ listAttachments(@Param('id') id: string, @Query('type') type?: string) {
   FilesInterceptor('files', 10, {
     // diskStorage evita cargar archivos grandes (videos) en memoria RAM
     storage: diskStorage({
-      destination: (_req, _file, cb) => {
+      destination: (_req: any, _file: any, cb: any) => {
         const dir = path.join(process.cwd(), 'uploads', 'tmp');
         cb(null, dir);
       },
-      filename: (_req, file, cb) => {
+      filename: (_req: any, file: any, cb: any) => {
         const extRaw = path.extname(String(file?.originalname || '')).toLowerCase();
         const ext = extRaw && extRaw.length <= 10 ? extRaw : '';
         cb(null, `${Date.now()}-${randomUUID()}${ext}`);
@@ -170,7 +170,7 @@ listAttachments(@Param('id') id: string, @Query('type') type?: string) {
     }),
     limits: { fileSize: 500 * 1024 * 1024 }, // 500MB (ajusta según tu caso)
     // Validación fina se hace en el service según "type"
-    fileFilter: (_req, file, cb) => cb(null, !!file),
+    fileFilter: (_req: any, file: any, cb: any) => cb(null, !!file),
   }),
 )
 uploadAttachments(@Param('id') id: string, @Query('type') type: string, @UploadedFiles() files: any[]) {

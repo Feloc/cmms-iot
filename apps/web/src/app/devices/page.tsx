@@ -6,6 +6,16 @@ import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useSession } from 'next-auth/react';
 
+type SessionLike = {
+  user?: {
+    tenantSlug?: string;
+    accessToken?: string;
+    token?: string;
+  };
+  accessToken?: string;
+  token?: string;
+};
+
 interface Device {
   id: string;
   name: string;
@@ -18,25 +28,29 @@ interface Device {
   createdAt: string;
 }
 
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+
 export default function DevicesPage() {
   const { data: session } = useSession();
+  const s = session as unknown as SessionLike | null;
+
+  const tenantSlug = s?.user?.tenantSlug;
+  const accessToken = s?.user?.accessToken || s?.accessToken || s?.token || s?.user?.token;
+
   const [devices, setDevices] = useState<Device[]>([]);
   const [q, setQ] = useState('');
   const [loading, setLoading] = useState(false);
 
   async function load() {
-    if (!session?.user?.tenantSlug) return;
+    if (!tenantSlug || !accessToken) return;
     setLoading(true);
     try {
-      const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'}/devices?q=${encodeURIComponent(q)}`,
-        {
-          headers: {
-            Authorization: `Bearer ${session?.user?.accessToken}`,
-            'x-tenant': session.user.tenantSlug,
-          },
-        }
-      );
+      const res = await fetch(`${API_BASE}/devices?q=${encodeURIComponent(q)}`, {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'x-tenant': tenantSlug,
+        },
+      });
       const json = await res.json();
       setDevices(json.items || []);
     } catch (err) {
@@ -48,7 +62,8 @@ export default function DevicesPage() {
 
   useEffect(() => {
     load();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tenantSlug, accessToken]);
 
   return (
     <Card>
@@ -92,7 +107,9 @@ export default function DevicesPage() {
                   <td className="p-2 text-xs">{d.lastSeenAt ? new Date(d.lastSeenAt).toLocaleString() : '-'}</td>
                   <td className="p-2 text-right">
                     <Link href={`/devices/${d.id}`}>
-                      <Button variant="outline" size="sm">Ver</Button>
+                      <Button variant="outline" size="sm">
+                        Ver
+                      </Button>
                     </Link>
                   </td>
                 </tr>

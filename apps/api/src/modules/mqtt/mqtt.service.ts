@@ -47,6 +47,16 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   async onModuleInit() {
+    // Toggle: in production, MQTT is OFF by default unless MQTT_ENABLED=true
+    const isProd = (process.env.NODE_ENV || '').toLowerCase() === 'production';
+    const enabledRaw = process.env.MQTT_ENABLED;
+    const enabled = enabledRaw == null
+      ? !isProd
+      : ['true', '1', 'yes', 'y', 'on'].includes(String(enabledRaw).toLowerCase());
+    if (!enabled) {
+      this.logger.log('MQTT deshabilitado');
+      return;
+    }
     const url = process.env.MQTT_URL || 'mqtt://localhost:1883';
     this.client = mqtt.connect(url);
 

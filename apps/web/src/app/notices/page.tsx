@@ -6,7 +6,7 @@ import { getAuthFromSession } from "@/lib/auth";
 import { useApiSWR } from "@/lib/swr";
 import { apiFetch } from '@/lib/api';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { useMemo } from "react";
+import { Suspense, useMemo } from "react";
 
 type Notice = {
   id: string;
@@ -23,7 +23,7 @@ type NoticeListResponse = {
   nextCursor?: string;
 };
 
-export default function NoticesPage() {
+function NoticesClient() {
   const { data: session } = useSession();
   const { token, tenantSlug } = getAuthFromSession(session);
   const router = useRouter();
@@ -171,5 +171,15 @@ export default function NoticesPage() {
         </tbody>
       </table>
     </div>
+  );
+}
+
+export default function NoticesPage() {
+  return (
+    <Suspense
+      fallback={<div className="p-6 text-sm text-gray-500">Cargando...</div>}
+    >
+      <NoticesClient />
+    </Suspense>
   );
 }

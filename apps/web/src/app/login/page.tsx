@@ -1,10 +1,10 @@
 "use client";
 
-import { useState, FormEvent } from "react";
+import { useState, FormEvent, Suspense } from "react";
 import { signIn } from "next-auth/react";
 import { useSearchParams, useRouter } from "next/navigation";
 
-export default function LoginPage() {
+function LoginClient() {
   const params = useSearchParams();
   const router = useRouter();
   const error = params.get("error");
@@ -86,5 +86,15 @@ export default function LoginPage() {
         </button>
       </form>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense
+      fallback={<div className="p-6 text-sm text-gray-500">Cargando...</div>}
+    >
+      <LoginClient />
+    </Suspense>
   );
 }

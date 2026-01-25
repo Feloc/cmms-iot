@@ -63,9 +63,8 @@ type CalEvent = {
   so: ServiceOrder;
 };
 
-const DragAndDropCalendar = withDragAndDrop<CalEvent, Resource>(RBCalendar as any) as React.ComponentType<
-  withDragAndDropProps<CalEvent, Resource>
->;
+// ✅ FIX: no tipar el componente con withDragAndDropProps porque en tu versión ese tipo no incluye props base como `localizer`
+const DragAndDropCalendar = withDragAndDrop<CalEvent, Resource>(RBCalendar as any) as any;
 
 const locales = { es };
 
@@ -127,8 +126,6 @@ function statusToStyle(status?: string | null): CSSProperties {
 
 function getRange(date: Date, view: View) {
   if (view === Views.MONTH) {
-    // En MONTH el calendario muestra "relleno" con días de semanas adyacentes.
-    // Si consultamos solo start/end del mes, se pierden eventos en esos días visibles.
     const start = startOfWeek(startOfMonth(date), { weekStartsOn: 1 });
     const end = endOfWeek(endOfMonth(date), { weekStartsOn: 1 });
     return { start: startOfDay(start), end: endOfDay(end) };
@@ -192,18 +189,9 @@ function resolveTargetResourceIdForExistingEvent(args: {
   currentEventResourceId: string;
 }) {
   const direct = normalizeResourceId(args.rawResourceId);
-
-  // Ideal case: RBC entrega el id del recurso destino.
   if (direct && direct !== UNASSIGNED) return direct;
-
-  // Caso problemático observado: a veces RBC entrega UNASSIGNED al soltar sobre un técnico.
-  // Si estamos "hover" en una columna de técnico, priorizamos ese hover.
   if (direct === UNASSIGNED && args.hoverResourceId && args.hoverResourceId !== UNASSIGNED) return args.hoverResourceId;
-
-  // Si no hay info fiable del destino, NO cambiamos el técnico.
   if (!direct) return args.currentEventResourceId || UNASSIGNED;
-
-  // direct === UNASSIGNED y hover también UNASSIGNED: el usuario realmente soltó en "Sin asignar".
   return direct;
 }
 
@@ -244,8 +232,6 @@ export default function CalendarPage() {
     setHoverResourceId(id);
   }
 
-  // Mejora UX: en drag desde "Sin programación", a veces RBC entrega resourceId incorrecto.
-  // Usamos la posición del puntero para inferir la columna (técnico) sobre la que se está soltando.
   function updateHoverResourceFromPointerEvent(e: any) {
     const root = calendarRootRef.current;
     if (!root) return;
@@ -375,7 +361,7 @@ export default function CalendarPage() {
         setView(Views.DAY);
       }
     } catch {
-      // Si el navegador bloquea la API, no hacemos nada.
+      // ignore
     }
   }
 
@@ -473,8 +459,6 @@ export default function CalendarPage() {
       const hoverId = hoverResourceIdRef.current;
       let techTarget = bestResourceId(resourceId, { hoverResourceId: hoverId, onlyTechId });
 
-      // Caso observado: al primer drop desde el panel, RBC a veces reporta UNASSIGNED aunque se suelte sobre un técnico.
-      // Si estamos hover en un técnico, lo respetamos.
       if (techTarget === UNASSIGNED && hoverId && hoverId !== UNASSIGNED) techTarget = hoverId;
 
       const dur = dragSo.durationMin ?? DEFAULT_DURATION_MIN;
@@ -529,14 +513,9 @@ export default function CalendarPage() {
           : 'p-6 space-y-4'
       }
     >
-      {/* Handles de resize (si no importaste el CSS del addon) */}
       <style jsx global>{`
-        .rbc-event {
-          cursor: move;
-        }
-        .rbc-addons-dnd-resizable {
-          position: relative;
-        }
+        .rbc-event { cursor: move; }
+        .rbc-addons-dnd-resizable { position: relative; }
         .rbc-addons-dnd-resizable .rbc-addons-dnd-resize-ns-anchor {
           position: absolute;
           left: 0;
@@ -545,12 +524,8 @@ export default function CalendarPage() {
           cursor: ns-resize;
           z-index: 5;
         }
-        .rbc-addons-dnd-resizable .rbc-addons-dnd-resize-ns-anchor.rbc-addons-dnd-resize-ns-anchor-top {
-          top: -4px;
-        }
-        .rbc-addons-dnd-resizable .rbc-addons-dnd-resize-ns-anchor.rbc-addons-dnd-resize-ns-anchor-bottom {
-          bottom: -4px;
-        }
+        .rbc-addons-dnd-resizable .rbc-addons-dnd-resize-ns-anchor.rbc-addons-dnd-resize-ns-anchor-top { top: -4px; }
+        .rbc-addons-dnd-resizable .rbc-addons-dnd-resize-ns-anchor.rbc-addons-dnd-resize-ns-anchor-bottom { bottom: -4px; }
         .rbc-addons-dnd-resizable .rbc-addons-dnd-resize-ns-anchor:after {
           content: '';
           display: block;
@@ -560,20 +535,10 @@ export default function CalendarPage() {
           background: rgba(0, 0, 0, 0.35);
           border-radius: 2px;
         }
-        .rbc-addons-dnd-resizable {
-          overflow: visible;
-        }
-        .rbc-addons-dnd-resizable .rbc-addons-dnd-resize-ns-anchor {
-          pointer-events: auto;
-          background: transparent;
-        }
-
-        .calendar-fs .rbc-time-content {
-          overflow-y: hidden;
-        }
-        .calendar-fs .rbc-timeslot-group {
-          min-height: 28px;
-        }
+        .rbc-addons-dnd-resizable { overflow: visible; }
+        .rbc-addons-dnd-resizable .rbc-addons-dnd-resize-ns-anchor { pointer-events: auto; background: transparent; }
+        .calendar-fs .rbc-time-content { overflow-y: hidden; }
+        .calendar-fs .rbc-timeslot-group { min-height: 28px; }
       `}</style>
 
       {!isFullscreen ? (
@@ -586,22 +551,14 @@ export default function CalendarPage() {
           </div>
 
           <div className="flex items-center gap-3">
-            <a className="px-3 py-2 border rounded" href="/service-orders">
-              Lista OS
-            </a>
-            <button className="px-3 py-2 border rounded" onClick={() => { loadEvents(); loadUnscheduled(); }}>
-              Actualizar
-            </button>
-            <button className="px-3 py-2 border rounded" onClick={toggleFullscreen}>
-              Pantalla completa
-            </button>
+            <a className="px-3 py-2 border rounded" href="/service-orders">Lista OS</a>
+            <button className="px-3 py-2 border rounded" onClick={() => { loadEvents(); loadUnscheduled(); }}>Actualizar</button>
+            <button className="px-3 py-2 border rounded" onClick={toggleFullscreen}>Pantalla completa</button>
             <select className="border rounded px-2 py-1" value={onlyTechId} onChange={(e) => setOnlyTechId(e.target.value)}>
               <option value="">Todos</option>
               <option value={UNASSIGNED}>Sin asignar</option>
               {techs.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
-                </option>
+                <option key={t.id} value={t.id}>{t.name}</option>
               ))}
             </select>
           </div>
@@ -621,7 +578,6 @@ export default function CalendarPage() {
       )}
 
       <div className={isFullscreen ? 'h-full w-full' : 'grid gap-4 lg:grid-cols-[320px_1fr]'}>
-        {/* Panel lateral */}
         {!isFullscreen ? (
           <div className="border rounded p-3">
             <div className="flex items-center justify-between">
@@ -675,7 +631,6 @@ export default function CalendarPage() {
           </div>
         ) : null}
 
-        {/* Calendario */}
         <div ref={calendarRootRef} className={isFullscreen ? 'h-full w-full' : 'border rounded overflow-visible'}>
           <DndProvider backend={HTML5Backend}>
             <DragAndDropCalendar
@@ -688,7 +643,7 @@ export default function CalendarPage() {
               onView={setView}
               onNavigate={setDate}
               components={{
-                ...(isFullscreen ? { toolbar: Toolbar } : { toolbar: Toolbar }),
+                toolbar: Toolbar,
                 event: (props: any) => <EventBox {...props} view={view} onUnschedule={() => unscheduleSo(props.event.id)} />,
                 timeSlotWrapper: TimeSlotWrapper,
                 dateCellWrapper: DateCellWrapper,
@@ -699,7 +654,7 @@ export default function CalendarPage() {
               resources={resources}
               resourceIdAccessor="id"
               resourceTitleAccessor="title"
-              resourceAccessor={(e) => e.resourceId}
+              resourceAccessor={(e: any) => e.resourceId}
               step={15}
               timeslots={2}
               min={MIN_TIME}
@@ -916,13 +871,13 @@ function EventBox({ event, view, onUnschedule }: { event: CalEvent; view: View; 
           className="h-full"
         >
           <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <div className="leading-tight whitespace-normal break-words">{event.title}</div>
-          <div className="text-[11px] opacity-90 leading-tight whitespace-normal break-words">
-            {[assetName || so.assetCode, assetModel, customer].filter(Boolean).join(' · ')}
-          </div>
-        </div>
-        {Button}
+            <div className="min-w-0">
+              <div className="leading-tight whitespace-normal break-words">{event.title}</div>
+              <div className="text-[11px] opacity-90 leading-tight whitespace-normal break-words">
+                {[assetName || so.assetCode, assetModel, customer].filter(Boolean).join(' · ')}
+              </div>
+            </div>
+            {Button}
           </div>
         </div>
       </div>
@@ -942,14 +897,14 @@ function EventBox({ event, view, onUnschedule }: { event: CalEvent; view: View; 
         className="h-full"
       >
         <div className="flex items-start justify-between gap-2">
-        <div>
-          {serial ? <div style={{ fontWeight: 700 }}>{serial}</div> : null}
-          <div style={{ fontWeight: 700 }}>{[assetName || so.assetCode, assetModel].filter(Boolean).join(' · ')}</div>
-          {customer ? <div style={{ fontSize: 12, opacity: 0.95 }}>{customer}</div> : null}
-          <div style={{ fontWeight: 600 }}>{title}</div>
+          <div>
+            {serial ? <div style={{ fontWeight: 700 }}>{serial}</div> : null}
+            <div style={{ fontWeight: 700 }}>{[assetName || so.assetCode, assetModel].filter(Boolean).join(' · ')}</div>
+            {customer ? <div style={{ fontSize: 12, opacity: 0.95 }}>{customer}</div> : null}
+            <div style={{ fontWeight: 600 }}>{title}</div>
+          </div>
+          {Button}
         </div>
-        {Button}
-      </div>
         {desc ? <div style={{ fontSize: 12, opacity: 0.9 }}>{desc}</div> : null}
       </div>
     </div>

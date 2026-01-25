@@ -14,7 +14,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { randomUUID } from 'crypto';
 import { AttachmentsService } from '../attachments/attachments.service';
-import type { MulterFile } from '../../common/types/multer-file';
+import { MulterFile } from '../../common/multer-file';
 
 // Reutilizamos el mismo directorio que el módulo de attachments
 const STORAGE_DIR = process.env.ATTACHMENTS_DIR || path.resolve('./storage/attachments');
@@ -48,8 +48,8 @@ export class WorkOrderAttachmentsController {
   @UseInterceptors(
     FileInterceptor('file', {
       storage: diskStorage({
-        destination: (_req, _file, cb) => cb(null, STORAGE_DIR),
-        filename: (_req, file, cb) => {
+        destination: (_req: any, _file: any, cb: any) => cb(null, STORAGE_DIR),
+        filename: (_req: any, file: any, cb: any) => {
           const ext = path.extname(file.originalname) || '';
           cb(null, `${randomUUID()}${ext}`);
         },

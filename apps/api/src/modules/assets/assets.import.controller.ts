@@ -12,7 +12,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { randomUUID } from 'crypto';
 import { AssetsImportService } from './assets.import.service';
-import type { MulterFile } from '../../common/types/multer-file';
+import { MulterFile } from '../../common/multer-file';
 
 const TMP_DIR = process.env.ASSETS_IMPORT_TMP || path.resolve('./storage/tmp/assets-imports');
 fs.mkdirSync(TMP_DIR, { recursive: true });
@@ -25,8 +25,8 @@ export class AssetsImportController {
   @UseInterceptors(
     FileInterceptor('file', {
       storage: diskStorage({
-        destination: (_req, _file, cb) => cb(null, TMP_DIR),
-        filename: (_req, file, cb) => {
+        destination: (_req: any, _file: any, cb: any) => cb(null, TMP_DIR),
+        filename: (_req: any, file: any, cb: any) => {
           const ext = path.extname(file.originalname) || '';
           cb(null, `${randomUUID()}${ext}`);
         },

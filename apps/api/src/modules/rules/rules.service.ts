@@ -7,7 +7,7 @@ type Operator = '>' | '>=' | '<' | '<=' | '==' | '!=';
 @Injectable()
 export class RulesService {
   private readonly logger = new Logger(RulesService.name);
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService) { }
 
   /**
    * Evalúa todas las reglas activas para (tenant, asset, sensor) dado el punto recibido.
@@ -26,8 +26,15 @@ export class RulesService {
     value: number,
   ) {
     // 1) Cargar reglas activas para ese asset/sensor/tenant
+    // 1) Cargar reglas activas para ese asset/metric/tenant
+    // En el schema actual, Rule apunta a assetId (relación) y usa "metric" + "params" (JSON)
     const rules = await this.prisma.rule.findMany({
-      where: { tenantId, assetCode, sensor, enabled: true },
+      where: {
+        tenantId,
+        enabled: true,
+        metric: sensor,
+        asset: { is: { tenantId, code: assetCode } },
+      },
       orderBy: { createdAt: 'asc' },
     });
 
@@ -37,55 +44,81 @@ export class RulesService {
 
     for (const rule of rules) {
       try {
-        if (rule.type === 'THRESHOLD') {
-          await this.checkThreshold(
-            {
-              id: rule.id,
-              operator: rule.operator as any,
-              // En tu schema el umbral está en "value"
-              threshold: rule.value ?? undefined
-            },
-            tenantId, assetCode, sensor, ts, value
-          );
-        } else if (rule.type === 'ROC') {
+        const params = (rule.params ?? {}) as any;
+
+        if (rule.kind === 'THRESHOLD') {
+          // Soporta límites min/max definidos en params
+          const max = typeof params.max === 'number' ? params.max : undefined;
+          const min = typeof params.min === 'number' ? params.min : undefined;
+
+          if (typeof max === 'number') {
+            await this.checkThreshold(
+              { id: rule.id, operator: '>', threshold: max, severity: rule.severity as any },
+              tenantId,
+              assetCode,
+              sensor,
+              ts,
+              value,
+            );
+          }
+
+          if (typeof min === 'number') {
+            await this.checkThreshold(
+              { id: rule.id, operator: '<', threshold: min, severity: rule.severity as any },
+              tenantId,
+              assetCode,
+              sensor,
+              ts,
+              value,
+            );
+          }
+        } else if (rule.kind === 'ROC') {
+          const rocLimit = typeof params.rocLimit === 'number' ? params.rocLimit : undefined;
+          const windowSec = typeof params.windowSec === 'number' ? params.windowSec : undefined;
+
           await this.checkRoc(
             {
               id: rule.id,
-              operator: (rule.operator as any) ?? '>',
-              // En schema vi campos: rocValue y windowSec (por los hints de Prisma en tu log)
-              rocDelta: (rule as any).rocValue ?? undefined,
-              rocWindowSec: (rule as any).windowSec ?? undefined
+              operator: '>',
+              rocDelta: rocLimit,
+              rocWindowSec: windowSec,
+              severity: rule.severity as any,
             },
-            tenantId, assetCode, sensor, ts, value
+            tenantId,
+            assetCode,
+            sensor,
+            ts,
+            value,
           );
+        } else if (rule.kind === 'WINDOW_AVG') {
+          // MVP: evaluator de WINDOW_AVG no implementado aún
+          this.logger.debug(`WINDOW_AVG rule ${rule.id} ignored (not implemented)`);
         }
       } catch (err) {
         this.logger.error(
-          `Error evaluando regla ${rule.id} (${(rule as any).type}) ${assetCode}/${sensor}: ${
-            err instanceof Error ? err.message : String(err)
+          `Error evaluando regla ${rule.id} (${(rule as any).kind}) ${assetCode}/${sensor}: ${err instanceof Error ? err.message : String(err)
           }`,
         );
       }
     }
   }
-
   // -----------------------
   // THRESHOLD
   // -----------------------
   private async checkThreshold(
-    rule: {
-      id: string;
-      operator?: Operator; // '>' | '<' | '>=' | '<=' | '==' | '!='
-      threshold?: number;  // valor a comparar
-      message?: string;
-      severity?: string;
-    },
-    tenantId: string,
-    assetCode: string,
-    sensor: string,
-    ts: Date,
-    value: number,
-  ) {
+      rule: {
+        id: string;
+        operator?: Operator; // '>' | '<' | '>=' | '<=' | '==' | '!='
+        threshold?: number;  // valor a comparar
+        message?: string;
+        severity?: string;
+      },
+      tenantId: string,
+      assetCode: string,
+      sensor: string,
+      ts: Date,
+      value: number,
+    ) {
     const op: Operator = (rule.operator as Operator) ?? '>';
     const threshold = Number((rule as any).threshold ?? (rule as any).value);
     if (!Number.isFinite(threshold)) return;
@@ -143,7 +176,7 @@ export class RulesService {
     const useAbs = rule.absolute !== false; // default: true
     const windowSec = this.firstNumber(
       rule.rocWindowSec,
-      (rule as any).windowSec, 
+      (rule as any).windowSec,
       300
     );
 
@@ -259,8 +292,7 @@ export class RulesService {
       });
     } catch (e) {
       this.logger.warn(
-        `No se pudo crear Alert (ajusta campos del modelo si difieren): ${
-          e instanceof Error ? e.message : String(e)
+        `No se pudo crear Alert (ajusta campos del modelo si difieren): ${e instanceof Error ? e.message : String(e)
         }`,
       );
     }
@@ -283,8 +315,7 @@ export class RulesService {
       });
     } catch (e) {
       this.logger.warn(
-        `No se pudo crear Notice (ajusta campos del modelo si difieren): ${
-          e instanceof Error ? e.message : String(e)
+        `No se pudo crear Notice (ajusta campos del modelo si difieren): ${e instanceof Error ? e.message : String(e)
         }`,
       );
     }

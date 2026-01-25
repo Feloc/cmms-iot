@@ -14,8 +14,10 @@ type PartRow = {
 };
 
 export default function PartsTab({ assetId }: { assetId: string }) {
-  const { data, isLoading, error } = useSWR<PartRow[]>(`${API_BASE}/assets/${assetId}/parts`, (url) =>
-    fetch(url, { credentials: 'include' }).then((r) => r.json())
+  const { data, isLoading, error } = useSWR<PartRow[]>(
+    `${API_BASE}/assets/${assetId}/parts`,
+    (url: string): Promise<PartRow[]> =>
+      fetch(url, { credentials: 'include' }).then((r) => r.json() as Promise<PartRow[]>)
   );
 
   if (isLoading) return <div className="text-sm text-gray-500 p-3">Cargando repuestos…</div>;

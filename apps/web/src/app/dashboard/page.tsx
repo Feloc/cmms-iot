@@ -108,13 +108,23 @@ export default function Dashboard() {
   const [days, setDays] = useState<'7' | '30' | '90'>('30');
   const [selectedTechId, setSelectedTechId] = useState<string>('');
 
-  const { data, error, isLoading } = useSWR<Summary>(
-    token && tenantSlug ? [`/dashboard/summary?days=${days}`, token, tenantSlug] : null,
-    ([url, t, slug]) => apiFetch(url, { token: t, tenantSlug: slug }),
-    { refreshInterval: 15000 }
-  );
+  type DashboardKey = readonly [string, string, string];
 
-  const rangeLabel = useMemo(() => {
+  const dashboardKey: DashboardKey | null =
+    token && tenantSlug
+      ? ([`/dashboard/summary?days=${days}`, String(token), String(tenantSlug)] as const)
+      : null;
+
+  const fetchSummary = (args: readonly unknown[]) => {
+    const [url, t, slug] = args as DashboardKey;
+    return apiFetch<Summary>(url, { token: t, tenantSlug: slug });
+  };
+
+  const { data, error, isLoading } = useSWR<Summary>(
+    dashboardKey,
+    fetchSummary,
+    { refreshInterval: 15000 }
+  );const rangeLabel = useMemo(() => {
     if (!data?.range) return '';
     const from = new Date(data.range.from).toLocaleDateString();
     const to = new Date(data.range.to).toLocaleDateString();

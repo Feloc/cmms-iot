@@ -1,0 +1,3 @@
+# Ejemplo de cron (en WSL/Linux) para rotación diaria a las 2:30 AM
+# Edita con: crontab -e
+# 30 2 * * * KEEP_DAYS=30 DRY_RUN=0 /srv/cmms-iot/app/cmms-iot/rotate-backups.sh >> /srv/cmms-iot/backups/rotate.log 2>&1

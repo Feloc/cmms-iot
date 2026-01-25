@@ -204,7 +204,9 @@ async listServiceOrderParts(assetId: string) {
     });
 
     // Enriquecer replacedByUser (ServiceOrderPart no necesariamente tiene relación en todos los clientes)
-    const userIds = Array.from(new Set((rows ?? []).map((r: any) => r.replacedByUserId).filter(Boolean)));
+    const userIds = Array.from(new Set<string>((rows ?? [])
+      .map((r: any) => r.replacedByUserId)
+      .filter((v: unknown): v is string => typeof v === "string" && v.length > 0)));
     const users = userIds.length
       ? await tx.user.findMany({ where: { tenantId, id: { in: userIds } }, select: { id: true, name: true, email: true } })
       : [];

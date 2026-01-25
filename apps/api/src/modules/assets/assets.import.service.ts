@@ -1,10 +1,10 @@
 import { Injectable, BadRequestException, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma.service';
 import { tenantStorage } from '../../common/tenant-context';
+import { MulterFile } from '../../common/multer-file';
 import * as fs from 'fs';
 import * as crypto from 'crypto';
 import * as XLSX from 'xlsx';
-import type { MulterFile } from '../../common/types/multer-file';
 
 function excelSerialToISO(v: any): string | undefined {
   if (v === null || v === undefined || v === '') return undefined;

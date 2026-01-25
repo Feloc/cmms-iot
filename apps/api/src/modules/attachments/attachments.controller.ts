@@ -18,7 +18,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { randomUUID } from 'crypto';
 import { AttachmentsService } from './attachments.service';
-import type { MulterFile } from '../../common/types/multer-file';
+import { MulterFile } from '../../common/multer-file';
 
 const STORAGE_DIR = process.env.ATTACHMENTS_DIR || path.resolve('./storage/attachments');
 fs.mkdirSync(STORAGE_DIR, { recursive: true });
@@ -78,8 +78,8 @@ export class AttachmentsController {
   @UseInterceptors(
     FileInterceptor('file', {
       storage: diskStorage({
-        destination: (_req, _file, cb) => cb(null, STORAGE_DIR),
-        filename: (_req, file, cb) => {
+        destination: (_req: any, _file: any, cb: any) => cb(null, STORAGE_DIR),
+        filename: (_req: any, file: any, cb: any) => {
           const ext = path.extname(file.originalname) || '';
           cb(null, `${randomUUID()}${ext}`);
         },

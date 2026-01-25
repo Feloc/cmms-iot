@@ -12,7 +12,7 @@ export class CreateDeviceDto {
 /** Opcional: si lo pasas, debe existir ese asset */
 @IsOptional()
 @IsString()
-assetId?: string;
+assetId?: string | null;
 
 
 @IsString()

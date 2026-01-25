@@ -12,6 +12,17 @@ export function useApiSWR<T>(
   token?: string,
   tenantSlug?: string
 ) {
-  const key = path && token && tenantSlug ? [path, token, tenantSlug] as const : null;
-  return useSWR<T>(key, ([p, t, s]) => apiFetch<T>(p, { token: t, tenantSlug: s }));
+  type ApiKey = readonly [string, string, string];
+
+  const key: ApiKey | null =
+    path && token && tenantSlug ? ([path, token, tenantSlug] as const) : null;
+
+  // SWR tipa el argumento del fetcher como `unknown[]` para keys tipo tupla,
+  // así que lo afinamos localmente sin cambiar comportamiento.
+  const fetcher = (args: readonly unknown[]) => {
+    const [p, t, s] = args as ApiKey;
+    return apiFetch<T>(p, { token: t, tenantSlug: s });
+  };
+
+  return useSWR<T>(key, fetcher);
 }

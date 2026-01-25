@@ -1,32 +1,46 @@
-# Production build for NestJS API (apps/api) in an npm workspaces monorepo
-FROM node:20-alpine AS deps
+# syntax=docker/dockerfile:1.7
+
+# ===== deps (monorepo workspaces) =====
+FROM node:20-bookworm-slim AS deps
 WORKDIR /app
 
-# Copy root manifests + workspace manifests for proper npm workspace install
+# Copiamos manifests mínimos para cachear npm ci
 COPY package.json package-lock.json ./
-COPY apps/api/package.json apps/api/package.json
-COPY apps/web/package.json apps/web/package.json
-COPY apps/ingest/package.json apps/ingest/package.json
+COPY apps/api/package.json apps/api/
+COPY apps/web/package.json apps/web/
+COPY apps/ingest/package.json apps/ingest/
 
-RUN npm ci --no-audit --no-fund
+RUN --mount=type=cache,target=/root/.npm npm ci --workspaces --include-workspace-root
 
-FROM node:20-alpine AS build
+# ===== build =====
+FROM node:20-bookworm-slim AS build
 WORKDIR /app
-COPY --from=deps /app/node_modules ./node_modules
+COPY --from=deps /app/node_modules /app/node_modules
 COPY . .
 
-# Build only the api workspace
+# Prisma client + build TS
+WORKDIR /app/apps/api
+ARG DATABASE_URL="postgresql://cmms:cmms@db:5432/cmms?schema=public"
+ENV DATABASE_URL=${DATABASE_URL}
+RUN npx prisma generate
+WORKDIR /app
 RUN npm run build -w api
 
-FROM node:20-alpine AS runner
+# ===== runtime =====
+FROM node:20-bookworm-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 
-COPY --from=build /app/node_modules ./node_modules
-COPY --from=build /app/apps/api ./apps/api
+# Dependencias (incluye prisma cli porque hoy está en devDependencies)
+COPY --from=deps /app/node_modules /app/node_modules
 
-WORKDIR /app/apps/api
+# App compilada + prisma schema/migrations
+COPY --from=build /app/apps/api/dist /app/apps/api/dist
+COPY --from=build /app/apps/api/prisma /app/apps/api/prisma
+COPY --from=build /app/apps/api/package.json /app/apps/api/package.json
+
 EXPOSE 3001
 
-# Runs prisma schema sync (migrations if present, otherwise db push) then starts the API
-CMD ["sh", "./scripts/entrypoint.prod.sh"]
+# 1) Aplica migraciones si existen; 2) si NO existen, usa db push (fallback para tu estado actual)
+#    Luego arranca el API.
+CMD ["sh","-lc","if [ -d apps/api/prisma/migrations ] && [ \"$(ls -A apps/api/prisma/migrations 2>/dev/null)\" ]; then echo '[startup] prisma migrate deploy'; npx prisma migrate deploy --schema apps/api/prisma/schema.prisma; else echo '[startup] WARNING: no prisma migrations found -> prisma db push (dev fallback)'; npx prisma db push --schema apps/api/prisma/schema.prisma; fi; node apps/api/dist/main.js"]
