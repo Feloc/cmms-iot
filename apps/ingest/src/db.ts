@@ -35,7 +35,7 @@ function buildPoolConfig() {
 export function createPool() {
   const cfg = buildPoolConfig();
   const pool = new Pool(cfg);
-  pool.on('error', (err) => log.error({ err }, 'pg pool error'));
+  pool.on('error', (err: Error) => log.error({ err }, 'pg pool error'));
   log.info({ mode: process.env.DATABASE_URL ? 'DATABASE_URL' : 'PG_*', host:(cfg as any).host, database:(cfg as any).database, ssl: !!(cfg as any).ssl }, 'pg pool created');
   return pool;
 }
