@@ -12,3 +12,4 @@ apps/*/uploads
 .env
 .env.local
 .env.example
+data

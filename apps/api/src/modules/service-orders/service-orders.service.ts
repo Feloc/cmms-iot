@@ -1533,6 +1533,10 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
       payload.workLogs = enrichedLogs;
     }
 
+    // Adjuntos: snapshot de fotos (filenames). El reporte las carga luego vía /attachments/IMAGE/:filename
+    const imagesResp = await this.listAttachments(serviceOrderId, 'IMAGE');
+    payload.images = Array.isArray((imagesResp as any)?.items) ? (imagesResp as any).items : [];
+
     const created = await this.prisma.$transaction(async (tx) => {
       const last = await tx.workOrderReport.findFirst({
         where: { tenantId, workOrderId: serviceOrderId, audience: audience as any },
