@@ -62,8 +62,7 @@ type Summary = {
     trendCreated: Array<{ day: string; count: number }>;
     trendClosed: Array<{ day: string; count: number }>;
 	    technicianWorkload: Array<{ userId: string; name: string; openAssigned: number }>;
-    technicianPerformance: Array<{ userId: string; name: string; closedInRange: number; workedOrdersInRange: number; totalWorkHours: number; avgWorkHoursPerSO: number | null; avgCycleHours: number | null; avgResponseHours: number | null; onTimeRate: number | null; openAssigned: number; overdueOpenAssigned: number; }>;
-    technicianWeeklyProductivity: Array<{ weekStart: string; userId: string; name: string; closedCount: number; workHours: number }>;
+    technicianPerformance: Array<{ userId: string; name: string; closedInRange: number; workedOrdersInRange: number; totalWorkHours: number; avgWorkHoursPerSO: number | null; availableHours: number; utilizationPct: number | null; avgCycleHours: number | null; avgResponseHours: number | null; onTimeRate: number | null; opentechnicianWeeklyProductivity: Array<{ weekStart: string; userId: string; name: string; closedCount: number; workHours: number; availableHours: number; utilizationPct: number | null }>;ame: string; closedCount: number; workHours: number }>;
     operationalTimes: Array<{ key: string; label: string; count: number; avgHours: number | null; p50Hours: number | null; p90Hours: number | null }>;
   };
 };
@@ -144,6 +143,20 @@ export default function Dashboard() {
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [data?.service.technicianWeeklyProductivity, data?.service.technicianPerformance]);
 
+  const techScoreboard = useMemo(() => {
+    const rows = data?.service.technicianPerformance ?? [];
+    const byClosed = [...rows].sort((a, b) => (b.closedInRange ?? 0) - (a.closedInRange ?? 0));
+    const byUtil = [...rows].sort((a, b) => (b.utilizationPct ?? 0) - (a.utilizationPct ?? 0));
+
+    const topThroughputId = byClosed[0]?.userId;
+    const bottomThroughputId = byClosed.length > 2 ? byClosed[byClosed.length - 1]?.userId : undefined;
+
+    const topUtilId = byUtil[0]?.userId;
+    const bottomUtilId = byUtil.length > 2 ? byUtil[byUtil.length - 1]?.userId : undefined;
+
+    return { topThroughputId, bottomThroughputId, topUtilId, bottomUtilId };
+  }, [data?.service.technicianPerformance]);
+
   useEffect(() => {
     if (!selectedTechId && techOptions.length) {
       setSelectedTechId(techOptions[0].userId);
@@ -162,6 +175,7 @@ export default function Dashboard() {
         week: label,
         closed: r.closedCount,
         hours: r.workHours,
+        utilization: r.utilizationPct ?? (r.availableHours ? Math.round(((r.workHours ?? 0) / r.availableHours) * 1000) / 10 : null),
       };
     });
   }, [data?.service.technicianWeeklyProductivity, selectedTechId]);
@@ -170,8 +184,10 @@ export default function Dashboard() {
     const rows = (data?.service.technicianWeeklyProductivity ?? []).filter(r => r.userId === selectedTechId);
     const closed = rows.reduce((a, b) => a + (b.closedCount ?? 0), 0);
     const hours = rows.reduce((a, b) => a + (b.workHours ?? 0), 0);
+    const available = rows.reduce((a, b) => a + (b.availableHours ?? 0), 0);
     const hrsPerClosed = closed ? Math.round((hours / closed) * 100) / 100 : null;
-    return { closed, hours, hrsPerClosed };
+    const utilizationPct = available ? Math.round((hours / available) * 1000) / 10 : null;
+    return { closed, hours, available, hrsPerClosed, utilizationPct };
   }, [data?.service.technicianWeeklyProductivity, selectedTechId]);
 
   return (
@@ -439,7 +455,9 @@ export default function Dashboard() {
                       <TableHead>Técnico</TableHead>
                       <TableHead className="text-right">OS cerradas</TableHead>
                       <TableHead className="text-right">Horas</TableHead>
+                          <TableHead className="text-right">Utilización</TableHead>
                       <TableHead className="text-right hidden md:table-cell">Hrs/OS</TableHead>
+                      <TableHead className="text-right hidden md:table-cell">Utilización</TableHead>
                       <TableHead className="text-right hidden md:table-cell">Ciclo (h)</TableHead>
                       <TableHead className="text-right hidden md:table-cell">Respuesta (h)</TableHead>
                       <TableHead className="text-right hidden lg:table-cell">% a tiempo</TableHead>
@@ -451,12 +469,21 @@ export default function Dashboard() {
                     {data.service.technicianPerformance.map(r => (
                       <TableRow key={r.userId}>
                         <TableCell className="font-medium">
-                          <Link href={`/service-orders?technicianId=${r.userId}`}>{r.name}</Link>
+                          <div className="flex items-center gap-2">
+                            <Link href={`/service-orders?technicianId=${r.userId}`}>{r.name}</Link>
+                            {r.userId === techScoreboard.topThroughputId ? <Badge variant="secondary">Top OS</Badge> : null}
+                            {r.userId === techScoreboard.topUtilId ? <Badge variant="secondary">Top Util</Badge> : null}
+                            {r.userId === techScoreboard.bottomThroughputId ? <Badge variant="outline">Bajo OS</Badge> : null}
+                            {r.userId === techScoreboard.bottomUtilId ? <Badge variant="outline">Baja Util</Badge> : null}
+                          </div>
                         </TableCell>
                         <TableCell className="text-right">{r.closedInRange}</TableCell>
                         <TableCell className="text-right">{r.totalWorkHours.toFixed(1)}</TableCell>
                         <TableCell className="text-right hidden md:table-cell">
                           {r.avgWorkHoursPerSO == null ? '—' : r.avgWorkHoursPerSO.toFixed(2)}
+                        </TableCell>
+                        <TableCell className="text-right hidden md:table-cell">
+                          {r.utilizationPct == null ? '—' : `${r.utilizationPct}%`}
                         </TableCell>
                         <TableCell className="text-right hidden md:table-cell">
                           {r.avgCycleHours == null ? '—' : r.avgCycleHours.toFixed(1)}
@@ -510,9 +537,10 @@ export default function Dashboard() {
                 <div className="text-sm text-neutral-500">Sin datos en el rango seleccionado.</div>
               ) : (
                 <>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
                     <StatCard title="OS cerradas (semanal)" value={weeklyTechTotals.closed} />
                     <StatCard title="Horas (semanal)" value={weeklyTechTotals.hours.toFixed(1)} />
+                    <StatCard title="Utilización" value={weeklyTechTotals.utilizationPct == null ? '—' : `${weeklyTechTotals.utilizationPct}%`} hint="Horas / horas hábiles (8h/día)" />
                     <StatCard
                       title="Hrs/OS"
                       value={weeklyTechTotals.hrsPerClosed == null ? '—' : weeklyTechTotals.hrsPerClosed.toFixed(2)}
@@ -527,9 +555,11 @@ export default function Dashboard() {
                         <XAxis dataKey="week" tickLine={false} axisLine={false} />
                         <YAxis yAxisId="left" tickLine={false} axisLine={false} allowDecimals={false} />
                         <YAxis yAxisId="right" orientation="right" tickLine={false} axisLine={false} />
+                        <YAxis yAxisId="pct" orientation="right" tickLine={false} axisLine={false} domain={[0, 100]} tickFormatter={(v) => `${v}%`} />
                         <Tooltip />
                         <Bar yAxisId="left" dataKey="closed" name="OS cerradas" fill="#64748b" radius={[6, 6, 0, 0]} />
                         <Line yAxisId="right" type="monotone" dataKey="hours" name="Horas" stroke="#0f172a" strokeWidth={2} />
+                        <Line yAxisId="pct" type="monotone" dataKey="utilization" name="Utilización" stroke="#16a34a" strokeWidth={2} dot={false} />
                       </ComposedChart>
                     </ResponsiveContainer>
                   </div>
@@ -542,6 +572,7 @@ export default function Dashboard() {
                           <TableHead>Semana</TableHead>
                           <TableHead className="text-right">OS cerradas</TableHead>
                           <TableHead className="text-right">Horas</TableHead>
+                          <TableHead className="text-right">Utilización</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
@@ -550,6 +581,7 @@ export default function Dashboard() {
                             <TableCell>{r.week}</TableCell>
                             <TableCell className="text-right">{r.closed}</TableCell>
                             <TableCell className="text-right">{Number(r.hours).toFixed(1)}</TableCell>
+                            <TableCell className="text-right">{r.utilization == null ? '—' : `${Number(r.utilization).toFixed(1)}%`}</TableCell>
                           </TableRow>
                         ))}
                       </TableBody>

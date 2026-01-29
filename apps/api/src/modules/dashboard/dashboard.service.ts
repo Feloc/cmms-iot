@@ -11,6 +11,40 @@ type SummaryArgs = {
 
 const FINAL_STATUSES: WorkOrderStatus[] = ['COMPLETED', 'CLOSED', 'CANCELED'];
 
+function startOfDayUTC(d: Date) {
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 0, 0, 0, 0));
+}
+
+function addDaysUTC(d: Date, days: number) {
+  const nd = new Date(d.getTime());
+  nd.setUTCDate(nd.getUTCDate() + days);
+  return nd;
+}
+
+/** Count business days (Mon-Fri) in [from, to) using UTC dates */
+function businessDaysBetweenUTC(from: Date, to: Date) {
+  const a = startOfDayUTC(from);
+  const b = startOfDayUTC(to);
+  if (a.getTime() >= b.getTime()) return 0;
+
+  let count = 0;
+  for (let cur = a; cur.getTime() < b.getTime(); cur = addDaysUTC(cur, 1)) {
+    const dow = cur.getUTCDay(); // 0 Sun ... 6 Sat
+    if (dow >= 1 && dow <= 5) count++;
+  }
+  return count;
+}
+
+function businessHoursBetweenUTC(from: Date, to: Date, hoursPerDay = 8) {
+  return businessDaysBetweenUTC(from, to) * hoursPerDay;
+}
+
+function round(n: number, digits = 1) {
+  const p = Math.pow(10, digits);
+  return Math.round(n * p) / p;
+}
+
+
 function clampInt(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, Math.trunc(n)));
 }
@@ -276,12 +310,15 @@ export class DashboardService {
         per_tech_work AS (
           SELECT
             l."userId",
-            SUM(EXTRACT(EPOCH FROM ((COALESCE(l."endedAt", c."closedAt")) - l."startedAt")))::float AS "workSeconds",
+            SUM(EXTRACT(EPOCH FROM (LEAST(COALESCE(l."endedAt", ${to}), ${to}) - GREATEST(l."startedAt", ${from}))))::float AS "workSeconds",
             COUNT(DISTINCT l."workOrderId")::int AS "workedOrders"
           FROM "WorkLog" l
-          JOIN closed_orders c ON c."id" = l."workOrderId"
+          JOIN "WorkOrder" w ON w."id" = l."workOrderId"
           WHERE l."tenantId" = ${tenantId}
-            AND l."startedAt" < c."closedAt"
+            AND w."tenantId" = ${tenantId}
+            AND w."kind" = 'SERVICE_ORDER'
+            AND l."startedAt" < ${to}
+            AND COALESCE(l."endedAt", ${to}) > ${from}
           GROUP BY l."userId"
         )
         SELECT
@@ -321,12 +358,15 @@ export class DashboardService {
 
     const openMap = new Map(technicianWorkload.map(t => [t.userId, t.openAssigned]));
     const overdueMap = new Map(overdueRows.map(r => [r.userId, r.overdueOpen]));
+    const rangeBusinessHours = businessHoursBetweenUTC(from, to, 8);
+
 
     const technicianPerformance = techPerfRows.map(r => {
       const totalWorkHours = round((r.workSeconds ?? 0) / 3600, 1);
       const avgCycleHours = r.avgCycleSeconds == null ? null : round(r.avgCycleSeconds / 3600, 1);
       const avgResponseHours = r.avgResponseSeconds == null ? null : round(r.avgResponseSeconds / 3600, 1);
       const avgWorkHoursPerSO = r.closedCount ? round(totalWorkHours / r.closedCount, 2) : null;
+      const utilizationPct = rangeBusinessHours ? round((totalWorkHours / rangeBusinessHours) * 100, 0) : null;
       const onTimeRate = r.dueCount ? round((r.onTimeCount / r.dueCount) * 100, 0) : null;
 
       return {
@@ -336,6 +376,8 @@ export class DashboardService {
         workedOrdersInRange: r.workedOrders,
         totalWorkHours,
         avgWorkHoursPerSO,
+        availableHours: rangeBusinessHours,
+        utilizationPct,
         avgCycleHours,
         avgResponseHours,
         onTimeRate,
@@ -408,13 +450,25 @@ export class DashboardService {
       `
     );
 
-    const technicianWeeklyProductivity = techWeeklyRows.map(r => ({
-      userId: r.userId,
-      name: r.name ?? 'Sin nombre',
-      weekStart: r.weekStart,
-      closedCount: r.closedCount,
-      workHours: round((r.workSeconds ?? 0) / 3600, 1),
-    }));
+    const technicianWeeklyProductivity = techWeeklyRows.map(r => {
+      const ws = new Date(`${r.weekStart}T00:00:00.000Z`);
+      const we = addDaysUTC(ws, 7);
+      const intFrom = from.getTime() > ws.getTime() ? from : ws;
+      const intTo = to.getTime() < we.getTime() ? to : we;
+      const weekBusinessHours = businessHoursBetweenUTC(intFrom, intTo, 8);
+      const workHours = round((r.workSeconds ?? 0) / 3600, 1);
+      const utilizationPct = weekBusinessHours ? round((workHours / weekBusinessHours) * 100, 0) : null;
+
+      return {
+        userId: r.userId,
+        name: r.name ?? 'Sin nombre',
+        weekStart: r.weekStart,
+        closedCount: r.closedCount,
+        workHours,
+        availableHours: weekBusinessHours,
+        utilizationPct,
+      };
+    });
 
     // Tiempos operativos reales (a partir de timestamps de la OS)
     type OpTimesRow = {
