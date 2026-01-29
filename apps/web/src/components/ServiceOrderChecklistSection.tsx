@@ -19,7 +19,31 @@ type ChecklistState = {
   items: ChecklistItem[];
 };
 
-function toChecklistState(template: ChecklistTemplate, existing?: ChecklistState | null, legacyChecked?: Record<string, boolean> | null): ChecklistState {
+type AuditUser = { id: string; name: string; email: string; role: string };
+type AuditEntry = {
+  at: string;
+  byUserId: string;
+  field: string;
+  part?: string | null;
+  from?: any;
+  to?: any;
+  user?: AuditUser | null;
+};
+
+function canonLabel(s: string) {
+  return String(s ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+function toChecklistState(
+  template: ChecklistTemplate,
+  existing?: ChecklistState | null,
+  legacyChecked?: Record<string, boolean> | null,
+): ChecklistState {
   // Reusar existente si corresponde al template
   if (existing?.templateKey === template.key && Array.isArray(existing.items) && existing.items.length) {
     const byLabel = new Map(existing.items.map((i) => [i.label, i]));
@@ -92,6 +116,11 @@ export function ServiceOrderChecklistSection({
   const [notes, setNotes] = useState<string>(initialFormData?.notes ?? '');
   const [result, setResult] = useState<string>(initialFormData?.result ?? '');
 
+  useEffect(() => {
+    setNotes(initialFormData?.notes ?? '');
+    setResult(initialFormData?.result ?? '');
+  }, [initialFormData?.notes, initialFormData?.result]);
+
   const [checklist, setChecklist] = useState<ChecklistState | null>(null);
 
   const resolvedAlistamientoTemplate = useMemo(() => resolveAlistamientoTemplate(asset), [asset.brand, asset.model]);
@@ -131,12 +160,21 @@ export function ServiceOrderChecklistSection({
       const t = preventivoTemplate;
       if (!t) return;
       const existing = getChecklistFromFormData(initialFormData, soType);
-      const legacyChecked = (initialFormData?.checked && typeof initialFormData.checked === 'object') ? (initialFormData.checked as Record<string, boolean>) : null;
+      const legacyChecked =
+        initialFormData?.checked && typeof initialFormData.checked === 'object'
+          ? (initialFormData.checked as Record<string, boolean>)
+          : null;
       setChecklist(toChecklistState(t, existing, legacyChecked));
       return;
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, soType, resolvedAlistamientoTemplate.key, preventivoTemplate?.items?.length]);
+  }, [
+    enabled,
+    soType,
+    initialFormData,
+    resolvedAlistamientoTemplate.key,
+    resolvedAlistamientoTemplate.items.length,
+    preventivoTemplate?.items.length,
+  ]);
 
   async function save() {
     if (!enabled) return;
@@ -179,6 +217,52 @@ export function ServiceOrderChecklistSection({
     return { done, total, reqPending };
   }, [checklist]);
 
+  const checkedByLabel = useMemo(() => {
+    const fd = initialFormData && typeof initialFormData === 'object' ? initialFormData : {};
+    const raw = Array.isArray((fd as any)?._audit) ? ((fd as any)._audit as AuditEntry[]) : [];
+
+    const exact = new Map<string, { name: string; at: string }>();
+    const canon = new Map<string, { name: string; at: string }>();
+    if (!raw.length) return { exact, canon };
+
+    const acceptKeys = Array.from(
+      new Set(
+        [soType, checklist?.templateKey, soType === 'PREVENTIVO' ? 'PM_PLAN' : null, soType === 'ALISTAMIENTO' ? resolvedAlistamientoTemplate.key : null]
+          .filter(Boolean)
+          .map((k) => String(k)),
+      ),
+    );
+    const acceptKeysLc = new Set(acceptKeys.map((k) => k.toLowerCase()));
+    const suffix = '.done';
+
+    // raw está en orden cronológico; recorremos al revés para quedarnos con el último "check" por item.
+    for (let i = raw.length - 1; i >= 0; i--) {
+      const a = raw[i];
+      if (!a || a.field !== 'formData') continue;
+      const part = typeof a.part === 'string' ? a.part : '';
+      if (!part.toLowerCase().startsWith('checklists.') || !part.endsWith(suffix)) continue;
+      if (!(a.to === true || a.to === 'true' || a.to === 1 || a.to === '1')) continue; // solo cuando queda marcado
+
+      const withoutSuffix = part.slice(0, part.length - suffix.length); // checklists.<key>.<label>
+      const rest = withoutSuffix.slice('checklists.'.length);
+      const dot = rest.indexOf('.');
+      if (dot <= 0) continue;
+      const key = rest.slice(0, dot);
+      if (!acceptKeysLc.has(key.toLowerCase())) continue;
+
+      const label = rest.slice(dot + 1);
+      if (!label) continue;
+      if (exact.has(label)) continue;
+
+      const meta = { name: (a.user?.name ?? a.byUserId) as string, at: a.at };
+      exact.set(label, meta);
+      const c = canonLabel(label);
+      if (c && !canon.has(c)) canon.set(c, meta);
+    }
+
+    return { exact, canon };
+  }, [initialFormData, soType, checklist?.templateKey, resolvedAlistamientoTemplate.key]);
+
   if (!enabled) return null;
 
   return (
@@ -186,11 +270,11 @@ export function ServiceOrderChecklistSection({
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
           <div className="text-sm font-medium">
-            {soType === 'ALISTAMIENTO'
-              ? `Alistamiento · ${resolvedAlistamientoTemplate.name}`
-              : 'Preventivo · PM Plan'}
+            {soType === 'ALISTAMIENTO' ? `Alistamiento · ${resolvedAlistamientoTemplate.name}` : 'Preventivo · PM Plan'}
           </div>
-          <div className="text-xs text-gray-600">Marca: {asset.brand ?? '-'} · Modelo: {asset.model ?? '-'}</div>
+          <div className="text-xs text-gray-600">
+            Marca: {asset.brand ?? '-'} · Modelo: {asset.model ?? '-'}
+          </div>
         </div>
 
         <div className="text-xs text-gray-700">
@@ -207,45 +291,52 @@ export function ServiceOrderChecklistSection({
       {err ? <div className="text-sm text-red-700 bg-red-50 border rounded p-2">{err}</div> : null}
 
       <div className="space-y-2">
-        {(checklist?.items ?? []).map((it, idx) => (
-          <div key={idx} className="border rounded p-2">
-            <label className="flex items-start gap-2">
-              <input
-                type="checkbox"
-                className="mt-1"
-                checked={!!it.done}
-                onChange={(e) => {
-                  const done = e.target.checked;
-                  setChecklist((s) => {
-                    if (!s) return s;
-                    const items = [...s.items];
-                    items[idx] = { ...items[idx], done };
-                    return { ...s, items };
-                  });
-                }}
-              />
-              <div className="flex-1">
-                <div className="text-sm font-medium">
-                  {it.label} {it.required ? <span className="text-xs text-red-600">(requerido)</span> : null}
-                </div>
+        {(checklist?.items ?? []).map((it, idx) => {
+          const meta = it.done
+            ? (checkedByLabel.exact.get(it.label) ?? checkedByLabel.canon.get(canonLabel(it.label)))
+            : null;
+
+          return (
+            <div key={idx} className="border rounded p-2">
+              <label className="flex items-start gap-2">
                 <input
-                  className="mt-1 w-full border rounded px-2 py-1 text-sm"
-                  placeholder="Nota / lectura / comentario (opcional)"
-                  value={it.notes ?? ''}
+                  type="checkbox"
+                  className="mt-1"
+                  checked={!!it.done}
                   onChange={(e) => {
-                    const notes = e.target.value;
+                    const done = e.target.checked;
                     setChecklist((s) => {
                       if (!s) return s;
                       const items = [...s.items];
-                      items[idx] = { ...items[idx], notes };
+                      items[idx] = { ...items[idx], done };
                       return { ...s, items };
                     });
                   }}
                 />
-              </div>
-            </label>
-          </div>
-        ))}
+                <div className="flex-1">
+                  <div className="text-sm font-medium">
+                    {it.label} {it.required ? <span className="text-xs text-red-600">(requerido Nombre)</span> : null}
+                    {meta?.name ? <span className="text-xs text-gray-600"> · {meta.name}</span> : null}
+                  </div>
+                  <input
+                    className="mt-1 w-full border rounded px-2 py-1 text-sm"
+                    placeholder="Nota / lectura / comentario (opcional)"
+                    value={it.notes ?? ''}
+                    onChange={(e) => {
+                      const notes = e.target.value;
+                      setChecklist((s) => {
+                        if (!s) return s;
+                        const items = [...s.items];
+                        items[idx] = { ...items[idx], notes };
+                        return { ...s, items };
+                      });
+                    }}
+                  />
+                </div>
+              </label>
+            </div>
+          );
+        })}
       </div>
 
       {/* Observaciones + resultado visibles para ALISTAMIENTO y PREVENTIVO */}
@@ -277,6 +368,7 @@ export function ServiceOrderChecklistSection({
           className="px-3 py-2 border rounded bg-black text-white disabled:opacity-50"
           disabled={saving || !auth.token || !auth.tenantSlug}
           onClick={save}
+          type="button"
         >
           {saving ? 'Guardando…' : 'Guardar'}
         </button>
