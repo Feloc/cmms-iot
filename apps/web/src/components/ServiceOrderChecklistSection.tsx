@@ -111,15 +111,17 @@ export function ServiceOrderChecklistSection({
 
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string>('');
+  const [dirty, setDirty] = useState(false);
 
   // Guardamos en formData.notes + formData.result (para alinear con el detalle actual)
   const [notes, setNotes] = useState<string>(initialFormData?.notes ?? '');
   const [result, setResult] = useState<string>(initialFormData?.result ?? '');
 
   useEffect(() => {
+    if (dirty) return;
     setNotes(initialFormData?.notes ?? '');
     setResult(initialFormData?.result ?? '');
-  }, [initialFormData?.notes, initialFormData?.result]);
+  }, [dirty, initialFormData?.notes, initialFormData?.result]);
 
   const [checklist, setChecklist] = useState<ChecklistState | null>(null);
 
@@ -148,6 +150,7 @@ export function ServiceOrderChecklistSection({
   // Inicializa checklist desde formData
   useEffect(() => {
     if (!enabled) return;
+    if (dirty) return;
 
     if (soType === 'ALISTAMIENTO') {
       const t = resolvedAlistamientoTemplate;
@@ -169,6 +172,7 @@ export function ServiceOrderChecklistSection({
     }
   }, [
     enabled,
+    dirty,
     soType,
     initialFormData,
     resolvedAlistamientoTemplate.key,
@@ -179,6 +183,10 @@ export function ServiceOrderChecklistSection({
   async function save() {
     if (!enabled) return;
     if (!auth.token || !auth.tenantSlug) return;
+    if (!checklist) {
+      setErr('Checklist no inicializado (recarga la OS e intenta de nuevo).');
+      return;
+    }
 
     setSaving(true);
     setErr('');
@@ -202,6 +210,7 @@ export function ServiceOrderChecklistSection({
       });
 
       onSaved?.(nextFormData);
+      setDirty(false);
     } catch (e: any) {
       setErr(e?.message ?? 'No se pudo guardar');
     } finally {
@@ -305,6 +314,7 @@ export function ServiceOrderChecklistSection({
                   checked={!!it.done}
                   onChange={(e) => {
                     const done = e.target.checked;
+                    setDirty(true);
                     setChecklist((s) => {
                       if (!s) return s;
                       const items = [...s.items];
@@ -315,7 +325,7 @@ export function ServiceOrderChecklistSection({
                 />
                 <div className="flex-1">
                   <div className="text-sm font-medium">
-                    {it.label} {it.required ? <span className="text-xs text-red-600">(requerido Nombre)</span> : null}
+                    {it.label} {it.required ? <span className="text-xs text-red-600">(requerido N)</span> : null}
                     {meta?.name ? <span className="text-xs text-gray-600"> · {meta.name}</span> : null}
                   </div>
                   <input
@@ -324,6 +334,7 @@ export function ServiceOrderChecklistSection({
                     value={it.notes ?? ''}
                     onChange={(e) => {
                       const notes = e.target.value;
+                      setDirty(true);
                       setChecklist((s) => {
                         if (!s) return s;
                         const items = [...s.items];
@@ -347,7 +358,10 @@ export function ServiceOrderChecklistSection({
             className="w-full border rounded px-2 py-1"
             placeholder="Ej: Aprobado / Requiere ajuste"
             value={result}
-            onChange={(e) => setResult(e.target.value)}
+            onChange={(e) => {
+              setDirty(true);
+              setResult(e.target.value);
+            }}
           />
         </div>
 
@@ -358,7 +372,10 @@ export function ServiceOrderChecklistSection({
             rows={3}
             placeholder="Observaciones del técnico…"
             value={notes}
-            onChange={(e) => setNotes(e.target.value)}
+            onChange={(e) => {
+              setDirty(true);
+              setNotes(e.target.value);
+            }}
           />
         </div>
       </div>
