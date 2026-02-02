@@ -325,7 +325,7 @@ export function ServiceOrderChecklistSection({
                 />
                 <div className="flex-1">
                   <div className="text-sm font-medium">
-                    {it.label} {it.required ? <span className="text-xs text-red-600">(requerido N)</span> : null}
+                    {it.label} {it.required ? <span className="text-xs text-red-600">(requerido)</span> : null}
                     {meta?.name ? <span className="text-xs text-gray-600"> · {meta.name}</span> : null}
                   </div>
                   <input

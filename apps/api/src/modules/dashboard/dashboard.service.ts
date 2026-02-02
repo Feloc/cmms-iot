@@ -470,6 +470,198 @@ export class DashboardService {
       };
     });
 
+
+// Efectivo vs pausas (WorkLogs): por técnico y por tipo de OS
+type TechEffPauseRow = {
+  userId: string;
+  name: string | null;
+  workSeconds: number;
+  spanSeconds: number;
+  pauseCount: number;
+  osCount: number;
+  segmentsCount: number;
+};
+
+const techEffPauseRows = await this.prisma.$queryRaw<TechEffPauseRow[]>(
+  Prisma.sql`
+    WITH logs AS (
+      SELECT
+        l."userId",
+        l."workOrderId",
+        GREATEST(l."startedAt", ${from}) AS s,
+        LEAST(COALESCE(l."endedAt", ${to}), ${to}) AS e
+      FROM "WorkLog" l
+      JOIN "WorkOrder" w ON w."id" = l."workOrderId"
+      WHERE l."tenantId" = ${tenantId}
+        AND w."tenantId" = ${tenantId}
+        AND w."kind" = 'SERVICE_ORDER'
+        AND l."startedAt" < ${to}
+        AND COALESCE(l."endedAt", ${to}) > ${from}
+    ),
+    logs_valid AS (
+      SELECT * FROM logs WHERE e > s
+    ),
+    per_os AS (
+      SELECT
+        "userId",
+        "workOrderId",
+        MIN(s) AS min_s,
+        MAX(e) AS max_e,
+        COUNT(*)::int AS segments
+      FROM logs_valid
+      GROUP BY "userId", "workOrderId"
+    ),
+    per_user_span AS (
+      SELECT
+        "userId",
+        SUM(EXTRACT(EPOCH FROM (max_e - min_s)))::float AS "spanSeconds",
+        SUM(GREATEST(segments - 1, 0))::int AS "pauseCount",
+        COUNT(*)::int AS "osCount"
+      FROM per_os
+      GROUP BY "userId"
+    ),
+    per_user_work AS (
+      SELECT
+        "userId",
+        SUM(EXTRACT(EPOCH FROM (e - s)))::float AS "workSeconds",
+        COUNT(*)::int AS "segmentsCount"
+      FROM logs_valid
+      GROUP BY "userId"
+    )
+    SELECT
+      u."id" AS "userId",
+      u."name" AS "name",
+      COALESCE(w."workSeconds", 0)::float AS "workSeconds",
+      COALESCE(s."spanSeconds", 0)::float AS "spanSeconds",
+      COALESCE(s."pauseCount", 0)::int AS "pauseCount",
+      COALESCE(s."osCount", 0)::int AS "osCount",
+      COALESCE(w."segmentsCount", 0)::int AS "segmentsCount"
+    FROM per_user_work w
+    JOIN "User" u
+      ON u."id" = w."userId"
+     AND u."tenantId" = ${tenantId}
+    LEFT JOIN per_user_span s ON s."userId" = w."userId"
+    ORDER BY "workSeconds" DESC;
+  `
+);
+
+const technicianEffectiveVsPauses = techEffPauseRows.map(r => {
+  const effectiveHours = round((r.workSeconds ?? 0) / 3600, 1);
+  const spanHours = round((r.spanSeconds ?? 0) / 3600, 1);
+  const pauseSeconds = Math.max(0, (r.spanSeconds ?? 0) - (r.workSeconds ?? 0));
+  const pauseHours = round(pauseSeconds / 3600, 1);
+
+  const effectivePct = r.spanSeconds ? round(((r.workSeconds ?? 0) / r.spanSeconds) * 100, 0) : null;
+  const avgEffectiveHoursPerOS = r.osCount ? round(effectiveHours / r.osCount, 2) : null;
+  const avgPauseHoursPerOS = r.osCount ? round(pauseHours / r.osCount, 2) : null;
+
+  return {
+    userId: r.userId,
+    name: r.name ?? 'Sin nombre',
+    osWorkedInRange: r.osCount ?? 0,
+    workLogsCount: r.segmentsCount ?? 0,
+    pauseCount: r.pauseCount ?? 0,
+    effectiveHours,
+    spanHours,
+    pauseHours,
+    effectivePct,
+    avgEffectiveHoursPerOS,
+    avgPauseHoursPerOS,
+  };
+});
+
+type TypeEffPauseRow = {
+  serviceOrderType: string;
+  workSeconds: number;
+  spanSeconds: number;
+  pauseCount: number;
+  osCount: number;
+  segmentsCount: number;
+};
+
+const typeEffPauseRows = await this.prisma.$queryRaw<TypeEffPauseRow[]>(
+  Prisma.sql`
+    WITH logs AS (
+      SELECT
+        COALESCE(w."serviceOrderType"::text, 'UNSPECIFIED') AS "serviceOrderType",
+        l."workOrderId",
+        GREATEST(l."startedAt", ${from}) AS s,
+        LEAST(COALESCE(l."endedAt", ${to}), ${to}) AS e
+      FROM "WorkLog" l
+      JOIN "WorkOrder" w ON w."id" = l."workOrderId"
+      WHERE l."tenantId" = ${tenantId}
+        AND w."tenantId" = ${tenantId}
+        AND w."kind" = 'SERVICE_ORDER'
+        AND l."startedAt" < ${to}
+        AND COALESCE(l."endedAt", ${to}) > ${from}
+    ),
+    logs_valid AS (
+      SELECT * FROM logs WHERE e > s
+    ),
+    per_os AS (
+      SELECT
+        "serviceOrderType",
+        "workOrderId",
+        MIN(s) AS min_s,
+        MAX(e) AS max_e,
+        COUNT(*)::int AS segments
+      FROM logs_valid
+      GROUP BY "serviceOrderType", "workOrderId"
+    ),
+    per_type_span AS (
+      SELECT
+        "serviceOrderType",
+        SUM(EXTRACT(EPOCH FROM (max_e - min_s)))::float AS "spanSeconds",
+        SUM(GREATEST(segments - 1, 0))::int AS "pauseCount",
+        COUNT(*)::int AS "osCount"
+      FROM per_os
+      GROUP BY "serviceOrderType"
+    ),
+    per_type_work AS (
+      SELECT
+        "serviceOrderType",
+        SUM(EXTRACT(EPOCH FROM (e - s)))::float AS "workSeconds",
+        COUNT(*)::int AS "segmentsCount"
+      FROM logs_valid
+      GROUP BY "serviceOrderType"
+    )
+    SELECT
+      w."serviceOrderType" AS "serviceOrderType",
+      COALESCE(w."workSeconds", 0)::float AS "workSeconds",
+      COALESCE(s."spanSeconds", 0)::float AS "spanSeconds",
+      COALESCE(s."pauseCount", 0)::int AS "pauseCount",
+      COALESCE(s."osCount", 0)::int AS "osCount",
+      COALESCE(w."segmentsCount", 0)::int AS "segmentsCount"
+    FROM per_type_work w
+    LEFT JOIN per_type_span s ON s."serviceOrderType" = w."serviceOrderType"
+    ORDER BY "workSeconds" DESC;
+  `
+);
+
+const workTimeByServiceOrderType = typeEffPauseRows.map(r => {
+  const effectiveHours = round((r.workSeconds ?? 0) / 3600, 1);
+  const spanHours = round((r.spanSeconds ?? 0) / 3600, 1);
+  const pauseSeconds = Math.max(0, (r.spanSeconds ?? 0) - (r.workSeconds ?? 0));
+  const pauseHours = round(pauseSeconds / 3600, 1);
+
+  const effectivePct = r.spanSeconds ? round(((r.workSeconds ?? 0) / r.spanSeconds) * 100, 0) : null;
+  const avgEffectiveHoursPerOS = r.osCount ? round(effectiveHours / r.osCount, 2) : null;
+  const avgPauseHoursPerOS = r.osCount ? round(pauseHours / r.osCount, 2) : null;
+
+  return {
+    serviceOrderType: r.serviceOrderType,
+    osWorkedInRange: r.osCount ?? 0,
+    workLogsCount: r.segmentsCount ?? 0,
+    pauseCount: r.pauseCount ?? 0,
+    effectiveHours,
+    spanHours,
+    pauseHours,
+    effectivePct,
+    avgEffectiveHoursPerOS,
+    avgPauseHoursPerOS,
+  };
+});
+
     // Tiempos operativos reales (a partir de timestamps de la OS)
     type OpTimesRow = {
       travel_count: number;
@@ -655,6 +847,8 @@ export class DashboardService {
         technicianWorkload,
         technicianPerformance,
         technicianWeeklyProductivity,
+        technicianEffectiveVsPauses,
+        workTimeByServiceOrderType,
         operationalTimes,
       },
     };
