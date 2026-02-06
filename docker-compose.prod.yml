@@ -9,18 +9,19 @@ services:
       POSTGRES_DB: ${POSTGRES_DB}
       TZ: ${TZ:-America/Bogota}
     volumes:
-      - /srv/cmms-iot/data/postgres:/var/lib/postgresql/data
-      - ./db/init:/docker-entrypoint-initdb.d:ro
+    - ../../data/postgres:/var/lib/postgresql/data
+    - ./db/init:/docker-entrypoint-initdb.d:ro
     ports:
-      - "127.0.0.1:5432:5432"
+    - 127.0.0.1:5432:5432
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      test:
+      - CMD-SHELL
+      - pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}
       interval: 10s
       timeout: 5s
       retries: 20
     networks:
-      - cmms_net
-
+    - cmms_net
   api:
     container_name: cmms_api
     restart: unless-stopped
@@ -28,20 +29,19 @@ services:
       context: .
       dockerfile: apps/api/Dockerfile.prod
     env_file:
-      - /srv/cmms-iot/env/.env.production
+    - /srv/cmms-iot/env/.env.production
     environment:
       NODE_ENV: production
     depends_on:
       db:
         condition: service_healthy
     ports:
-      - "${API_PORT:-3001}:3001"
+    - ${API_PORT:-3001}:3001
     volumes:
-      - /srv/cmms-iot/data/attachments:/app/storage/attachments
-      - /srv/cmms-iot/data/uploads:/app/uploads
+    - /srv/cmms-iot/data/attachments:/app/storage/attachments
+    - /srv/cmms-iot/data/uploads:/app/uploads
     networks:
-      - cmms_net
-
+    - cmms_net
   web:
     container_name: cmms_web
     restart: unless-stopped
@@ -49,44 +49,46 @@ services:
       context: .
       dockerfile: apps/web/Dockerfile.prod
       args:
-        - NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
+        NEXTAUTH_URL: ${NEXTAUTH_URL}
     env_file:
-      - /srv/cmms-iot/env/.env.production
+    - /srv/cmms-iot/env/.env.production
     environment:
       NODE_ENV: production
-      API_INTERNAL_URL: "http://api:3001"
+      API_INTERNAL_URL: http://api:3001
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
+      NEXTAUTH_URL: ${NEXTAUTH_URL}
     depends_on:
-      - api
+    - api
     ports:
-      - "${WEB_PORT:-3000}:3000"
+    - ${WEB_PORT:-3000}:3000
     networks:
-      - cmms_net
-
+    - cmms_net
   mosquitto:
     image: eclipse-mosquitto:2
     container_name: cmms_mosquitto
     restart: unless-stopped
-    profiles: ["mqtt"]
+    profiles:
+    - mqtt
     ports:
-      - "1883:1883"
+    - 1883:1883
     volumes:
-      - /srv/cmms-iot/data/mosquitto/config:/mosquitto/config
-      - /srv/cmms-iot/data/mosquitto/data:/mosquitto/data
-      - /srv/cmms-iot/logs/mosquitto:/mosquitto/log
+    - ../../data/mosquitto/config:/mosquitto/config
+    - ../../data/mosquitto/data:/mosquitto/data
+    - ../../logs/mosquitto:/mosquitto/log
     networks:
-      - cmms_net
-
+    - cmms_net
   ingest:
     container_name: cmms_ingest
     restart: unless-stopped
-    profiles: ["mqtt"]
+    profiles:
+    - mqtt
     build:
       context: .
       dockerfile: apps/ingest/Dockerfile
       target: prod
     env_file:
-      - /srv/cmms-iot/env/.env.production
+    - /srv/cmms-iot/env/.env.production
     environment:
       NODE_ENV: production
       MQTT_URL: ${MQTT_URL:-mqtt://mosquitto:1883}
@@ -96,8 +98,7 @@ services:
       mosquitto:
         condition: service_started
     networks:
-      - cmms_net
-
+    - cmms_net
 networks:
   cmms_net:
     name: cmms_net
