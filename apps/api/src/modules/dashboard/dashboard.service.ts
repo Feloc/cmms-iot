@@ -767,7 +767,8 @@ const workTimeByServiceOrderType = typeEffPauseRows.map(r => {
     const operationalTimes = [
       {
         key: 'travel',
-        label: 'takenAt → arrivedAt (desplazamiento)',
+        label: 'Desplazamiento',
+        span: 'takenAt → arrivedAt',
         count: opRow?.travel_count ?? 0,
         avgHours: secToHours(opRow?.travel_avg_s ?? null),
         p50Hours: secToHours(opRow?.travel_p50_s ?? null),
@@ -775,7 +776,8 @@ const workTimeByServiceOrderType = typeEffPauseRows.map(r => {
       },
       {
         key: 'intake',
-        label: 'arrivedAt → checkInAt (proceso de ingreso)',
+        label: 'Proceso de ingreso',
+        span: 'arrivedAt → checkInAt',
         count: opRow?.intake_count ?? 0,
         avgHours: secToHours(opRow?.intake_avg_s ?? null),
         p50Hours: secToHours(opRow?.intake_p50_s ?? null),
@@ -783,7 +785,8 @@ const workTimeByServiceOrderType = typeEffPauseRows.map(r => {
       },
       {
         key: 'handover',
-        label: 'checkInAt → activityStartedAt (entrega del equipo)',
+        label: 'Entrega del equipo',
+        span: 'checkInAt → activityStartedAt',
         count: opRow?.handover_count ?? 0,
         avgHours: secToHours(opRow?.handover_avg_s ?? null),
         p50Hours: secToHours(opRow?.handover_p50_s ?? null),
@@ -791,7 +794,8 @@ const workTimeByServiceOrderType = typeEffPauseRows.map(r => {
       },
       {
         key: 'onsite',
-        label: 'activityStartedAt → activityFinishedAt (trabajo en sitio)',
+        label: 'Trabajo en sitio',
+        span: 'activityStartedAt → activityFinishedAt',
         count: opRow?.onsite_count ?? 0,
         avgHours: secToHours(opRow?.onsite_avg_s ?? null),
         p50Hours: secToHours(opRow?.onsite_p50_s ?? null),
@@ -799,7 +803,8 @@ const workTimeByServiceOrderType = typeEffPauseRows.map(r => {
       },
       {
         key: 'wrapup',
-        label: 'activityFinishedAt → deliveredAt (o completedAt) (entrega final)',
+        label: 'Entrega final',
+        span: 'activityFinishedAt → deliveredAt',
         count: opRow?.wrapup_count ?? 0,
         avgHours: secToHours(opRow?.wrapup_avg_s ?? null),
         p50Hours: secToHours(opRow?.wrapup_p50_s ?? null),
@@ -807,13 +812,427 @@ const workTimeByServiceOrderType = typeEffPauseRows.map(r => {
       },
       {
         key: 'total',
-        label: 'arrivedAt → deliveredAt (o completedAt) (duración servicio)',
+        label: 'Duración del servicio',
+        span: 'arrivedAt → deliveredAt',
         count: opRow?.total_count ?? 0,
         avgHours: secToHours(opRow?.total_avg_s ?? null),
         p50Hours: secToHours(opRow?.total_p50_s ?? null),
         p90Hours: secToHours(opRow?.total_p90_s ?? null),
       },
     ];
+
+    // --- Service: Operational time comparisons (avg / p50 / p90) ---
+    type OpGroupRow = {
+      group_key: string | null;
+      group_label: string | null;
+
+      travel_count: number;
+      travel_avg_s: number | null;
+      travel_p50_s: number | null;
+      travel_p90_s: number | null;
+
+      intake_count: number;
+      intake_avg_s: number | null;
+      intake_p50_s: number | null;
+      intake_p90_s: number | null;
+
+      handover_count: number;
+      handover_avg_s: number | null;
+      handover_p50_s: number | null;
+      handover_p90_s: number | null;
+
+      onsite_count: number;
+      onsite_avg_s: number | null;
+      onsite_p50_s: number | null;
+      onsite_p90_s: number | null;
+
+      wrapup_count: number;
+      wrapup_avg_s: number | null;
+      wrapup_p50_s: number | null;
+      wrapup_p90_s: number | null;
+
+      total_count: number;
+      total_avg_s: number | null;
+      total_p50_s: number | null;
+      total_p90_s: number | null;
+    };
+
+    const opSegments = [
+      { key: 'travel', label: 'Desplazamiento', span: 'takenAt → arrivedAt' },
+      { key: 'intake', label: 'Proceso de ingreso', span: 'arrivedAt → checkInAt' },
+      { key: 'handover', label: 'Entrega del equipo', span: 'checkInAt → activityStartedAt' },
+      { key: 'onsite', label: 'Trabajo en sitio', span: 'activityStartedAt → activityFinishedAt' },
+      { key: 'wrapup', label: 'Entrega final', span: 'activityFinishedAt → deliveredAt' },
+      { key: 'total', label: 'Duración del servicio', span: 'arrivedAt → deliveredAt' },
+    ] as const;
+
+    const rowToSegmentMetrics = (r: OpGroupRow) => ({
+      travel: { count: r.travel_count, avgHours: secToHours(r.travel_avg_s), p50Hours: secToHours(r.travel_p50_s), p90Hours: secToHours(r.travel_p90_s) },
+      intake: { count: r.intake_count, avgHours: secToHours(r.intake_avg_s), p50Hours: secToHours(r.intake_p50_s), p90Hours: secToHours(r.intake_p90_s) },
+      handover: { count: r.handover_count, avgHours: secToHours(r.handover_avg_s), p50Hours: secToHours(r.handover_p50_s), p90Hours: secToHours(r.handover_p90_s) },
+      onsite: { count: r.onsite_count, avgHours: secToHours(r.onsite_avg_s), p50Hours: secToHours(r.onsite_p50_s), p90Hours: secToHours(r.onsite_p90_s) },
+      wrapup: { count: r.wrapup_count, avgHours: secToHours(r.wrapup_avg_s), p50Hours: secToHours(r.wrapup_p50_s), p90Hours: secToHours(r.wrapup_p90_s) },
+      total: { count: r.total_count, avgHours: secToHours(r.total_avg_s), p50Hours: secToHours(r.total_p50_s), p90Hours: secToHours(r.total_p90_s) },
+    });
+
+    // grouped by service order type
+    const byServiceOrderTypeRaw = await this.prisma.$queryRaw<OpGroupRow[]>(
+      Prisma.sql`
+        WITH closed_orders AS (
+          SELECT
+            w.id,
+            w."serviceOrderType",
+            w."takenAt",
+            w."arrivedAt",
+            w."checkInAt",
+            w."activityStartedAt",
+            w."activityFinishedAt",
+            COALESCE(w."deliveredAt", w."completedAt", w."updatedAt") AS "deliveredLike"
+          FROM "WorkOrder" w
+          WHERE w."tenantId" = ${tenantId}
+            AND w."kind" = 'SERVICE_ORDER'
+            AND w."status" IN ('COMPLETED','CLOSED')
+            AND COALESCE(w."deliveredAt", w."completedAt", w."updatedAt") >= ${from}
+            AND COALESCE(w."deliveredAt", w."completedAt", w."updatedAt") < ${to}
+        ),
+        d AS (
+          SELECT
+            COALESCE("serviceOrderType"::text, 'UNSPECIFIED') AS group_key,
+            NULL::text AS group_label,
+            CASE WHEN "takenAt" IS NOT NULL AND "arrivedAt" IS NOT NULL AND "arrivedAt" >= "takenAt"
+              THEN EXTRACT(EPOCH FROM ("arrivedAt" - "takenAt")) END AS travel_s,
+            CASE WHEN "arrivedAt" IS NOT NULL AND "checkInAt" IS NOT NULL AND "checkInAt" >= "arrivedAt"
+              THEN EXTRACT(EPOCH FROM ("checkInAt" - "arrivedAt")) END AS intake_s,
+            CASE WHEN "checkInAt" IS NOT NULL AND "activityStartedAt" IS NOT NULL AND "activityStartedAt" >= "checkInAt"
+              THEN EXTRACT(EPOCH FROM ("activityStartedAt" - "checkInAt")) END AS handover_s,
+            CASE WHEN "activityStartedAt" IS NOT NULL AND "activityFinishedAt" IS NOT NULL AND "activityFinishedAt" >= "activityStartedAt"
+              THEN EXTRACT(EPOCH FROM ("activityFinishedAt" - "activityStartedAt")) END AS onsite_s,
+            CASE WHEN "activityFinishedAt" IS NOT NULL AND "deliveredLike" IS NOT NULL AND "deliveredLike" >= "activityFinishedAt"
+              THEN EXTRACT(EPOCH FROM ("deliveredLike" - "activityFinishedAt")) END AS wrapup_s,
+            CASE WHEN "arrivedAt" IS NOT NULL AND "deliveredLike" IS NOT NULL AND "deliveredLike" >= "arrivedAt"
+              THEN EXTRACT(EPOCH FROM ("deliveredLike" - "arrivedAt")) END AS total_s
+          FROM closed_orders
+        )
+        SELECT
+          group_key,
+          group_label,
+          COUNT(travel_s)::int AS travel_count,
+          AVG(travel_s)::float AS travel_avg_s,
+          percentile_cont(0.5) WITHIN GROUP (ORDER BY travel_s) FILTER (WHERE travel_s IS NOT NULL) AS travel_p50_s,
+          percentile_cont(0.9) WITHIN GROUP (ORDER BY travel_s) FILTER (WHERE travel_s IS NOT NULL) AS travel_p90_s,
+
+          COUNT(intake_s)::int AS intake_count,
+          AVG(intake_s)::float AS intake_avg_s,
+          percentile_cont(0.5) WITHIN GROUP (ORDER BY intake_s) FILTER (WHERE intake_s IS NOT NULL) AS intake_p50_s,
+          percentile_cont(0.9) WITHIN GROUP (ORDER BY intake_s) FILTER (WHERE intake_s IS NOT NULL) AS intake_p90_s,
+
+          COUNT(handover_s)::int AS handover_count,
+          AVG(handover_s)::float AS handover_avg_s,
+          percentile_cont(0.5) WITHIN GROUP (ORDER BY handover_s) FILTER (WHERE handover_s IS NOT NULL) AS handover_p50_s,
+          percentile_cont(0.9) WITHIN GROUP (ORDER BY handover_s) FILTER (WHERE handover_s IS NOT NULL) AS handover_p90_s,
+
+          COUNT(onsite_s)::int AS onsite_count,
+          AVG(onsite_s)::float AS onsite_avg_s,
+          percentile_cont(0.5) WITHIN GROUP (ORDER BY onsite_s) FILTER (WHERE onsite_s IS NOT NULL) AS onsite_p50_s,
+          percentile_cont(0.9) WITHIN GROUP (ORDER BY onsite_s) FILTER (WHERE onsite_s IS NOT NULL) AS onsite_p90_s,
+
+          COUNT(wrapup_s)::int AS wrapup_count,
+          AVG(wrapup_s)::float AS wrapup_avg_s,
+          percentile_cont(0.5) WITHIN GROUP (ORDER BY wrapup_s) FILTER (WHERE wrapup_s IS NOT NULL) AS wrapup_p50_s,
+          percentile_cont(0.9) WITHIN GROUP (ORDER BY wrapup_s) FILTER (WHERE wrapup_s IS NOT NULL) AS wrapup_p90_s,
+
+          COUNT(total_s)::int AS total_count,
+          AVG(total_s)::float AS total_avg_s,
+          percentile_cont(0.5) WITHIN GROUP (ORDER BY total_s) FILTER (WHERE total_s IS NOT NULL) AS total_p50_s,
+          percentile_cont(0.9) WITHIN GROUP (ORDER BY total_s) FILTER (WHERE total_s IS NOT NULL) AS total_p90_s
+        FROM d
+        GROUP BY group_key, group_label
+        ORDER BY total_p90_s DESC NULLS LAST
+        LIMIT 30;
+      `
+    );
+
+    // grouped by customer (from Asset.customer)
+    const byCustomerRaw = await this.prisma.$queryRaw<OpGroupRow[]>(
+      Prisma.sql`
+        WITH closed_orders AS (
+          SELECT
+            w.id,
+            w."assetCode",
+            w."serviceOrderType",
+            w."takenAt",
+            w."arrivedAt",
+            w."checkInAt",
+            w."activityStartedAt",
+            w."activityFinishedAt",
+            COALESCE(w."deliveredAt", w."completedAt", w."updatedAt") AS "deliveredLike",
+            a.customer AS customer,
+            a."locationId" AS "locationId"
+          FROM "WorkOrder" w
+          LEFT JOIN "Asset" a
+            ON a."tenantId" = w."tenantId" AND a.code = w."assetCode"
+          WHERE w."tenantId" = ${tenantId}
+            AND w."kind" = 'SERVICE_ORDER'
+            AND w."status" IN ('COMPLETED','CLOSED')
+            AND COALESCE(w."deliveredAt", w."completedAt", w."updatedAt") >= ${from}
+            AND COALESCE(w."deliveredAt", w."completedAt", w."updatedAt") < ${to}
+        ),
+        d AS (
+          SELECT
+            COALESCE(customer, '(sin cliente)') AS group_key,
+            NULL::text AS group_label,
+            CASE WHEN "takenAt" IS NOT NULL AND "arrivedAt" IS NOT NULL AND "arrivedAt" >= "takenAt"
+              THEN EXTRACT(EPOCH FROM ("arrivedAt" - "takenAt")) END AS travel_s,
+            CASE WHEN "arrivedAt" IS NOT NULL AND "checkInAt" IS NOT NULL AND "checkInAt" >= "arrivedAt"
+              THEN EXTRACT(EPOCH FROM ("checkInAt" - "arrivedAt")) END AS intake_s,
+            CASE WHEN "checkInAt" IS NOT NULL AND "activityStartedAt" IS NOT NULL AND "activityStartedAt" >= "checkInAt"
+              THEN EXTRACT(EPOCH FROM ("activityStartedAt" - "checkInAt")) END AS handover_s,
+            CASE WHEN "activityStartedAt" IS NOT NULL AND "activityFinishedAt" IS NOT NULL AND "activityFinishedAt" >= "activityStartedAt"
+              THEN EXTRACT(EPOCH FROM ("activityFinishedAt" - "activityStartedAt")) END AS onsite_s,
+            CASE WHEN "activityFinishedAt" IS NOT NULL AND "deliveredLike" IS NOT NULL AND "deliveredLike" >= "activityFinishedAt"
+              THEN EXTRACT(EPOCH FROM ("deliveredLike" - "activityFinishedAt")) END AS wrapup_s,
+            CASE WHEN "arrivedAt" IS NOT NULL AND "deliveredLike" IS NOT NULL AND "deliveredLike" >= "arrivedAt"
+              THEN EXTRACT(EPOCH FROM ("deliveredLike" - "arrivedAt")) END AS total_s
+          FROM closed_orders
+        )
+        SELECT
+          group_key,
+          group_label,
+          COUNT(travel_s)::int AS travel_count,
+          AVG(travel_s)::float AS travel_avg_s,
+          percentile_cont(0.5) WITHIN GROUP (ORDER BY travel_s) FILTER (WHERE travel_s IS NOT NULL) AS travel_p50_s,
+          percentile_cont(0.9) WITHIN GROUP (ORDER BY travel_s) FILTER (WHERE travel_s IS NOT NULL) AS travel_p90_s,
+
+          COUNT(intake_s)::int AS intake_count,
+          AVG(intake_s)::float AS intake_avg_s,
+          percentile_cont(0.5) WITHIN GROUP (ORDER BY intake_s) FILTER (WHERE intake_s IS NOT NULL) AS intake_p50_s,
+          percentile_cont(0.9) WITHIN GROUP (ORDER BY intake_s) FILTER (WHERE intake_s IS NOT NULL) AS intake_p90_s,
+
+          COUNT(handover_s)::int AS handover_count,
+          AVG(handover_s)::float AS handover_avg_s,
+          percentile_cont(0.5) WITHIN GROUP (ORDER BY handover_s) FILTER (WHERE handover_s IS NOT NULL) AS handover_p50_s,
+          percentile_cont(0.9) WITHIN GROUP (ORDER BY handover_s) FILTER (WHERE handover_s IS NOT NULL) AS handover_p90_s,
+
+          COUNT(onsite_s)::int AS onsite_count,
+          AVG(onsite_s)::float AS onsite_avg_s,
+          percentile_cont(0.5) WITHIN GROUP (ORDER BY onsite_s) FILTER (WHERE onsite_s IS NOT NULL) AS onsite_p50_s,
+          percentile_cont(0.9) WITHIN GROUP (ORDER BY onsite_s) FILTER (WHERE onsite_s IS NOT NULL) AS onsite_p90_s,
+
+          COUNT(wrapup_s)::int AS wrapup_count,
+          AVG(wrapup_s)::float AS wrapup_avg_s,
+          percentile_cont(0.5) WITHIN GROUP (ORDER BY wrapup_s) FILTER (WHERE wrapup_s IS NOT NULL) AS wrapup_p50_s,
+          percentile_cont(0.9) WITHIN GROUP (ORDER BY wrapup_s) FILTER (WHERE wrapup_s IS NOT NULL) AS wrapup_p90_s,
+
+          COUNT(total_s)::int AS total_count,
+          AVG(total_s)::float AS total_avg_s,
+          percentile_cont(0.5) WITHIN GROUP (ORDER BY total_s) FILTER (WHERE total_s IS NOT NULL) AS total_p50_s,
+          percentile_cont(0.9) WITHIN GROUP (ORDER BY total_s) FILTER (WHERE total_s IS NOT NULL) AS total_p90_s
+        FROM d
+        GROUP BY group_key, group_label
+        ORDER BY total_p90_s DESC NULLS LAST
+        LIMIT 30;
+      `
+    );
+
+    // grouped by locationId (from Asset.locationId)
+    const byLocationRaw = await this.prisma.$queryRaw<OpGroupRow[]>(
+      Prisma.sql`
+        WITH closed_orders AS (
+          SELECT
+            w.id,
+            w."assetCode",
+            w."serviceOrderType",
+            w."takenAt",
+            w."arrivedAt",
+            w."checkInAt",
+            w."activityStartedAt",
+            w."activityFinishedAt",
+            COALESCE(w."deliveredAt", w."completedAt", w."updatedAt") AS "deliveredLike",
+            a."locationId" AS "locationId"
+          FROM "WorkOrder" w
+          LEFT JOIN "Asset" a
+            ON a."tenantId" = w."tenantId" AND a.code = w."assetCode"
+          WHERE w."tenantId" = ${tenantId}
+            AND w."kind" = 'SERVICE_ORDER'
+            AND w."status" IN ('COMPLETED','CLOSED')
+            AND COALESCE(w."deliveredAt", w."completedAt", w."updatedAt") >= ${from}
+            AND COALESCE(w."deliveredAt", w."completedAt", w."updatedAt") < ${to}
+        ),
+        d AS (
+          SELECT
+            COALESCE("locationId", '(sin sede)') AS group_key,
+            NULL::text AS group_label,
+            CASE WHEN "takenAt" IS NOT NULL AND "arrivedAt" IS NOT NULL AND "arrivedAt" >= "takenAt"
+              THEN EXTRACT(EPOCH FROM ("arrivedAt" - "takenAt")) END AS travel_s,
+            CASE WHEN "arrivedAt" IS NOT NULL AND "checkInAt" IS NOT NULL AND "checkInAt" >= "arrivedAt"
+              THEN EXTRACT(EPOCH FROM ("checkInAt" - "arrivedAt")) END AS intake_s,
+            CASE WHEN "checkInAt" IS NOT NULL AND "activityStartedAt" IS NOT NULL AND "activityStartedAt" >= "checkInAt"
+              THEN EXTRACT(EPOCH FROM ("activityStartedAt" - "checkInAt")) END AS handover_s,
+            CASE WHEN "activityStartedAt" IS NOT NULL AND "activityFinishedAt" IS NOT NULL AND "activityFinishedAt" >= "activityStartedAt"
+              THEN EXTRACT(EPOCH FROM ("activityFinishedAt" - "activityStartedAt")) END AS onsite_s,
+            CASE WHEN "activityFinishedAt" IS NOT NULL AND "deliveredLike" IS NOT NULL AND "deliveredLike" >= "activityFinishedAt"
+              THEN EXTRACT(EPOCH FROM ("deliveredLike" - "activityFinishedAt")) END AS wrapup_s,
+            CASE WHEN "arrivedAt" IS NOT NULL AND "deliveredLike" IS NOT NULL AND "deliveredLike" >= "arrivedAt"
+              THEN EXTRACT(EPOCH FROM ("deliveredLike" - "arrivedAt")) END AS total_s
+          FROM closed_orders
+        )
+        SELECT
+          group_key,
+          group_label,
+          COUNT(travel_s)::int AS travel_count,
+          AVG(travel_s)::float AS travel_avg_s,
+          percentile_cont(0.5) WITHIN GROUP (ORDER BY travel_s) FILTER (WHERE travel_s IS NOT NULL) AS travel_p50_s,
+          percentile_cont(0.9) WITHIN GROUP (ORDER BY travel_s) FILTER (WHERE travel_s IS NOT NULL) AS travel_p90_s,
+
+          COUNT(intake_s)::int AS intake_count,
+          AVG(intake_s)::float AS intake_avg_s,
+          percentile_cont(0.5) WITHIN GROUP (ORDER BY intake_s) FILTER (WHERE intake_s IS NOT NULL) AS intake_p50_s,
+          percentile_cont(0.9) WITHIN GROUP (ORDER BY intake_s) FILTER (WHERE intake_s IS NOT NULL) AS intake_p90_s,
+
+          COUNT(handover_s)::int AS handover_count,
+          AVG(handover_s)::float AS handover_avg_s,
+          percentile_cont(0.5) WITHIN GROUP (ORDER BY handover_s) FILTER (WHERE handover_s IS NOT NULL) AS handover_p50_s,
+          percentile_cont(0.9) WITHIN GROUP (ORDER BY handover_s) FILTER (WHERE handover_s IS NOT NULL) AS handover_p90_s,
+
+          COUNT(onsite_s)::int AS onsite_count,
+          AVG(onsite_s)::float AS onsite_avg_s,
+          percentile_cont(0.5) WITHIN GROUP (ORDER BY onsite_s) FILTER (WHERE onsite_s IS NOT NULL) AS onsite_p50_s,
+          percentile_cont(0.9) WITHIN GROUP (ORDER BY onsite_s) FILTER (WHERE onsite_s IS NOT NULL) AS onsite_p90_s,
+
+          COUNT(wrapup_s)::int AS wrapup_count,
+          AVG(wrapup_s)::float AS wrapup_avg_s,
+          percentile_cont(0.5) WITHIN GROUP (ORDER BY wrapup_s) FILTER (WHERE wrapup_s IS NOT NULL) AS wrapup_p50_s,
+          percentile_cont(0.9) WITHIN GROUP (ORDER BY wrapup_s) FILTER (WHERE wrapup_s IS NOT NULL) AS wrapup_p90_s,
+
+          COUNT(total_s)::int AS total_count,
+          AVG(total_s)::float AS total_avg_s,
+          percentile_cont(0.5) WITHIN GROUP (ORDER BY total_s) FILTER (WHERE total_s IS NOT NULL) AS total_p50_s,
+          percentile_cont(0.9) WITHIN GROUP (ORDER BY total_s) FILTER (WHERE total_s IS NOT NULL) AS total_p90_s
+        FROM d
+        GROUP BY group_key, group_label
+        ORDER BY total_p90_s DESC NULLS LAST
+        LIMIT 30;
+      `
+    );
+
+    // grouped by lead technician (from WorkLogs within range)
+    const byTechnicianRaw = await this.prisma.$queryRaw<OpGroupRow[]>(
+      Prisma.sql`
+        WITH closed_orders AS (
+          SELECT
+            w.id,
+            w."takenAt",
+            w."arrivedAt",
+            w."checkInAt",
+            w."activityStartedAt",
+            w."activityFinishedAt",
+            COALESCE(w."deliveredAt", w."completedAt", w."updatedAt") AS "deliveredLike"
+          FROM "WorkOrder" w
+          WHERE w."tenantId" = ${tenantId}
+            AND w."kind" = 'SERVICE_ORDER'
+            AND w."status" IN ('COMPLETED','CLOSED')
+            AND COALESCE(w."deliveredAt", w."completedAt", w."updatedAt") >= ${from}
+            AND COALESCE(w."deliveredAt", w."completedAt", w."updatedAt") < ${to}
+        ),
+        wl AS (
+          SELECT
+            wl."workOrderId",
+            wl."userId",
+            SUM(
+              EXTRACT(
+                EPOCH FROM (
+                  LEAST(COALESCE(wl."endedAt", ${to}), ${to}) - GREATEST(wl."startedAt", ${from})
+                )
+              )
+            ) AS seconds_worked
+          FROM "WorkLog" wl
+          JOIN closed_orders co ON co.id = wl."workOrderId"
+          WHERE wl."tenantId" = ${tenantId}
+            AND wl."startedAt" < ${to}
+            AND COALESCE(wl."endedAt", ${to}) > ${from}
+          GROUP BY wl."workOrderId", wl."userId"
+        ),
+        lead AS (
+          SELECT DISTINCT ON ("workOrderId")
+            "workOrderId",
+            "userId"
+          FROM wl
+          ORDER BY "workOrderId", seconds_worked DESC
+        ),
+        d AS (
+          SELECT
+            lead."userId" AS group_key,
+            NULL::text AS group_label,
+            CASE WHEN co."takenAt" IS NOT NULL AND co."arrivedAt" IS NOT NULL AND co."arrivedAt" >= co."takenAt"
+              THEN EXTRACT(EPOCH FROM (co."arrivedAt" - co."takenAt")) END AS travel_s,
+            CASE WHEN co."arrivedAt" IS NOT NULL AND co."checkInAt" IS NOT NULL AND co."checkInAt" >= co."arrivedAt"
+              THEN EXTRACT(EPOCH FROM (co."checkInAt" - co."arrivedAt")) END AS intake_s,
+            CASE WHEN co."checkInAt" IS NOT NULL AND co."activityStartedAt" IS NOT NULL AND co."activityStartedAt" >= co."checkInAt"
+              THEN EXTRACT(EPOCH FROM (co."activityStartedAt" - co."checkInAt")) END AS handover_s,
+            CASE WHEN co."activityStartedAt" IS NOT NULL AND co."activityFinishedAt" IS NOT NULL AND co."activityFinishedAt" >= co."activityStartedAt"
+              THEN EXTRACT(EPOCH FROM (co."activityFinishedAt" - co."activityStartedAt")) END AS onsite_s,
+            CASE WHEN co."activityFinishedAt" IS NOT NULL AND co."deliveredLike" IS NOT NULL AND co."deliveredLike" >= co."activityFinishedAt"
+              THEN EXTRACT(EPOCH FROM (co."deliveredLike" - co."activityFinishedAt")) END AS wrapup_s,
+            CASE WHEN co."arrivedAt" IS NOT NULL AND co."deliveredLike" IS NOT NULL AND co."deliveredLike" >= co."arrivedAt"
+              THEN EXTRACT(EPOCH FROM (co."deliveredLike" - co."arrivedAt")) END AS total_s
+          FROM closed_orders co
+          LEFT JOIN lead ON lead."workOrderId" = co.id
+          WHERE lead."userId" IS NOT NULL
+        )
+        SELECT
+          d.group_key,
+          COALESCE(u.name, u.email, d.group_key)::text AS group_label,
+          COUNT(travel_s)::int AS travel_count,
+          AVG(travel_s)::float AS travel_avg_s,
+          percentile_cont(0.5) WITHIN GROUP (ORDER BY travel_s) FILTER (WHERE travel_s IS NOT NULL) AS travel_p50_s,
+          percentile_cont(0.9) WITHIN GROUP (ORDER BY travel_s) FILTER (WHERE travel_s IS NOT NULL) AS travel_p90_s,
+
+          COUNT(intake_s)::int AS intake_count,
+          AVG(intake_s)::float AS intake_avg_s,
+          percentile_cont(0.5) WITHIN GROUP (ORDER BY intake_s) FILTER (WHERE intake_s IS NOT NULL) AS intake_p50_s,
+          percentile_cont(0.9) WITHIN GROUP (ORDER BY intake_s) FILTER (WHERE intake_s IS NOT NULL) AS intake_p90_s,
+
+          COUNT(handover_s)::int AS handover_count,
+          AVG(handover_s)::float AS handover_avg_s,
+          percentile_cont(0.5) WITHIN GROUP (ORDER BY handover_s) FILTER (WHERE handover_s IS NOT NULL) AS handover_p50_s,
+          percentile_cont(0.9) WITHIN GROUP (ORDER BY handover_s) FILTER (WHERE handover_s IS NOT NULL) AS handover_p90_s,
+
+          COUNT(onsite_s)::int AS onsite_count,
+          AVG(onsite_s)::float AS onsite_avg_s,
+          percentile_cont(0.5) WITHIN GROUP (ORDER BY onsite_s) FILTER (WHERE onsite_s IS NOT NULL) AS onsite_p50_s,
+          percentile_cont(0.9) WITHIN GROUP (ORDER BY onsite_s) FILTER (WHERE onsite_s IS NOT NULL) AS onsite_p90_s,
+
+          COUNT(wrapup_s)::int AS wrapup_count,
+          AVG(wrapup_s)::float AS wrapup_avg_s,
+          percentile_cont(0.5) WITHIN GROUP (ORDER BY wrapup_s) FILTER (WHERE wrapup_s IS NOT NULL) AS wrapup_p50_s,
+          percentile_cont(0.9) WITHIN GROUP (ORDER BY wrapup_s) FILTER (WHERE wrapup_s IS NOT NULL) AS wrapup_p90_s,
+
+          COUNT(total_s)::int AS total_count,
+          AVG(total_s)::float AS total_avg_s,
+          percentile_cont(0.5) WITHIN GROUP (ORDER BY total_s) FILTER (WHERE total_s IS NOT NULL) AS total_p50_s,
+          percentile_cont(0.9) WITHIN GROUP (ORDER BY total_s) FILTER (WHERE total_s IS NOT NULL) AS total_p90_s
+        FROM d
+        LEFT JOIN "User" u ON u.id = d.group_key
+        GROUP BY d.group_key, u.name, u.email
+        ORDER BY total_count DESC, total_p90_s DESC NULLS LAST
+        LIMIT 25;
+      `
+    );
+
+    const mapGroups = (rows: OpGroupRow[]) =>
+      rows.map(r => ({
+        groupKey: r.group_key ?? '(sin dato)',
+        groupLabel: r.group_label ?? r.group_key ?? '(sin dato)',
+        segments: rowToSegmentMetrics(r),
+      }));
+
+    const operationalTimesComparisons = {
+      segments: opSegments,
+      byTechnician: mapGroups(byTechnicianRaw),
+      byServiceOrderType: mapGroups(byServiceOrderTypeRaw),
+      byCustomer: mapGroups(byCustomerRaw),
+      byLocation: mapGroups(byLocationRaw),
+    };
 
 
     return {
@@ -850,6 +1269,7 @@ const workTimeByServiceOrderType = typeEffPauseRows.map(r => {
         technicianEffectiveVsPauses,
         workTimeByServiceOrderType,
         operationalTimes,
+        operationalTimesComparisons,
       },
     };
   }

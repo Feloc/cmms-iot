@@ -25,6 +25,37 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
+type OperationalTimeRow = {
+  key: 'travel' | 'intake' | 'handover' | 'onsite' | 'wrapup' | 'total';
+  label: string;
+  span?: string;
+  count: number;
+  avgHours: number | null;
+  p50Hours: number | null;
+  p90Hours: number | null;
+};
+
+type OpSegmentMetric = {
+  count: number;
+  avgHours: number | null;
+  p50Hours: number | null;
+  p90Hours: number | null;
+};
+
+type OpComparisonGroup = {
+  groupKey: string;
+  groupLabel: string;
+  segments: Record<string, OpSegmentMetric>;
+};
+
+type OperationalTimesComparisons = {
+  segments: Array<{ key: OperationalTimeRow['key']; label: string; span: string }>;
+  byTechnician: OpComparisonGroup[];
+  byServiceOrderType: OpComparisonGroup[];
+  byCustomer: OpComparisonGroup[];
+  byLocation: OpComparisonGroup[];
+};
+
 type Summary = {
   range: { from: string; to: string; days: number };
 
@@ -40,15 +71,7 @@ type Summary = {
 
   alerts: {
     open: number;
-    recent: Array<{
-      id: string;
-      kind: string;
-      assetCode: string;
-      sensor: string;
-      message: string;
-      status: string;
-      createdAt: string;
-    }>;
+    recent: Array<{ id: string; kind: string; assetCode: string; severity: string; status: string; createdAt: string }>;
   };
 
   service: {
@@ -68,14 +91,10 @@ type Summary = {
       userId: string;
       name: string;
       closedInRange: number;
-      workedOrdersInRange: number;
-      totalWorkHours: number;
-      avgWorkHoursPerSO: number | null;
+      effectiveHours: number;
+      hrsPerOs: number | null;
       availableHours: number;
       utilizationPct: number | null;
-      avgCycleHours: number | null;
-      avgResponseHours: number | null;
-      onTimeRate: number | null;
       openAssigned: number;
       overdueOpenAssigned: number;
     }>;
@@ -90,70 +109,34 @@ type Summary = {
       utilizationPct: number | null;
     }>;
 
-    // Paso 2: efectivo vs pausas
-    technicianEffectiveVsPauses: Array<{
-      userId: string;
-      name: string;
-      osWorkedInRange: number;
-      workLogsCount: number;
-      pauseCount: number;
-      effectiveHours: number;
-      spanHours: number;
-      pauseHours: number;
-      effectivePct: number | null;
-      avgEffectiveHoursPerOS: number | null;
-      avgPauseHoursPerOS: number | null;
-    }>;
-
-    workTimeByServiceOrderType: Array<{
-      serviceOrderType: string;
-      osWorkedInRange: number;
-      workLogsCount: number;
-      pauseCount: number;
-      effectiveHours: number;
-      spanHours: number;
-      pauseHours: number;
-      effectivePct: number | null;
-      avgEffectiveHoursPerOS: number | null;
-      avgPauseHoursPerOS: number | null;
-    }>;
-
-    operationalTimes: Array<{
-      key: string;
-      label: string;
-      count: number;
-      avgHours: number | null;
-      p50Hours: number | null;
-      p90Hours: number | null;
-    }>;
+    operationalTimes: OperationalTimeRow[];
+    operationalTimesComparisons?: OperationalTimesComparisons;
   };
 };
 
-function fmtHours(n: number | null | undefined, digits = 2) {
-  if (n == null || Number.isNaN(n)) return '—';
-  return n.toFixed(digits);
-}
 
-function InfoTip({ text }: { text: string }) {
+function HelpTip(props: { text: string }) {
   return (
     <span
-      className="inline-flex items-center justify-center ml-1 w-4 h-4 rounded-full border text-[10px] leading-none text-neutral-500 cursor-help"
-      title={text}
-      aria-label={text}
+      className="inline-flex items-center justify-center ml-2 w-4 h-4 rounded-full border border-neutral-300 text-[10px] text-neutral-600 cursor-help"
+      title={props.text}
+      aria-label={props.text}
     >
       ?
     </span>
   );
 }
 
-function StatCard(props: { title: string; value: ReactNode; hint?: string; help?: string; href?: string }) {
+function fmtHours(n: number | null | undefined) {
+  if (n == null || Number.isNaN(n)) return '—';
+  return n.toFixed(2);
+}
+
+function StatCard(props: { title: string; value: ReactNode; hint?: string; href?: string }) {
   const inner = (
     <Card className={props.href ? 'hover:shadow-sm transition-shadow' : ''}>
       <CardHeader className="pb-2">
-        <CardTitle className="text-sm font-medium text-neutral-600 flex items-center">
-          {props.title}
-          {props.help ? <InfoTip text={props.help} /> : null}
-        </CardTitle>
+        <CardTitle className="text-sm font-medium text-neutral-600 flex items-center">{props.title}{props.hint ? <HelpTip text={props.hint} /> : null}</CardTitle>
       </CardHeader>
       <CardContent>
         <div className="text-2xl font-semibold">{props.value}</div>
@@ -163,15 +146,6 @@ function StatCard(props: { title: string; value: ReactNode; hint?: string; help?
   );
 
   return props.href ? <Link href={props.href}>{inner}</Link> : inner;
-}
-
-function MetricLabel({ label, help }: { label: string; help?: string }) {
-  return (
-    <div className="inline-flex items-center">
-      <span>{label}</span>
-      {help ? <InfoTip text={help} /> : null}
-    </div>
-  );
 }
 
 export default function Dashboard() {
@@ -192,6 +166,9 @@ export default function Dashboard() {
 
   const [days, setDays] = useState<'7' | '30' | '90'>('30');
   const [selectedTechId, setSelectedTechId] = useState<string>('');
+  const [opDim, setOpDim] = useState<'TECHNICIAN' | 'TYPE' | 'CUSTOMER' | 'LOCATION'>('TECHNICIAN');
+  const [opMetric, setOpMetric] = useState<'avg' | 'p50' | 'p90'>('p90');
+  const [opSegment, setOpSegment] = useState<'travel' | 'intake' | 'handover' | 'onsite' | 'wrapup' | 'total'>('total');
 
   type DashboardKey = readonly [string, string, string];
 
@@ -201,20 +178,22 @@ export default function Dashboard() {
       : null;
 
   // SWR puede pasar el key como:
-  // - un solo argumento (el array completo), o
-  // - argumentos "spread" (url, token, slug)
-  // Este fetcher soporta ambas formas, evitando errores tipo `path.startsWith is not a function`.
-  const fetchSummary = (arg1: unknown, arg2?: unknown, arg3?: unknown) => {
-    const [url, t, slug] = Array.isArray(arg1)
-      ? (arg1 as DashboardKey)
-      : ([arg1, arg2, arg3] as unknown as DashboardKey);
+// - un solo argumento (el array completo), o
+// - argumentos "spread" (url, token, slug)
+// Este fetcher soporta ambas formas, evitando errores tipo `path.startsWith is not a function`.
+const fetchSummary = (arg1: unknown, arg2?: unknown, arg3?: unknown) => {
+  const [url, t, slug] = Array.isArray(arg1)
+    ? (arg1 as DashboardKey)
+    : ([arg1, arg2, arg3] as unknown as DashboardKey);
 
-    return apiFetch<Summary>(String(url), { token: String(t), tenantSlug: String(slug) });
-  };
+  return apiFetch<Summary>(String(url), { token: String(t), tenantSlug: String(slug) });
+};
 
-  const { data, error, isLoading } = useSWR<Summary, any, DashboardKey>(dashboardKey, fetchSummary, {
-    refreshInterval: 15000,
-  });
+  const { data, error, isLoading } = useSWR<Summary, any, DashboardKey>(
+    dashboardKey,
+    fetchSummary,
+    { refreshInterval: 15000 }
+  );
 
   const rangeLabel = useMemo(() => {
     if (!data?.range) return '';
@@ -251,7 +230,9 @@ export default function Dashboard() {
   }, [data?.service.technicianPerformance]);
 
   useEffect(() => {
-    if (!selectedTechId && techOptions.length) setSelectedTechId(techOptions[0].userId);
+    if (!selectedTechId && techOptions.length) {
+      setSelectedTechId(techOptions[0].userId);
+    }
   }, [selectedTechId, techOptions]);
 
   const weeklyChartData = useMemo(() => {
@@ -266,9 +247,7 @@ export default function Dashboard() {
         week: label,
         closed: r.closedCount,
         hours: r.workHours,
-        utilization:
-          r.utilizationPct ??
-          (r.availableHours ? Math.round(((r.workHours ?? 0) / r.availableHours) * 1000) / 10 : null),
+        utilization: r.utilizationPct ?? (r.availableHours ? Math.round(((r.workHours ?? 0) / r.availableHours) * 1000) / 10 : null),
       };
     });
   }, [data?.service.technicianWeeklyProductivity, selectedTechId]);
@@ -282,19 +261,6 @@ export default function Dashboard() {
     const utilizationPct = available ? Math.round((hours / available) * 1000) / 10 : null;
     return { closed, hours, available, hrsPerClosed, utilizationPct };
   }, [data?.service.technicianWeeklyProductivity, selectedTechId]);
-
-  const effVsPauseRows = useMemo(() => {
-    return (data?.service.technicianEffectiveVsPauses ?? []).slice().sort((a, b) => {
-      // prioridad: más horas efectivas
-      return (b.effectiveHours ?? 0) - (a.effectiveHours ?? 0);
-    });
-  }, [data?.service.technicianEffectiveVsPauses]);
-
-  const typeEffVsPauseRows = useMemo(() => {
-    return (data?.service.workTimeByServiceOrderType ?? []).slice().sort((a, b) => {
-      return (b.effectiveHours ?? 0) - (a.effectiveHours ?? 0);
-    });
-  }, [data?.service.workTimeByServiceOrderType]);
 
   return (
     <div className="p-6 space-y-6">
@@ -335,30 +301,22 @@ export default function Dashboard() {
 
         <TabsContent value="assets" className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <StatCard
-              title="Activos totales"
-              value={isLoading ? '—' : data?.assets.total ?? 0}
-              help="Cantidad total de activos registrados en el tenant."
-              href="/assets"
-            />
+            <StatCard title="Activos totales" value={isLoading ? '—' : data?.assets.total ?? 0} href="/assets" />
             <StatCard
               title="Activos críticos (HIGH)"
               value={isLoading ? '—' : data?.assets.criticalHigh ?? 0}
-              help="Activos con criticidad HIGH. Útil para priorizar inspecciones, preventivos y repuestos críticos."
               hint="Prioriza mantenimiento/inspecciones"
               href="/assets"
             />
             <StatCard
               title="Alertas abiertas"
               value={isLoading ? '—' : data?.alerts.open ?? 0}
-              help="Alertas IoT/umbral que aún no están cerradas. Útil para priorizar atención preventiva."
               hint="IoT / reglas / umbrales"
               href="/alerts"
             />
             <StatCard
               title="Activos con OS abiertas"
               value={isLoading ? '—' : data?.assets.withOpenServiceOrders ?? 0}
-              help="Activos que tienen al menos una orden de servicio activa (no cerrada)."
               hint="Activos con backlog"
               href="/service-orders"
             />
@@ -367,12 +325,7 @@ export default function Dashboard() {
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <Card>
               <CardHeader className="flex flex-row items-center justify-between">
-                <CardTitle className="text-base">
-                  <MetricLabel
-                    label="Top activos con OS abiertas"
-                    help="Ranking de activos con más OS activas. Te ayuda a detectar activos problemáticos o con backlog acumulado."
-                  />
-                </CardTitle>
+                <CardTitle className="text-base">Top activos con OS abiertas</CardTitle>
                 <Button asChild variant="secondary" size="sm">
                   <Link href="/service-orders">Ver OS</Link>
                 </Button>
@@ -384,12 +337,8 @@ export default function Dashboard() {
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        <TableHead>
-                          <MetricLabel label="Activo" help="Código del activo." />
-                        </TableHead>
-                        <TableHead className="text-right">
-                          <MetricLabel label="OS abiertas" help="Cantidad de OS activas asociadas al activo." />
-                        </TableHead>
+                        <TableHead>Activo</TableHead>
+                        <TableHead className="text-right">OS abiertas</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -409,12 +358,7 @@ export default function Dashboard() {
 
             <Card>
               <CardHeader className="flex flex-row items-center justify-between">
-                <CardTitle className="text-base">
-                  <MetricLabel
-                    label="Top activos con alertas abiertas"
-                    help="Ranking de activos con más alertas abiertas (IoT). Te ayuda a priorizar inspecciones."
-                  />
-                </CardTitle>
+                <CardTitle className="text-base">Top activos con alertas abiertas</CardTitle>
                 <Button asChild variant="secondary" size="sm">
                   <Link href="/alerts">Ver alertas</Link>
                 </Button>
@@ -426,12 +370,8 @@ export default function Dashboard() {
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        <TableHead>
-                          <MetricLabel label="Activo" help="Código del activo." />
-                        </TableHead>
-                        <TableHead className="text-right">
-                          <MetricLabel label="Alertas" help="Cantidad de alertas abiertas asociadas al activo." />
-                        </TableHead>
+                        <TableHead>Activo</TableHead>
+                        <TableHead className="text-right">Alertas</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -462,48 +402,17 @@ export default function Dashboard() {
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
-            <StatCard
-              title="Backlog total"
-              value={isLoading ? '—' : data?.service.backlogTotal ?? 0}
-              help="OS activas (no cerradas). Es la carga de trabajo actual del área."
-              href="/service-orders"
-            />
-            <StatCard
-              title="Vencidas"
-              value={isLoading ? '—' : data?.service.overdue ?? 0}
-              help="OS activas con dueDate anterior a hoy. Indica riesgo de incumplimiento."
-              hint="dueDate < hoy"
-              href="/service-orders"
-            />
-            <StatCard
-              title="Sin asignar"
-              value={isLoading ? '—' : data?.service.unassigned ?? 0}
-              help="OS activas que no tienen un técnico ACTIVE asignado. Indica colas sin dueño."
-              hint="Sin técnico activo"
-              href="/service-orders"
-            />
-            <StatCard
-              title="Cerradas en rango"
-              value={isLoading ? '—' : data?.service.closedInRange ?? 0}
-              help="Cantidad de OS que quedaron en estado COMPLETED/CLOSED dentro del rango."
-            />
-            <StatCard
-              title="MTTR (horas)"
-              value={isLoading ? '—' : data?.service.mttrHours ?? '—'}
-              help="Promedio de tiempo de resolución para OS cerradas en el rango (aprox por timestamps de cierre)."
-              hint="Promedio cierre (rango)"
-            />
+            <StatCard title="Backlog total" value={isLoading ? '—' : data?.service.backlogTotal ?? 0} href="/service-orders" />
+            <StatCard title="Vencidas" value={isLoading ? '—' : data?.service.overdue ?? 0} hint="dueDate < hoy" href="/service-orders" />
+            <StatCard title="Sin asignar" value={isLoading ? '—' : data?.service.unassigned ?? 0} hint="Sin técnico activo" href="/service-orders" />
+            <StatCard title="Cerradas en rango" value={isLoading ? '—' : data?.service.closedInRange ?? 0} />
+            <StatCard title="MTTR (horas)" value={isLoading ? '—' : (data?.service.mttrHours ?? '—')} hint="Promedio cierre (rango)" />
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <Card>
               <CardHeader>
-                <CardTitle className="text-base">
-                  <MetricLabel
-                    label="Backlog por estado"
-                    help="Distribución del backlog por status. Útil para ver si se acumula en ON_HOLD, IN_PROGRESS, etc."
-                  />
-                </CardTitle>
+                <CardTitle className="text-base">Backlog por estado</CardTitle>
               </CardHeader>
               <CardContent>
                 {!data ? (
@@ -526,12 +435,7 @@ export default function Dashboard() {
 
             <Card>
               <CardHeader>
-                <CardTitle className="text-base">
-                  <MetricLabel
-                    label="Carga por técnico"
-                    help="Cantidad de OS activas asignadas por técnico (WOAssignment role=TECHNICIAN, state=ACTIVE)."
-                  />
-                </CardTitle>
+                <CardTitle className="text-base">Carga por técnico (OS activas)</CardTitle>
               </CardHeader>
               <CardContent>
                 {!data?.service.technicianWorkload?.length ? (
@@ -540,12 +444,8 @@ export default function Dashboard() {
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        <TableHead>
-                          <MetricLabel label="Técnico" help="Nombre del técnico." />
-                        </TableHead>
-                        <TableHead className="text-right">
-                          <MetricLabel label="Asignadas" help="Número de OS activas asignadas." />
-                        </TableHead>
+                        <TableHead>Técnico</TableHead>
+                        <TableHead className="text-right">Asignadas</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -566,12 +466,7 @@ export default function Dashboard() {
 
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">
-                <MetricLabel
-                  label="Tiempos operativos"
-                  help="Duraciones calculadas usando timestamps de la OS (takenAt, arrivedAt, checkInAt, activityStartedAt, activityFinishedAt, deliveredAt)."
-                />
-              </CardTitle>
+              <CardTitle className="text-base flex items-center">Tiempos operativos<HelpTip text="Avg/Mediana/P90 por tramo usando timestamps de la OS. Sirve para medir demoras por etapa del servicio." /></CardTitle>
             </CardHeader>
             <CardContent>
               {!data?.service.operationalTimes?.length ? (
@@ -580,24 +475,12 @@ export default function Dashboard() {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>
-                        <MetricLabel label="Tramo" help="Segmento del proceso (por timestamps de la OS)." />
-                      </TableHead>
-                      <TableHead className="text-right">
-                        <MetricLabel label="Muestras" help="Cantidad de OS en el rango que tienen ambos timestamps para este tramo." />
-                      </TableHead>
-                      <TableHead className="text-right">
-                        <MetricLabel label="Avg (h)" help="Promedio (en horas) del tramo." />
-                      </TableHead>
-                      <TableHead className="text-right hidden md:table-cell">
-                        <MetricLabel label="Mediana (h)" help="Percentil 50 (mediana). Menos sensible a outliers." />
-                      </TableHead>
-                      <TableHead className="text-right hidden md:table-cell">
-                        <MetricLabel label="P90 (h)" help="Percentil 90. Te muestra la cola larga / casos lentos." />
-                      </TableHead>
-                      <TableHead className="text-right hidden lg:table-cell">
-                        <MetricLabel label="Cobertura" help="Muestras / OS cerradas en rango." />
-                      </TableHead>
+                      <TableHead>Tramo</TableHead>
+                      <TableHead className="text-right">Muestras</TableHead>
+                      <TableHead className="text-right">Avg (h)</TableHead>
+                      <TableHead className="text-right hidden md:table-cell">Mediana (h)</TableHead>
+                      <TableHead className="text-right hidden md:table-cell">P90 (h)</TableHead>
+                      <TableHead className="text-right hidden lg:table-cell">Cobertura</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -606,7 +489,7 @@ export default function Dashboard() {
                       const coverage = denom ? Math.round((r.count / denom) * 100) : null;
                       return (
                         <TableRow key={r.key}>
-                          <TableCell className="font-medium">{r.label}</TableCell>
+                          <TableCell className="font-medium"><span className="inline-flex items-center">{r.label}{r.span ? <HelpTip text={r.span} /> : null}</span></TableCell>
                           <TableCell className="text-right">
                             <Badge variant="secondary">{r.count}</Badge>
                           </TableCell>
@@ -624,20 +507,199 @@ export default function Dashboard() {
               )}
 
               <div className="text-xs text-neutral-500 mt-2">
-                Nota: para tramos que usan <span className="font-mono">deliveredAt</span>, si este campo no existe se usa
+                Nota: para los tramos que terminan en <span className="font-mono">deliveredAt</span>, si este campo no existe se usa
                 <span className="font-mono"> completedAt</span> (o <span className="font-mono">updatedAt</span>) para no perder cierres.
               </div>
             </CardContent>
           </Card>
+          <Card>
+            <CardHeader className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+              <CardTitle className="text-base flex items-center">
+                Comparativos por tramo
+                <HelpTip text="Comparación de tiempos (Avg/Mediana/P90) por técnico, tipo de OS, cliente y sede. Útil para identificar variabilidad y causas de demoras." />
+              </CardTitle>
+
+              <div className="grid grid-cols-2 md:flex gap-2">
+                <Select value={opDim} onValueChange={(v: any) => setOpDim(v)}>
+                  <SelectTrigger className="w-full md:w-[180px]">
+                    <SelectValue placeholder="Dimensión" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="TECHNICIAN">Técnico</SelectItem>
+                    <SelectItem value="TYPE">Tipo de OS</SelectItem>
+                    <SelectItem value="CUSTOMER">Cliente</SelectItem>
+                    <SelectItem value="LOCATION">Sede</SelectItem>
+                  </SelectContent>
+                </Select>
+
+                <Select value={opMetric} onValueChange={(v: any) => setOpMetric(v)}>
+                  <SelectTrigger className="w-full md:w-[160px]">
+                    <SelectValue placeholder="Métrica" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="avg">Promedio</SelectItem>
+                    <SelectItem value="p50">Mediana</SelectItem>
+                    <SelectItem value="p90">P90</SelectItem>
+                  </SelectContent>
+                </Select>
+
+                <Select value={opSegment} onValueChange={(v: any) => setOpSegment(v)}>
+                  <SelectTrigger className="w-full md:w-[220px]">
+                    <SelectValue placeholder="Tramo" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(data?.service.operationalTimesComparisons?.segments ?? []).map(s => (
+                      <SelectItem key={s.key} value={s.key}>
+                        {s.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </CardHeader>
+
+            <CardContent>
+              {!data?.service.operationalTimesComparisons ? (
+                <div className="text-sm text-neutral-500">Sin datos</div>
+              ) : opDim === 'TECHNICIAN' ? (
+                <div className="space-y-4">
+                  <div className="text-xs text-neutral-500">
+                    Heatmap: filas = técnicos (lead), columnas = tramos. Valores en horas ({opMetric === 'avg' ? 'promedio' : opMetric === 'p50' ? 'mediana' : 'P90'}).
+                  </div>
+
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Técnico</TableHead>
+                        {data.service.operationalTimesComparisons.segments.map(s => (
+                          <TableHead key={s.key} className="text-right">
+                            <span className="inline-flex items-center">
+                              {s.label}
+                              <HelpTip text={s.span} />
+                            </span>
+                          </TableHead>
+                        ))}
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {data.service.operationalTimesComparisons.byTechnician.map(g => (
+                        <TableRow key={g.groupKey}>
+                          <TableCell className="font-medium">{g.groupLabel}</TableCell>
+                          {data.service.operationalTimesComparisons.segments.map(s => {
+                            const m = g.segments?.[s.key];
+                            const val =
+                              opMetric === 'avg' ? m?.avgHours : opMetric === 'p50' ? m?.p50Hours : m?.p90Hours;
+                            return (
+                              <TableCell key={s.key} className="text-right">
+                                <div>{fmtHours(val)}</div>
+                                <div className="text-[10px] text-neutral-500">{m?.count ?? 0} mues.</div>
+                              </TableCell>
+                            );
+                          })}
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+
+                  <div>
+                    <div className="text-sm font-medium mb-2 inline-flex items-center">
+                      Ranking por {opMetric.toUpperCase()} — {data.service.operationalTimesComparisons.segments.find(s => s.key === opSegment)?.label ?? ''}
+                      <HelpTip text="Ordena por el valor del tramo seleccionado (en horas). Útil para detectar a quién apoyar o qué casos auditar." />
+                    </div>
+
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Técnico</TableHead>
+                          <TableHead className="text-right">Muestras</TableHead>
+                          <TableHead className="text-right">Avg</TableHead>
+                          <TableHead className="text-right hidden md:table-cell">P50</TableHead>
+                          <TableHead className="text-right">P90</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {(() => {
+                          const rows = [...data.service.operationalTimesComparisons.byTechnician]
+                            .map(g => ({ g, m: g.segments?.[opSegment] }))
+                            .filter(x => (x.m?.count ?? 0) > 0)
+                            .sort((a, b) => (b.m?.p90Hours ?? 0) - (a.m?.p90Hours ?? 0))
+                            .slice(0, 20);
+
+                          return rows.map(({ g, m }) => (
+                            <TableRow key={g.groupKey}>
+                              <TableCell className="font-medium">{g.groupLabel}</TableCell>
+                              <TableCell className="text-right">
+                                <Badge variant="secondary">{m?.count ?? 0}</Badge>
+                              </TableCell>
+                              <TableCell className="text-right">{fmtHours(m?.avgHours)}</TableCell>
+                              <TableCell className="text-right hidden md:table-cell">{fmtHours(m?.p50Hours)}</TableCell>
+                              <TableCell className="text-right">{fmtHours(m?.p90Hours)}</TableCell>
+                            </TableRow>
+                          ));
+                        })()}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <div className="text-xs text-neutral-500">
+                    Ranking (Top 30) por tramo seleccionado. Se ordena por P90 del tramo para atacar demoras.
+                  </div>
+
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>{opDim === 'TYPE' ? 'Tipo de OS' : opDim === 'CUSTOMER' ? 'Cliente' : 'Sede'}</TableHead>
+                        <TableHead className="text-right">Muestras</TableHead>
+                        <TableHead className="text-right">Avg</TableHead>
+                        <TableHead className="text-right hidden md:table-cell">P50</TableHead>
+                        <TableHead className="text-right">P90</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {(() => {
+                        const groups =
+                          opDim === 'TYPE'
+                            ? data.service.operationalTimesComparisons.byServiceOrderType
+                            : opDim === 'CUSTOMER'
+                              ? data.service.operationalTimesComparisons.byCustomer
+                              : data.service.operationalTimesComparisons.byLocation;
+
+                        const rows = [...groups]
+                          .map(g => ({ g, m: g.segments?.[opSegment] }))
+                          .filter(x => (x.m?.count ?? 0) > 0)
+                          .sort((a, b) => (b.m?.p90Hours ?? 0) - (a.m?.p90Hours ?? 0))
+                          .slice(0, 30);
+
+                        return rows.map(({ g, m }) => (
+                          <TableRow key={g.groupKey}>
+                            <TableCell className="font-medium">{g.groupLabel}</TableCell>
+                            <TableCell className="text-right">
+                              <Badge variant="secondary">{m?.count ?? 0}</Badge>
+                            </TableCell>
+                            <TableCell className="text-right">{fmtHours(m?.avgHours)}</TableCell>
+                            <TableCell className="text-right hidden md:table-cell">{fmtHours(m?.p50Hours)}</TableCell>
+                            <TableCell className="text-right">{fmtHours(m?.p90Hours)}</TableCell>
+                          </TableRow>
+                        ));
+                      })()}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+
+              <div className="text-xs text-neutral-500 mt-3">
+                Nota: para los tramos que terminan en <span className="font-mono">deliveredAt</span>, si este campo no existe se usa
+                <span className="font-mono"> completedAt</span> o <span className="font-mono">updatedAt</span> para no perder cierres.
+              </div>
+            </CardContent>
+          </Card>
+
 
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">
-                <MetricLabel
-                  label="Productividad y utilización por técnico"
-                  help="Scoreboard por técnico: throughput (OS cerradas), horas efectivas (WorkLogs) y utilización aproximada vs horas hábiles del rango."
-                />
-              </CardTitle>
+              <CardTitle className="text-base">Desempeño por técnico (rango)</CardTitle>
             </CardHeader>
             <CardContent>
               {!data?.service.technicianPerformance?.length ? (
@@ -646,36 +708,17 @@ export default function Dashboard() {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>
-                        <MetricLabel label="Técnico" help="Nombre del técnico." />
-                      </TableHead>
-                      <TableHead className="text-right">
-                        <MetricLabel label="OS cerradas" help="OS COMPLETED/CLOSED en el rango (por asignación TECHNICIAN)." />
-                      </TableHead>
-                      <TableHead className="text-right">
-                        <MetricLabel label="Horas efectivas" help="Suma de WorkLogs del técnico en el rango (en horas)." />
-                      </TableHead>
-                      <TableHead className="text-right hidden md:table-cell">
-                        <MetricLabel label="Hrs/OS" help="Horas efectivas / OS cerradas. Aproxima esfuerzo por OS." />
-                      </TableHead>
-                      <TableHead className="text-right hidden md:table-cell">
-                        <MetricLabel label="Utilización" help="Horas efectivas / horas hábiles del rango (8h por día hábil). Aproximación." />
-                      </TableHead>
-                      <TableHead className="text-right hidden md:table-cell">
-                        <MetricLabel label="Ciclo (h)" help="Promedio: cierre - creación (OS cerradas en rango)." />
-                      </TableHead>
-                      <TableHead className="text-right hidden md:table-cell">
-                        <MetricLabel label="Respuesta (h)" help="Promedio: startedAt - createdAt (si startedAt existe)." />
-                      </TableHead>
-                      <TableHead className="text-right hidden lg:table-cell">
-                        <MetricLabel label="% a tiempo" help="OS con dueDate cumplido / OS con dueDate (en el rango)." />
-                      </TableHead>
-                      <TableHead className="text-right hidden lg:table-cell">
-                        <MetricLabel label="WIP" help="OS activas asignadas actualmente." />
-                      </TableHead>
-                      <TableHead className="text-right hidden lg:table-cell">
-                        <MetricLabel label="Vencidas" help="OS activas asignadas con dueDate < hoy." />
-                      </TableHead>
+                      <TableHead>Técnico</TableHead>
+                      <TableHead className="text-right">OS cerradas</TableHead>
+                      <TableHead className="text-right">Horas</TableHead>
+                          <TableHead className="text-right">Utilización</TableHead>
+                      <TableHead className="text-right hidden md:table-cell">Hrs/OS</TableHead>
+                      <TableHead className="text-right hidden md:table-cell">Utilización</TableHead>
+                      <TableHead className="text-right hidden md:table-cell">Ciclo (h)</TableHead>
+                      <TableHead className="text-right hidden md:table-cell">Respuesta (h)</TableHead>
+                      <TableHead className="text-right hidden lg:table-cell">% a tiempo</TableHead>
+                      <TableHead className="text-right hidden lg:table-cell">Backlog</TableHead>
+                      <TableHead className="text-right hidden lg:table-cell">Vencidas</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -711,7 +754,11 @@ export default function Dashboard() {
                           <Badge variant="secondary">{r.openAssigned}</Badge>
                         </TableCell>
                         <TableCell className="text-right hidden lg:table-cell">
-                          {r.overdueOpenAssigned ? <Badge variant="destructive">{r.overdueOpenAssigned}</Badge> : <Badge variant="secondary">0</Badge>}
+                          {r.overdueOpenAssigned ? (
+                            <Badge variant="destructive">{r.overdueOpenAssigned}</Badge>
+                          ) : (
+                            <Badge variant="secondary">0</Badge>
+                          )}
                         </TableCell>
                       </TableRow>
                     ))}
@@ -721,140 +768,9 @@ export default function Dashboard() {
             </CardContent>
           </Card>
 
-          {/* Paso 2 */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base">
-                  <MetricLabel
-                    label="Efectivo vs pausas por técnico"
-                    help="Para cada técnico, se calcula el 'span' (desde el primer inicio hasta el último fin por OS) y se compara contra la suma de WorkLogs (tiempo efectivo). Las pausas son los huecos entre WorkLogs. La cantidad de pausas es la suma de (workLogs - 1) por OS."
-                  />
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                {!effVsPauseRows.length ? (
-                  <div className="text-sm text-neutral-500">Sin datos</div>
-                ) : (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>
-                          <MetricLabel label="Técnico" help="Nombre del técnico." />
-                        </TableHead>
-                        <TableHead className="text-right hidden md:table-cell">
-                          <MetricLabel label="OS" help="Cantidad de OS en las que registró WorkLogs dentro del rango." />
-                        </TableHead>
-                        <TableHead className="text-right">
-                          <MetricLabel label="Efectivo (h)" help="Horas efectivas: suma de duración de WorkLogs (clipeado al rango)." />
-                        </TableHead>
-                        <TableHead className="text-right">
-                          <MetricLabel label="Pausas (h)" help="Horas en pausas: span - efectivo." />
-                        </TableHead>
-                        <TableHead className="text-right hidden md:table-cell">
-                          <MetricLabel label="# pausas" help="Conteo aproximado de pausas: por OS (workLogs - 1)." />
-                        </TableHead>
-                        <TableHead className="text-right hidden lg:table-cell">
-                          <MetricLabel label="% efectivo" help="Efectivo / span. Entre más alto, menos tiempo muerto entre WorkLogs." />
-                        </TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {effVsPauseRows.map(r => {
-                        const pct = r.effectivePct ?? (r.spanHours ? Math.round((r.effectiveHours / r.spanHours) * 100) : null);
-                        return (
-                          <TableRow key={r.userId}>
-                            <TableCell className="font-medium">{r.name}</TableCell>
-                            <TableCell className="text-right hidden md:table-cell">
-                              <Badge variant="secondary">{r.osWorkedInRange}</Badge>
-                            </TableCell>
-                            <TableCell className="text-right">{fmtHours(r.effectiveHours, 1)}</TableCell>
-                            <TableCell className="text-right">{fmtHours(r.pauseHours, 1)}</TableCell>
-                            <TableCell className="text-right hidden md:table-cell">
-                              <Badge variant="secondary">{r.pauseCount}</Badge>
-                            </TableCell>
-                            <TableCell className="text-right hidden lg:table-cell">{pct == null ? '—' : `${pct}%`}</TableCell>
-                          </TableRow>
-                        );
-                      })}
-                    </TableBody>
-                  </Table>
-                )}
-
-                <div className="text-xs text-neutral-500 mt-2">
-                  Recomendación: si ves muchas pausas, cruza esto con estados ON_HOLD, falta de repuestos o esperas por autorización. Más adelante podemos separar pausas “justificadas” vs “no justificadas”.
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base">
-                  <MetricLabel
-                    label="Efectivo vs pausas por tipo de OS"
-                    help="Mismo cálculo, pero agrupado por serviceOrderType. Útil para ver qué tipo de OS consume más tiempo efectivo y dónde hay más pausas."
-                  />
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                {!typeEffVsPauseRows.length ? (
-                  <div className="text-sm text-neutral-500">Sin datos</div>
-                ) : (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>
-                          <MetricLabel label="Tipo" help="serviceOrderType de la OS (o UNSPECIFIED si no está definido)." />
-                        </TableHead>
-                        <TableHead className="text-right hidden md:table-cell">
-                          <MetricLabel label="OS" help="Cantidad de OS (con WorkLogs) en el rango." />
-                        </TableHead>
-                        <TableHead className="text-right">
-                          <MetricLabel label="Efectivo (h)" help="Horas efectivas: suma de WorkLogs dentro del rango." />
-                        </TableHead>
-                        <TableHead className="text-right">
-                          <MetricLabel label="Pausas (h)" help="Horas en pausas: span - efectivo." />
-                        </TableHead>
-                        <TableHead className="text-right hidden md:table-cell">
-                          <MetricLabel label="# pausas" help="Conteo aproximado de pausas por OS (workLogs - 1)." />
-                        </TableHead>
-                        <TableHead className="text-right hidden lg:table-cell">
-                          <MetricLabel label="Prom. ef/OS" help="Horas efectivas promedio por OS del tipo." />
-                        </TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {typeEffVsPauseRows.map(r => (
-                        <TableRow key={r.serviceOrderType}>
-                          <TableCell className="font-medium">{r.serviceOrderType}</TableCell>
-                          <TableCell className="text-right hidden md:table-cell">
-                            <Badge variant="secondary">{r.osWorkedInRange}</Badge>
-                          </TableCell>
-                          <TableCell className="text-right">{fmtHours(r.effectiveHours, 1)}</TableCell>
-                          <TableCell className="text-right">{fmtHours(r.pauseHours, 1)}</TableCell>
-                          <TableCell className="text-right hidden md:table-cell">
-                            <Badge variant="secondary">{r.pauseCount}</Badge>
-                          </TableCell>
-                          <TableCell className="text-right hidden lg:table-cell">
-                            {r.avgEffectiveHoursPerOS == null ? '—' : r.avgEffectiveHoursPerOS.toFixed(2)}
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                )}
-              </CardContent>
-            </Card>
-          </div>
-
           <Card>
             <CardHeader className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-              <CardTitle className="text-base">
-                <MetricLabel
-                  label="Productividad semanal por técnico"
-                  help="Evolución semanal del técnico seleccionado: OS cerradas (barra), horas efectivas (línea) y utilización (línea %)."
-                />
-              </CardTitle>
+              <CardTitle className="text-base">Productividad semanal por técnico</CardTitle>
               <div className="w-full md:w-[280px]">
                 <Select value={selectedTechId} onValueChange={(v: any) => setSelectedTechId(v)}>
                   <SelectTrigger>
@@ -878,26 +794,12 @@ export default function Dashboard() {
               ) : (
                 <>
                   <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-                    <StatCard
-                      title="OS cerradas (semanal)"
-                      value={weeklyTechTotals.closed}
-                      help="Total de OS cerradas por el técnico en el rango (sumando semanas)."
-                    />
-                    <StatCard
-                      title="Horas (semanal)"
-                      value={weeklyTechTotals.hours.toFixed(1)}
-                      help="Horas efectivas (WorkLogs) del técnico en el rango, sumadas por semana."
-                    />
-                    <StatCard
-                      title="Utilización"
-                      value={weeklyTechTotals.utilizationPct == null ? '—' : `${weeklyTechTotals.utilizationPct}%`}
-                      help="Horas / horas hábiles (8h por día hábil). Aproximación."
-                      hint="Horas / horas hábiles (8h/día)"
-                    />
+                    <StatCard title="OS cerradas (semanal)" value={weeklyTechTotals.closed} />
+                    <StatCard title="Horas (semanal)" value={weeklyTechTotals.hours.toFixed(1)} />
+                    <StatCard title="Utilización" value={weeklyTechTotals.utilizationPct == null ? '—' : `${weeklyTechTotals.utilizationPct}%`} hint="Horas / horas hábiles (8h/día)" />
                     <StatCard
                       title="Hrs/OS"
                       value={weeklyTechTotals.hrsPerClosed == null ? '—' : weeklyTechTotals.hrsPerClosed.toFixed(2)}
-                      help="Horas trabajadas / OS cerradas."
                       hint="Horas trabajadas / OS cerradas"
                     />
                   </div>
@@ -909,41 +811,24 @@ export default function Dashboard() {
                         <XAxis dataKey="week" tickLine={false} axisLine={false} />
                         <YAxis yAxisId="left" tickLine={false} axisLine={false} allowDecimals={false} />
                         <YAxis yAxisId="right" orientation="right" tickLine={false} axisLine={false} />
-                        <YAxis
-                          yAxisId="pct"
-                          orientation="right"
-                          tickLine={false}
-                          axisLine={false}
-                          domain={[0, 100]}
-                          tickFormatter={(v) => `${v}%`}
-                        />
+                        <YAxis yAxisId="pct" orientation="right" tickLine={false} axisLine={false} domain={[0, 100]} tickFormatter={(v) => `${v}%`} />
                         <Tooltip />
-                        <Bar yAxisId="left" dataKey="closed" name="OS cerradas" radius={[6, 6, 0, 0]} />
-                        <Line yAxisId="right" type="monotone" dataKey="hours" name="Horas" strokeWidth={2} />
-                        <Line yAxisId="pct" type="monotone" dataKey="utilization" name="Utilización" strokeWidth={2} dot={false} />
+                        <Bar yAxisId="left" dataKey="closed" name="OS cerradas" fill="#64748b" radius={[6, 6, 0, 0]} />
+                        <Line yAxisId="right" type="monotone" dataKey="hours" name="Horas" stroke="#0f172a" strokeWidth={2} />
+                        <Line yAxisId="pct" type="monotone" dataKey="utilization" name="Utilización" stroke="#16a34a" strokeWidth={2} dot={false} />
                       </ComposedChart>
                     </ResponsiveContainer>
                   </div>
 
                   <div>
-                    <div className="text-sm font-medium mb-2">
-                      <MetricLabel label="Detalle por semana" help="Tabla semanal del técnico seleccionado." />
-                    </div>
+                    <div className="text-sm font-medium mb-2">Detalle por semana</div>
                     <Table>
                       <TableHeader>
                         <TableRow>
-                          <TableHead>
-                            <MetricLabel label="Semana" help="Inicio de la semana (formato dd MMM)." />
-                          </TableHead>
-                          <TableHead className="text-right">
-                            <MetricLabel label="OS cerradas" help="OS cerradas esa semana." />
-                          </TableHead>
-                          <TableHead className="text-right">
-                            <MetricLabel label="Horas" help="Horas efectivas esa semana." />
-                          </TableHead>
-                          <TableHead className="text-right">
-                            <MetricLabel label="Utilización" help="Horas / horas hábiles (8h por día hábil) esa semana." />
-                          </TableHead>
+                          <TableHead>Semana</TableHead>
+                          <TableHead className="text-right">OS cerradas</TableHead>
+                          <TableHead className="text-right">Horas</TableHead>
+                          <TableHead className="text-right">Utilización</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
@@ -962,14 +847,13 @@ export default function Dashboard() {
               )}
             </CardContent>
           </Card>
+
         </TabsContent>
       </Tabs>
 
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
-          <CardTitle className="text-base">
-            <MetricLabel label="Alertas recientes" help="Últimas alertas creadas (ordenadas por fecha). Útil para monitoreo." />
-          </CardTitle>
+          <CardTitle className="text-base">Alertas recientes</CardTitle>
           <Button asChild variant="secondary" size="sm">
             <Link href="/alerts">Ver todo</Link>
           </Button>
