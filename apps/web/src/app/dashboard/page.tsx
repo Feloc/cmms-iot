@@ -71,7 +71,20 @@ type Summary = {
 
   alerts: {
     open: number;
-    recent: Array<{ id: string; kind: string; assetCode: string; severity: string; status: string; createdAt: string }>;
+    recent: Array<{
+      id: string;
+      kind: string;
+      assetCode: string;
+      severity: string;
+      status: string;
+      createdAt: string;
+      // Campos opcionales (el backend puede variar):
+      sensor?: string | null;
+      metric?: string | null;
+      deviceId?: string | null;
+      message?: string | null;
+      title?: string | null;
+    }>;
   };
 
   service: {
@@ -97,6 +110,10 @@ type Summary = {
       utilizationPct: number | null;
       openAssigned: number;
       overdueOpenAssigned: number;
+      onTimeRate?: number | null;
+      // optional legacy/derived fields used by UI (may not be present in API)
+      avgCycleHours?: number | null;
+      avgResponseHours?: number | null;
     }>;
 
     technicianWeeklyProductivity: Array<{
@@ -130,6 +147,13 @@ function HelpTip(props: { text: string }) {
 function fmtHours(n: number | null | undefined) {
   if (n == null || Number.isNaN(n)) return '—';
   return n.toFixed(2);
+}
+
+function fmtFixed(value: unknown, digits: number) {
+  if (value == null) return '—';
+  const n = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(n)) return '—';
+  return n.toFixed(digits);
 }
 
 function StatCard(props: { title: string; value: ReactNode; hint?: string; href?: string }) {
@@ -175,21 +199,16 @@ export default function Dashboard() {
   const dashboardKey: DashboardKey | null =
     token && tenantSlug
       ? ([`/dashboard/summary?days=${days}`, String(token), String(tenantSlug)] as const)
-      : null;
+      : null;  // Fetcher para SWR:
+  // - Cuando `dashboardKey` es null, SWR NO ejecuta el fetcher.
+  // - Aun así, tipamos el argumento como `DashboardKey | null` para evitar errores de Typescript.
+  const fetchSummary = (key: DashboardKey | null) => {
+    if (!key) throw new Error('Missing dashboardKey');
+    const [url, t, slug] = key;
+    return apiFetch<Summary>(url, { token: t, tenantSlug: slug });
+  };
 
-  // SWR puede pasar el key como:
-// - un solo argumento (el array completo), o
-// - argumentos "spread" (url, token, slug)
-// Este fetcher soporta ambas formas, evitando errores tipo `path.startsWith is not a function`.
-const fetchSummary = (arg1: unknown, arg2?: unknown, arg3?: unknown) => {
-  const [url, t, slug] = Array.isArray(arg1)
-    ? (arg1 as DashboardKey)
-    : ([arg1, arg2, arg3] as unknown as DashboardKey);
-
-  return apiFetch<Summary>(String(url), { token: String(t), tenantSlug: String(slug) });
-};
-
-  const { data, error, isLoading } = useSWR<Summary, any, DashboardKey>(
+  const { data, error, isLoading } = useSWR<Summary, any, DashboardKey | null>(
     dashboardKey,
     fetchSummary,
     { refreshInterval: 15000 }
@@ -201,6 +220,8 @@ const fetchSummary = (arg1: unknown, arg2?: unknown, arg3?: unknown) => {
     const to = new Date(data.range.to).toLocaleDateString();
     return `${from} → ${to}`;
   }, [data?.range]);
+
+  const opComp = data?.service.operationalTimesComparisons;
 
   const techOptions = useMemo(() => {
     const rows = data?.service.technicianWeeklyProductivity ?? [];
@@ -228,6 +249,8 @@ const fetchSummary = (arg1: unknown, arg2?: unknown, arg3?: unknown) => {
 
     return { topThroughputId, bottomThroughputId, topUtilId, bottomUtilId };
   }, [data?.service.technicianPerformance]);
+
+  const recentAlerts = data?.alerts?.recent ?? [];
 
   useEffect(() => {
     if (!selectedTechId && techOptions.length) {
@@ -548,7 +571,7 @@ const fetchSummary = (arg1: unknown, arg2?: unknown, arg3?: unknown) => {
                     <SelectValue placeholder="Tramo" />
                   </SelectTrigger>
                   <SelectContent>
-                    {(data?.service.operationalTimesComparisons?.segments ?? []).map(s => (
+                    {(opComp?.segments ?? []).map(s => (
                       <SelectItem key={s.key} value={s.key}>
                         {s.label}
                       </SelectItem>
@@ -559,7 +582,7 @@ const fetchSummary = (arg1: unknown, arg2?: unknown, arg3?: unknown) => {
             </CardHeader>
 
             <CardContent>
-              {!data?.service.operationalTimesComparisons ? (
+              {!opComp ? (
                 <div className="text-sm text-neutral-500">Sin datos</div>
               ) : opDim === 'TECHNICIAN' ? (
                 <div className="space-y-4">
@@ -571,7 +594,7 @@ const fetchSummary = (arg1: unknown, arg2?: unknown, arg3?: unknown) => {
                     <TableHeader>
                       <TableRow>
                         <TableHead>Técnico</TableHead>
-                        {data.service.operationalTimesComparisons.segments.map(s => (
+                        {opComp.segments.map(s => (
                           <TableHead key={s.key} className="text-right">
                             <span className="inline-flex items-center">
                               {s.label}
@@ -582,10 +605,10 @@ const fetchSummary = (arg1: unknown, arg2?: unknown, arg3?: unknown) => {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {data.service.operationalTimesComparisons.byTechnician.map(g => (
+                      {opComp.byTechnician.map(g => (
                         <TableRow key={g.groupKey}>
                           <TableCell className="font-medium">{g.groupLabel}</TableCell>
-                          {data.service.operationalTimesComparisons.segments.map(s => {
+                          {opComp.segments.map(s => {
                             const m = g.segments?.[s.key];
                             const val =
                               opMetric === 'avg' ? m?.avgHours : opMetric === 'p50' ? m?.p50Hours : m?.p90Hours;
@@ -603,7 +626,7 @@ const fetchSummary = (arg1: unknown, arg2?: unknown, arg3?: unknown) => {
 
                   <div>
                     <div className="text-sm font-medium mb-2 inline-flex items-center">
-                      Ranking por {opMetric.toUpperCase()} — {data.service.operationalTimesComparisons.segments.find(s => s.key === opSegment)?.label ?? ''}
+                      Ranking por {opMetric.toUpperCase()} — {opComp.segments.find(s => s.key === opSegment)?.label ?? ''}
                       <HelpTip text="Ordena por el valor del tramo seleccionado (en horas). Útil para detectar a quién apoyar o qué casos auditar." />
                     </div>
 
@@ -619,7 +642,7 @@ const fetchSummary = (arg1: unknown, arg2?: unknown, arg3?: unknown) => {
                       </TableHeader>
                       <TableBody>
                         {(() => {
-                          const rows = [...data.service.operationalTimesComparisons.byTechnician]
+                          const rows = [...opComp.byTechnician]
                             .map(g => ({ g, m: g.segments?.[opSegment] }))
                             .filter(x => (x.m?.count ?? 0) > 0)
                             .sort((a, b) => (b.m?.p90Hours ?? 0) - (a.m?.p90Hours ?? 0))
@@ -661,10 +684,10 @@ const fetchSummary = (arg1: unknown, arg2?: unknown, arg3?: unknown) => {
                       {(() => {
                         const groups =
                           opDim === 'TYPE'
-                            ? data.service.operationalTimesComparisons.byServiceOrderType
+                            ? opComp.byServiceOrderType
                             : opDim === 'CUSTOMER'
-                              ? data.service.operationalTimesComparisons.byCustomer
-                              : data.service.operationalTimesComparisons.byLocation;
+                              ? opComp.byCustomer
+                              : opComp.byLocation;
 
                         const rows = [...groups]
                           .map(g => ({ g, m: g.segments?.[opSegment] }))
@@ -711,7 +734,7 @@ const fetchSummary = (arg1: unknown, arg2?: unknown, arg3?: unknown) => {
                       <TableHead>Técnico</TableHead>
                       <TableHead className="text-right">OS cerradas</TableHead>
                       <TableHead className="text-right">Horas</TableHead>
-                          <TableHead className="text-right">Utilización</TableHead>
+                      <TableHead className="text-right md:hidden">Utilización</TableHead>
                       <TableHead className="text-right hidden md:table-cell">Hrs/OS</TableHead>
                       <TableHead className="text-right hidden md:table-cell">Utilización</TableHead>
                       <TableHead className="text-right hidden md:table-cell">Ciclo (h)</TableHead>
@@ -734,18 +757,21 @@ const fetchSummary = (arg1: unknown, arg2?: unknown, arg3?: unknown) => {
                           </div>
                         </TableCell>
                         <TableCell className="text-right">{r.closedInRange}</TableCell>
-                        <TableCell className="text-right">{r.totalWorkHours.toFixed(1)}</TableCell>
+                        <TableCell className="text-right">{fmtFixed(r.effectiveHours, 1)}</TableCell>
+                        <TableCell className="text-right md:hidden">
+                          {r.utilizationPct == null ? '—' : `${r.utilizationPct}%`}
+                        </TableCell>
                         <TableCell className="text-right hidden md:table-cell">
-                          {r.avgWorkHoursPerSO == null ? '—' : r.avgWorkHoursPerSO.toFixed(2)}
+                          {fmtFixed(r.hrsPerOs, 2)}
                         </TableCell>
                         <TableCell className="text-right hidden md:table-cell">
                           {r.utilizationPct == null ? '—' : `${r.utilizationPct}%`}
                         </TableCell>
                         <TableCell className="text-right hidden md:table-cell">
-                          {r.avgCycleHours == null ? '—' : r.avgCycleHours.toFixed(1)}
+                          {fmtFixed(r.avgCycleHours, 1)}
                         </TableCell>
                         <TableCell className="text-right hidden md:table-cell">
-                          {r.avgResponseHours == null ? '—' : r.avgResponseHours.toFixed(1)}
+                          {fmtFixed(r.avgResponseHours, 1)}
                         </TableCell>
                         <TableCell className="text-right hidden lg:table-cell">
                           {r.onTimeRate == null ? '—' : `${r.onTimeRate}%`}
@@ -859,19 +885,25 @@ const fetchSummary = (arg1: unknown, arg2?: unknown, arg3?: unknown) => {
           </Button>
         </CardHeader>
         <CardContent>
-          {!data?.alerts.recent?.length ? (
+          {recentAlerts.length === 0 ? (
             <div className="text-sm text-neutral-500">Sin alertas</div>
           ) : (
             <ul className="space-y-2">
-              {data.alerts.recent.map(a => (
-                <li key={a.id} className="p-3 rounded border">
-                  <div className="text-sm">
-                    <span className="font-mono">[{a.kind}]</span>{' '}
-                    <span className="font-semibold">{a.assetCode}/{a.sensor}</span> – {a.message}
-                  </div>
-                  <div className="text-xs text-neutral-500">{new Date(a.createdAt).toLocaleString()}</div>
-                </li>
-              ))}
+              {recentAlerts.map((a) => {
+                const sensorLabel = a.sensor ?? a.metric ?? a.deviceId ?? '';
+                const sourceLabel = sensorLabel ? `${a.assetCode}/${sensorLabel}` : a.assetCode;
+                const msg = a.message ?? a.title ?? '—';
+
+                return (
+                  <li key={a.id} className="p-3 rounded border">
+                    <div className="text-sm">
+                      <span className="font-mono">[{a.kind}]</span>{' '}
+                      <span className="font-semibold">{sourceLabel}</span> – {msg}
+                    </div>
+                    <div className="text-xs text-neutral-500">{new Date(a.createdAt).toLocaleString()}</div>
+                  </li>
+                );
+              })}
             </ul>
           )}
         </CardContent>
