@@ -47,6 +47,11 @@ private readonly TS_ORDER = [
   'deliveredAt',
 ] as const;
 
+private getVisitMode(formData: any): 'PRIMARY' | 'FOLLOW_UP' {
+  const raw = String(formData?.visitMode ?? '').trim().toUpperCase();
+  return raw === 'FOLLOW_UP' ? 'FOLLOW_UP' : 'PRIMARY';
+}
+
 private coerceNullableDate(d: any): Date | null | undefined {
   // undefined => no toca el campo
   if (d === undefined) return undefined;
@@ -55,14 +60,20 @@ private coerceNullableDate(d: any): Date | null | undefined {
   return this.coerceDate(d);
 }
 
-private validateTimestampChain(next: Record<string, Date | null>, explicitClears: Set<string>) {
+private validateTimestampChain(
+  next: Record<string, Date | null>,
+  explicitClears: Set<string>,
+  options?: { allowMissingPrelude?: boolean },
+) {
   const order = this.TS_ORDER as unknown as string[];
+  const allowMissingPrelude = !!options?.allowMissingPrelude;
 
   // Si se intenta borrar un timestamp que tiene posteriores registrados, no permitir.
   for (let i = 0; i < order.length; i++) {
     const k = order[i];
     if (!explicitClears.has(k)) continue;
     for (const later of order.slice(i + 1)) {
+      if (allowMissingPrelude && k === 'checkInAt' && later === 'activityStartedAt') continue;
       if (next[later]) {
         throw new BadRequestException(
           `No puedes borrar ${k} mientras ${later} esté registrado. Borra primero los timestamps posteriores.`
@@ -81,10 +92,11 @@ private validateTimestampChain(next: Record<string, Date | null>, explicitClears
     if (i > 0) {
       const prevK = order[i - 1];
       const prev = next[prevK];
-      if (!prev) {
+      const canSkipPrev = allowMissingPrelude && k === 'activityStartedAt';
+      if (!prev && !canSkipPrev) {
         throw new BadRequestException(`Debes registrar ${prevK} antes de registrar/modificar ${k}.`);
       }
-      if (v.getTime() < prev.getTime()) {
+      if (prev && v.getTime() < prev.getTime()) {
         throw new BadRequestException(`${k} no puede ser más temprano que ${prevK}.`);
       }
     }
@@ -94,7 +106,8 @@ private validateTimestampChain(next: Record<string, Date | null>, explicitClears
   for (let i = 1; i < order.length; i++) {
     const a = next[order[i - 1]];
     const b = next[order[i]];
-    if (b && !a) throw new BadRequestException(`Debes registrar ${order[i - 1]} antes de ${order[i]}.`);
+    const canSkipPrev = allowMissingPrelude && order[i] === 'activityStartedAt';
+    if (b && !a && !canSkipPrev) throw new BadRequestException(`Debes registrar ${order[i - 1]} antes de ${order[i]}.`);
     if (a && b && b.getTime() < a.getTime()) throw new BadRequestException(`${order[i]} no puede ser más temprano que ${order[i - 1]}.`);
   }
 }
@@ -321,6 +334,10 @@ private async assertTechCanMutateServiceOrder(
     const pRes = (prev?.result ?? '');
     const nRes = (next?.result ?? '');
     if (pRes !== nRes) changes.push({ field: 'formData', part: 'result', from: pRes, to: nRes });
+
+    const pVisitMode = this.getVisitMode(prev);
+    const nVisitMode = this.getVisitMode(next);
+    if (pVisitMode !== nVisitMode) changes.push({ field: 'formData', part: 'visitMode', from: pVisitMode, to: nVisitMode });
 
     const pCL = prev?.checklists && typeof prev.checklists === 'object' ? prev.checklists : {};
     const nCL = next?.checklists && typeof next.checklists === 'object' ? next.checklists : {};
@@ -902,6 +919,7 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
       where: { id, tenantId, kind: 'SERVICE_ORDER' },
       select: {
         status: true,
+        formData: true,
         takenAt: true,
         arrivedAt: true,
         checkInAt: true,
@@ -915,6 +933,8 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
 
     const role = await this.getCurrentUserRole(tx, tenantId, actorUserId);
     await this.assertTechCanMutateServiceOrder(tx, tenantId, actorUserId, id, role);
+    const visitMode = this.getVisitMode((current as any).formData);
+    const allowMissingPrelude = visitMode === 'FOLLOW_UP';
 
     const next: Record<string, Date | null> = {
       takenAt: current.takenAt,
@@ -938,12 +958,14 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
       next[k] = coerced === undefined ? next[k] : coerced;
     }
 
-    this.validateTimestampChain(next, explicitClears);
+    this.validateTimestampChain(next, explicitClears, { allowMissingPrelude });
 
     // Estados automáticos por timestamps (no requiere ADMIN)
     const currentStatus = String(current.status || 'OPEN').toUpperCase();
 
-    if ((dto as any).takenAt !== undefined && next.takenAt) {
+    const startedByPrelude = (dto as any).takenAt !== undefined && next.takenAt;
+    const startedByActivity = (dto as any).activityStartedAt !== undefined && next.activityStartedAt;
+    if (startedByPrelude || startedByActivity) {
       if (!['COMPLETED', 'CLOSED', 'CANCELED'].includes(currentStatus)) {
         data.status = 'IN_PROGRESS';
       }
@@ -1352,6 +1374,9 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
   }
 
   private buildOperationalTimes(so: any) {
+    const visitMode = this.getVisitMode((so as any)?.formData ?? null);
+    const isFollowUp = visitMode === 'FOLLOW_UP';
+
     const takenAt = so.takenAt ? new Date(so.takenAt) : null;
     const arrivedAt = so.arrivedAt ? new Date(so.arrivedAt) : null;
     const checkInAt = so.checkInAt ? new Date(so.checkInAt) : null;
@@ -1372,12 +1397,12 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
 
     return {
       segments: [
-        seg('taken_arrived', 'Desplazamiento (takenAt → arrivedAt)', takenAt, arrivedAt),
-        seg('arrived_checkin', 'Proceso de ingreso (arrivedAt → checkInAt)', arrivedAt, checkInAt),
-        seg('checkin_start', 'Entrega del equipo (checkInAt → activityStartedAt)', checkInAt, activityStartedAt),
+        seg('taken_arrived', 'Desplazamiento (takenAt → arrivedAt)', isFollowUp ? null : takenAt, isFollowUp ? null : arrivedAt),
+        seg('arrived_checkin', 'Proceso de ingreso (arrivedAt → checkInAt)', isFollowUp ? null : arrivedAt, isFollowUp ? null : checkInAt),
+        seg('checkin_start', 'Entrega del equipo (checkInAt → activityStartedAt)', isFollowUp ? null : checkInAt, activityStartedAt),
         seg('start_finish', 'Trabajo en sitio (activityStartedAt → activityFinishedAt)', activityStartedAt, activityFinishedAt),
         seg('finish_delivered', 'Entrega final (activityFinishedAt → deliveredAt)', activityFinishedAt, deliveredAt),
-        seg('arrived_delivered', 'Duración del servicio (arrivedAt → deliveredAt)', arrivedAt, deliveredAt),
+        seg('arrived_delivered', 'Duración del servicio (arrivedAt → deliveredAt)', isFollowUp ? null : arrivedAt, deliveredAt),
       ],
     };
   }

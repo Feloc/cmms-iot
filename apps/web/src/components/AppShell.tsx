@@ -31,6 +31,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
 
   const items: NavItem[] = useMemo(
     () => [
+      { href: '/dashboard', label: 'Dashboard', adminOnly: true },
       { href: '/calendar', label: 'Calendario' },
       { href: '/service-orders', label: 'Órdenes de servicio' },
       { href: '/assets', label: 'Activos' },
@@ -163,6 +164,8 @@ export default function AppShell({ children }: { children: ReactNode }) {
 
 function iconFor(href: string) {
   switch (href) {
+    case '/dashboard':
+      return '📊';
     case '/calendar':
       return '🗓️';
     case '/service-orders':

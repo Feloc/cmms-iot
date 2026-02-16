@@ -56,6 +56,8 @@ type Resource = { id: string; title: string };
 
 type CalEvent = {
   id: string;
+  soId: string;
+  assignmentId: string | null;
   title: string;
   start: Date;
   end: Date;
@@ -138,9 +140,20 @@ function getRange(date: Date, view: View) {
   return { start, end };
 }
 
-function getActiveTechnicianId(so: ServiceOrder): string | null {
-  const tech = so.assignments?.find((a) => a.role === 'TECHNICIAN' && a.state === 'ACTIVE')?.user;
-  return tech?.id ?? null;
+function getActiveTechnicianAssignments(so: ServiceOrder): Array<{ assignmentId: string; technicianId: string }> {
+  const seen = new Set<string>();
+  const out: Array<{ assignmentId: string; technicianId: string }> = [];
+
+  for (const a of so.assignments ?? []) {
+    if (!a || a.role !== 'TECHNICIAN' || a.state !== 'ACTIVE') continue;
+    const assignmentId = String(a.id ?? '').trim();
+    const technicianId = String(a.user?.id ?? '').trim();
+    if (!assignmentId || !technicianId || seen.has(technicianId)) continue;
+    seen.add(technicianId);
+    out.push({ assignmentId, technicianId });
+  }
+
+  return out;
 }
 
 function buildCompactTitle(so: ServiceOrder) {
@@ -280,12 +293,27 @@ export default function CalendarPage() {
 
       const mapped: CalEvent[] = (items ?? [])
         .filter((so) => !!so?.dueDate)
-        .map((so) => {
+        .flatMap((so) => {
           const startAt = new Date(so.dueDate!);
           const dur = so.durationMin ?? DEFAULT_DURATION_MIN;
           const endAt = addMinutes(startAt, dur);
-          const techId = getActiveTechnicianId(so) ?? UNASSIGNED;
-          return { id: so.id, title: buildCompactTitle(so), start: startAt, end: endAt, resourceId: techId, so };
+          const activeAssignments = getActiveTechnicianAssignments(so);
+          const allSlots =
+            activeAssignments.length > 0
+              ? activeAssignments.map((a) => ({ assignmentId: a.assignmentId, resourceId: a.technicianId }))
+              : [{ assignmentId: null, resourceId: UNASSIGNED }];
+          const slots = onlyTechId ? allSlots.filter((s) => s.resourceId === onlyTechId) : allSlots;
+
+          return slots.map((slot) => ({
+            id: slot.assignmentId ? `${so.id}:${slot.assignmentId}` : `${so.id}:UNASSIGNED`,
+            soId: so.id,
+            assignmentId: slot.assignmentId,
+            title: buildCompactTitle(so),
+            start: startAt,
+            end: endAt,
+            resourceId: slot.resourceId,
+            so,
+          }));
         });
 
       setEvents(mapped);
@@ -365,18 +393,46 @@ export default function CalendarPage() {
     }
   }
 
-  async function reschedule(soId: string, start: Date | null, resourceId: string, durationMin?: number | null) {
+  async function reschedule(soId: string, start: Date | null, resourceId?: string, durationMin?: number | null) {
     if (!auth.token || !auth.tenantSlug) return;
+
+    const body: any = {
+      dueDate: start === null ? null : start.toISOString(),
+      ...(durationMin !== undefined ? { durationMin } : {}),
+    };
+    if (resourceId !== undefined) {
+      body.technicianId = resourceId === UNASSIGNED ? null : resourceId;
+    }
 
     await apiFetch(`/service-orders/${soId}/schedule`, {
       method: 'PATCH',
       token: auth.token,
       tenantSlug: auth.tenantSlug,
-      body: {
-        dueDate: start === null ? null : start.toISOString(),
-        technicianId: resourceId === UNASSIGNED ? null : resourceId,
-        ...(durationMin !== undefined ? { durationMin } : {}),
-      },
+      body,
+    });
+  }
+
+  async function addTechnicianAssignment(soId: string, technicianId: string) {
+    if (!auth.token || !auth.tenantSlug) return;
+    if (!technicianId || technicianId === UNASSIGNED) return;
+
+    await apiFetch(`/work-orders/${soId}/assignments`, {
+      method: 'POST',
+      token: auth.token,
+      tenantSlug: auth.tenantSlug,
+      body: { userId: technicianId, role: 'TECHNICIAN' },
+    });
+  }
+
+  async function removeTechnicianAssignment(soId: string, assignmentId: string) {
+    if (!auth.token || !auth.tenantSlug) return;
+    if (!assignmentId) return;
+
+    await apiFetch(`/work-orders/${soId}/assignments/${assignmentId}`, {
+      method: 'PATCH',
+      token: auth.token,
+      tenantSlug: auth.tenantSlug,
+      body: { state: 'REMOVED' },
     });
   }
 
@@ -408,7 +464,33 @@ export default function CalendarPage() {
         currentEventResourceId: event.resourceId,
       });
 
-      await reschedule(event.id, s, targetResId, duration);
+      const currentResId = event.resourceId;
+      const movedAcrossResources = targetResId !== currentResId;
+
+      if (movedAcrossResources) {
+        if (currentResId === UNASSIGNED && targetResId !== UNASSIGNED) {
+          await addTechnicianAssignment(event.soId, targetResId);
+        } else if (currentResId !== UNASSIGNED && targetResId === UNASSIGNED) {
+          if (event.assignmentId) {
+            await removeTechnicianAssignment(event.soId, event.assignmentId);
+          }
+        } else if (currentResId !== UNASSIGNED && targetResId !== UNASSIGNED) {
+          const duplicate = window.confirm(
+            '¿Duplicar este evento para el técnico destino y conservar el técnico actual?\nAceptar = duplicar\nCancelar = mover',
+          );
+
+          if (duplicate) {
+            await addTechnicianAssignment(event.soId, targetResId);
+          } else {
+            await addTechnicianAssignment(event.soId, targetResId);
+            if (event.assignmentId) {
+              await removeTechnicianAssignment(event.soId, event.assignmentId);
+            }
+          }
+        }
+      }
+
+      await reschedule(event.soId, s, undefined, duration);
       await loadEvents();
       await loadUnscheduled();
     } catch (e: any) {
@@ -418,7 +500,7 @@ export default function CalendarPage() {
     }
   };
 
-  const onEventResize: withDragAndDropProps<CalEvent, Resource>['onEventResize'] = async ({ event, start, end, resourceId }) => {
+  const onEventResize: withDragAndDropProps<CalEvent, Resource>['onEventResize'] = async ({ event, start, end }) => {
     setLoading(true);
     setErr('');
     try {
@@ -426,13 +508,7 @@ export default function CalendarPage() {
       const e = end as Date;
       const duration = Math.max(15, Math.round((e.getTime() - s.getTime()) / 60000));
 
-      const targetResId = resolveTargetResourceIdForExistingEvent({
-        rawResourceId: resourceId,
-        hoverResourceId,
-        currentEventResourceId: event.resourceId,
-      });
-
-      await reschedule(event.id, s, targetResId, duration);
+      await reschedule(event.soId, s, undefined, duration);
       await loadEvents();
     } catch (e: any) {
       setErr(e?.message ?? 'No se pudo ajustar la duración');
@@ -446,7 +522,16 @@ export default function CalendarPage() {
     const startAt = new Date();
     const dur = dragSo.durationMin ?? DEFAULT_DURATION_MIN;
     const endAt = addMinutes(startAt, dur);
-    return { id: dragSo.id, title: buildCompactTitle(dragSo), start: startAt, end: endAt, resourceId: UNASSIGNED, so: dragSo };
+    return {
+      id: `preview:${dragSo.id}`,
+      soId: dragSo.id,
+      assignmentId: null,
+      title: buildCompactTitle(dragSo),
+      start: startAt,
+      end: endAt,
+      resourceId: UNASSIGNED,
+      so: dragSo,
+    };
   }, [dragSo]);
 
   const onDropFromOutside: withDragAndDropProps<CalEvent, Resource>['onDropFromOutside'] = async (args: any) => {
@@ -624,6 +709,7 @@ export default function CalendarPage() {
 
             <div className="text-[11px] text-gray-500 mt-3 space-y-1">
               <div>Tip: arrastra un ítem y suéltalo sobre una columna (técnico) y una hora.</div>
+              <div>Tip: al mover un evento entre técnicos, podrás elegir entre duplicar o mover la asignación.</div>
               <div>
                 Para devolver una OS al panel, usa el botón <span className="font-mono">↩</span> en el evento.
               </div>
@@ -644,7 +730,7 @@ export default function CalendarPage() {
               onNavigate={setDate}
               components={{
                 toolbar: Toolbar,
-                event: (props: any) => <EventBox {...props} view={view} onUnschedule={() => unscheduleSo(props.event.id)} />,
+                event: (props: any) => <EventBox {...props} view={view} onUnschedule={() => unscheduleSo(props.event.soId)} />,
                 timeSlotWrapper: TimeSlotWrapper,
                 dateCellWrapper: DateCellWrapper,
               }}
@@ -669,6 +755,8 @@ export default function CalendarPage() {
                 (dragPreviewEvent ??
                   ({
                     id: 'preview',
+                    soId: 'preview',
+                    assignmentId: null,
                     title: '',
                     start: new Date(),
                     end: new Date(),
@@ -682,7 +770,7 @@ export default function CalendarPage() {
                 updateHoverResourceFromPointerEvent(e);
               }}
               style={{ height: isFullscreen ? '100vh' : 760 }}
-              onDoubleClickEvent={(e: any) => { router.push(`/service-orders/${e.id}`); }}
+              onDoubleClickEvent={(e: any) => { router.push(`/service-orders/${e.soId}`); }}
               eventPropGetter={(event: any) => {
                 const base = { whiteSpace: 'normal', wordBreak: 'break-word', overflow: 'hidden', lineHeight: 1.15 };
                 const st = statusToStyle(event?.so?.status);

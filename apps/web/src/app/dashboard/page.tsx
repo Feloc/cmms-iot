@@ -14,6 +14,7 @@ import {
   XAxis,
   YAxis,
   Tooltip,
+  Legend,
   Bar,
   Line,
 } from 'recharts';
@@ -126,6 +127,12 @@ type Summary = {
       utilizationPct: number | null;
     }>;
 
+    closedOrdersSummary?: {
+      byTechnician: Array<{ userId: string; name: string; closedCount: number }>;
+      byServiceType: Array<{ serviceType: string; closedCount: number }>;
+      byTechnicianAndServiceType: Array<{ userId: string; name: string; serviceType: string; closedCount: number }>;
+    };
+
     operationalTimes: OperationalTimeRow[];
     operationalTimesComparisons?: OperationalTimesComparisons;
   };
@@ -154,6 +161,29 @@ function fmtFixed(value: unknown, digits: number) {
   const n = typeof value === 'number' ? value : Number(value);
   if (!Number.isFinite(n)) return '—';
   return n.toFixed(digits);
+}
+
+function serviceTypeLabel(v?: string | null) {
+  const t = String(v ?? '').trim().toUpperCase();
+  if (!t || t === 'UNSPECIFIED' || t === 'NULL') return '(sin tipo)';
+  return t;
+}
+
+type RangePreset = '1' | '7' | '30' | '90' | 'custom';
+
+function toIsoLocalDayStart(v: string) {
+  if (!v) return null;
+  const d = new Date(`${v}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toISOString();
+}
+
+function toIsoLocalDayEndExclusive(v: string) {
+  if (!v) return null;
+  const d = new Date(`${v}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return null;
+  d.setDate(d.getDate() + 1);
+  return d.toISOString();
 }
 
 function StatCard(props: { title: string; value: ReactNode; hint?: string; href?: string }) {
@@ -188,7 +218,10 @@ export default function Dashboard() {
     process.env.NEXT_PUBLIC_TENANT_SLUG ||
     undefined;
 
-  const [days, setDays] = useState<'7' | '30' | '90'>('30');
+  const [rangePreset, setRangePreset] = useState<RangePreset>('30');
+  const [appliedRange, setAppliedRange] = useState<{ days?: string; from?: string; to?: string }>({ days: '30' });
+  const [customFrom, setCustomFrom] = useState('');
+  const [customTo, setCustomTo] = useState('');
   const [selectedTechId, setSelectedTechId] = useState<string>('');
   const [opDim, setOpDim] = useState<'TECHNICIAN' | 'TYPE' | 'CUSTOMER' | 'LOCATION'>('TECHNICIAN');
   const [opMetric, setOpMetric] = useState<'avg' | 'p50' | 'p90'>('p90');
@@ -196,9 +229,20 @@ export default function Dashboard() {
 
   type DashboardKey = readonly [string, string, string];
 
+  const dashboardQuery = useMemo(() => {
+    const qs = new URLSearchParams();
+    if (appliedRange.from && appliedRange.to) {
+      qs.set('from', appliedRange.from);
+      qs.set('to', appliedRange.to);
+    } else {
+      qs.set('days', appliedRange.days || '30');
+    }
+    return qs.toString();
+  }, [appliedRange.days, appliedRange.from, appliedRange.to]);
+
   const dashboardKey: DashboardKey | null =
     token && tenantSlug
-      ? ([`/dashboard/summary?days=${days}`, String(token), String(tenantSlug)] as const)
+      ? ([`/dashboard/summary?${dashboardQuery}`, String(token), String(tenantSlug)] as const)
       : null;  // Fetcher para SWR:
   // - Cuando `dashboardKey` es null, SWR NO ejecuta el fetcher.
   // - Aun así, tipamos el argumento como `DashboardKey | null` para evitar errores de Typescript.
@@ -252,6 +296,43 @@ export default function Dashboard() {
 
   const recentAlerts = data?.alerts?.recent ?? [];
 
+  const customRangeError = useMemo(() => {
+    if (rangePreset !== 'custom') return '';
+    if (!customFrom || !customTo) return '';
+    const a = new Date(`${customFrom}T00:00:00`);
+    const b = new Date(`${customTo}T00:00:00`);
+    if (Number.isNaN(a.getTime()) || Number.isNaN(b.getTime())) return 'Rango de fechas inválido.';
+    if (a.getTime() > b.getTime()) return 'La fecha inicial no puede ser mayor a la final.';
+    return '';
+  }, [rangePreset, customFrom, customTo]);
+
+  function applyCustomRange() {
+    const fromIso = toIsoLocalDayStart(customFrom);
+    const toIso = toIsoLocalDayEndExclusive(customTo);
+    if (!fromIso || !toIso) return;
+    const fromMs = new Date(fromIso).getTime();
+    const toMs = new Date(toIso).getTime();
+    if (!Number.isFinite(fromMs) || !Number.isFinite(toMs) || fromMs >= toMs) return;
+    setAppliedRange({ from: fromIso, to: toIso });
+  }
+
+  function onPresetChange(v: RangePreset) {
+    setRangePreset(v);
+    if (v !== 'custom') {
+      setAppliedRange({ days: v });
+      return;
+    }
+    if (!customFrom || !customTo) {
+      const now = new Date();
+      const yyyy = now.getFullYear();
+      const mm = String(now.getMonth() + 1).padStart(2, '0');
+      const dd = String(now.getDate()).padStart(2, '0');
+      const today = `${yyyy}-${mm}-${dd}`;
+      setCustomFrom(today);
+      setCustomTo(today);
+    }
+  }
+
   useEffect(() => {
     if (!selectedTechId && techOptions.length) {
       setSelectedTechId(techOptions[0].userId);
@@ -285,6 +366,55 @@ export default function Dashboard() {
     return { closed, hours, available, hrsPerClosed, utilizationPct };
   }, [data?.service.technicianWeeklyProductivity, selectedTechId]);
 
+  const closedSummary = data?.service.closedOrdersSummary;
+
+  const closedByTechnicianChart = useMemo(
+    () =>
+      (closedSummary?.byTechnician ?? [])
+        .map(r => ({ name: r.name, closed: r.closedCount }))
+        .slice(0, 15),
+    [closedSummary?.byTechnician]
+  );
+
+  const closedByServiceTypeChart = useMemo(
+    () =>
+      (closedSummary?.byServiceType ?? []).map(r => ({
+        serviceType: serviceTypeLabel(r.serviceType),
+        closed: r.closedCount,
+      })),
+    [closedSummary?.byServiceType]
+  );
+
+  const closedStackKeys = useMemo(() => {
+    const keys = new Set<string>();
+    for (const row of closedSummary?.byTechnicianAndServiceType ?? []) {
+      keys.add(serviceTypeLabel(row.serviceType));
+    }
+    return Array.from(keys).sort((a, b) => a.localeCompare(b));
+  }, [closedSummary?.byTechnicianAndServiceType]);
+
+  const closedByTechAndTypeChart = useMemo(() => {
+    const grouped = new Map<string, Record<string, string | number>>();
+    for (const row of closedSummary?.byTechnicianAndServiceType ?? []) {
+      const typeKey = serviceTypeLabel(row.serviceType);
+      const cur = grouped.get(row.userId) ?? { tech: row.name, total: 0 };
+      cur[typeKey] = Number(cur[typeKey] ?? 0) + row.closedCount;
+      cur.total = Number(cur.total ?? 0) + row.closedCount;
+      grouped.set(row.userId, cur);
+    }
+    return Array.from(grouped.values())
+      .sort((a, b) => Number(b.total ?? 0) - Number(a.total ?? 0))
+      .slice(0, 15);
+  }, [closedSummary?.byTechnicianAndServiceType]);
+
+  const closedStackColors = useMemo(() => {
+    const palette = ['#2563eb', '#16a34a', '#ea580c', '#7c3aed', '#0891b2', '#dc2626', '#65a30d', '#0f766e'];
+    return closedStackKeys.reduce<Record<string, string>>((acc, key, idx) => {
+      acc[key] = palette[idx % palette.length];
+      return acc;
+    }, {});
+  }, [closedStackKeys]);
+
   return (
     <div className="p-6 space-y-6">
       <div className="flex items-start justify-between gap-4">
@@ -295,18 +425,51 @@ export default function Dashboard() {
 
         <div className="flex items-center gap-3">
           <div className="text-xs text-neutral-500">{rangeLabel}</div>
-          <Select value={days} onValueChange={(v: any) => setDays(v)}>
-            <SelectTrigger className="w-[180px]">
+          <Select value={rangePreset} onValueChange={(v: any) => onPresetChange(v)}>
+            <SelectTrigger className="w-[220px]">
               <SelectValue placeholder="Rango" />
             </SelectTrigger>
             <SelectContent>
+              <SelectItem value="1">Último día</SelectItem>
               <SelectItem value="7">Últimos 7 días</SelectItem>
               <SelectItem value="30">Últimos 30 días</SelectItem>
               <SelectItem value="90">Últimos 90 días</SelectItem>
+              <SelectItem value="custom">Rango personalizado</SelectItem>
             </SelectContent>
           </Select>
+          {rangePreset === 'custom' ? (
+            <div className="flex items-center gap-2 flex-wrap">
+              <input
+                type="date"
+                className="border rounded px-2 py-1 text-sm"
+                value={customFrom}
+                onChange={(e) => setCustomFrom(e.target.value)}
+              />
+              <span className="text-xs text-neutral-500">a</span>
+              <input
+                type="date"
+                className="border rounded px-2 py-1 text-sm"
+                value={customTo}
+                onChange={(e) => setCustomTo(e.target.value)}
+              />
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={applyCustomRange}
+                disabled={!customFrom || !customTo || !!customRangeError}
+              >
+                Aplicar
+              </Button>
+            </div>
+          ) : null}
         </div>
       </div>
+
+      {rangePreset === 'custom' && customRangeError ? (
+        <Card>
+          <CardContent className="p-3 text-sm text-amber-700">{customRangeError}</CardContent>
+        </Card>
+      ) : null}
 
       {error ? (
         <Card>
@@ -432,6 +595,173 @@ export default function Dashboard() {
             <StatCard title="MTTR (horas)" value={isLoading ? '—' : (data?.service.mttrHours ?? '—')} hint="Promedio cierre (rango)" />
           </div>
 
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Resumen de cierres por rango</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {!closedSummary ? (
+                <div className="text-sm text-neutral-500">Sin datos</div>
+              ) : (
+                <>
+                  <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                    <div className="rounded-md border p-3">
+                      <div className="text-sm font-medium mb-2">Órdenes cerradas por técnico (Top 15)</div>
+                      {!closedByTechnicianChart.length ? (
+                        <div className="text-sm text-neutral-500">Sin datos</div>
+                      ) : (
+                        <div className="h-[280px]">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <ComposedChart
+                              data={closedByTechnicianChart}
+                              layout="vertical"
+                              margin={{ top: 6, right: 14, left: 12, bottom: 6 }}
+                            >
+                              <CartesianGrid strokeDasharray="3 3" />
+                              <XAxis type="number" allowDecimals={false} />
+                              <YAxis type="category" dataKey="name" width={130} interval={0} />
+                              <Tooltip formatter={(v: any) => [v, 'Cerradas']} />
+                              <Bar dataKey="closed" name="Cerradas" fill="#2563eb" radius={[0, 4, 4, 0]} />
+                            </ComposedChart>
+                          </ResponsiveContainer>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="rounded-md border p-3">
+                      <div className="text-sm font-medium mb-2">Totales por clase de servicio</div>
+                      {!closedByServiceTypeChart.length ? (
+                        <div className="text-sm text-neutral-500">Sin datos</div>
+                      ) : (
+                        <div className="h-[280px]">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <ComposedChart data={closedByServiceTypeChart} margin={{ top: 6, right: 14, left: 6, bottom: 30 }}>
+                              <CartesianGrid strokeDasharray="3 3" />
+                              <XAxis dataKey="serviceType" angle={-20} textAnchor="end" interval={0} height={55} />
+                              <YAxis allowDecimals={false} />
+                              <Tooltip formatter={(v: any) => [v, 'Cerradas']} />
+                              <Bar dataKey="closed" name="Cerradas" fill="#16a34a" radius={[4, 4, 0, 0]} />
+                            </ComposedChart>
+                          </ResponsiveContainer>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="rounded-md border p-3">
+                    <div className="text-sm font-medium mb-2">Totales de técnico por clase (Top 15 técnicos)</div>
+                    {!closedByTechAndTypeChart.length ? (
+                      <div className="text-sm text-neutral-500">Sin datos</div>
+                    ) : (
+                      <div className="h-[320px]">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <ComposedChart data={closedByTechAndTypeChart} margin={{ top: 6, right: 14, left: 6, bottom: 28 }}>
+                            <CartesianGrid strokeDasharray="3 3" />
+                            <XAxis dataKey="tech" angle={-20} textAnchor="end" interval={0} height={55} />
+                            <YAxis allowDecimals={false} />
+                            <Tooltip />
+                            <Legend />
+                            {closedStackKeys.map((k) => (
+                              <Bar key={k} dataKey={k} stackId="closedByType" fill={closedStackColors[k]} name={k} />
+                            ))}
+                          </ComposedChart>
+                        </ResponsiveContainer>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="text-xs text-neutral-500">
+                    Tablas de detalle:
+                  </div>
+                  <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+                    <div className="space-y-2">
+                      <div className="text-sm font-medium">Órdenes cerradas por técnico</div>
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Técnico</TableHead>
+                            <TableHead className="text-right">Cerradas</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {(closedSummary.byTechnician ?? []).map((r) => (
+                            <TableRow key={r.userId}>
+                              <TableCell>{r.name}</TableCell>
+                              <TableCell className="text-right">
+                                <Badge variant="secondary">{r.closedCount}</Badge>
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                          {(closedSummary.byTechnician ?? []).length === 0 ? (
+                            <TableRow>
+                              <TableCell className="text-neutral-500" colSpan={2}>Sin datos</TableCell>
+                            </TableRow>
+                          ) : null}
+                        </TableBody>
+                      </Table>
+                    </div>
+
+                    <div className="space-y-2">
+                      <div className="text-sm font-medium">Totales por clase de servicio</div>
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Clase</TableHead>
+                            <TableHead className="text-right">Cerradas</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {(closedSummary.byServiceType ?? []).map((r) => (
+                            <TableRow key={r.serviceType}>
+                              <TableCell>{serviceTypeLabel(r.serviceType)}</TableCell>
+                              <TableCell className="text-right">
+                                <Badge variant="secondary">{r.closedCount}</Badge>
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                          {(closedSummary.byServiceType ?? []).length === 0 ? (
+                            <TableRow>
+                              <TableCell className="text-neutral-500" colSpan={2}>Sin datos</TableCell>
+                            </TableRow>
+                          ) : null}
+                        </TableBody>
+                      </Table>
+                    </div>
+
+                    <div className="space-y-2">
+                      <div className="text-sm font-medium">Totales de técnico por clase</div>
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Técnico</TableHead>
+                            <TableHead>Clase</TableHead>
+                            <TableHead className="text-right">Cerradas</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {(closedSummary.byTechnicianAndServiceType ?? []).map((r) => (
+                            <TableRow key={`${r.userId}:${r.serviceType}`}>
+                              <TableCell>{r.name}</TableCell>
+                              <TableCell>{serviceTypeLabel(r.serviceType)}</TableCell>
+                              <TableCell className="text-right">
+                                <Badge variant="secondary">{r.closedCount}</Badge>
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                          {(closedSummary.byTechnicianAndServiceType ?? []).length === 0 ? (
+                            <TableRow>
+                              <TableCell className="text-neutral-500" colSpan={3}>Sin datos</TableCell>
+                            </TableRow>
+                          ) : null}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  </div>
+                </>
+              )}
+            </CardContent>
+          </Card>
+
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <Card>
               <CardHeader>
@@ -532,6 +862,7 @@ export default function Dashboard() {
               <div className="text-xs text-neutral-500 mt-2">
                 Nota: para los tramos que terminan en <span className="font-mono">deliveredAt</span>, si este campo no existe se usa
                 <span className="font-mono"> completedAt</span> (o <span className="font-mono">updatedAt</span>) para no perder cierres.
+                Además, en OS con <span className="font-mono">formData.visitMode = FOLLOW_UP</span> se excluyen los tramos previos a inicio de actividad.
               </div>
             </CardContent>
           </Card>

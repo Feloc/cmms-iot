@@ -162,6 +162,7 @@ function statusPillClass(status: string) {
 }
 
 type TsKey = 'takenAt' | 'arrivedAt' | 'checkInAt' | 'activityStartedAt' | 'activityFinishedAt' | 'deliveredAt';
+type VisitMode = 'PRIMARY' | 'FOLLOW_UP';
 
 const TS_FIELDS: Array<{ key: TsKey; label: string; hint?: string }> = [
   { key: 'takenAt', label: 'Hora toma OS', hint: 'Al registrar este tiempo, la OS pasa a IN_PROGRESS.' },
@@ -175,12 +176,23 @@ const TS_FIELDS: Array<{ key: TsKey; label: string; hint?: string }> = [
 
 const TS_ORDER: TsKey[] = ['takenAt', 'arrivedAt', 'checkInAt', 'activityStartedAt', 'activityFinishedAt', 'deliveredAt'];
 
+function getVisitModeFromFormData(formData: any): VisitMode {
+  const raw = String(formData?.visitMode ?? '').trim().toUpperCase();
+  return raw === 'FOLLOW_UP' ? 'FOLLOW_UP' : 'PRIMARY';
+}
+
 function parseLocalToDate(v: string): Date | null {
   const iso = localInputToIso(v);
   return iso ? new Date(iso) : null;
 }
 
-function validateTsChange(current: Record<TsKey, string>, key: TsKey, nextLocal: string): string | null {
+function validateTsChange(
+  current: Record<TsKey, string>,
+  key: TsKey,
+  nextLocal: string,
+  visitMode: VisitMode,
+): string | null {
+  const allowMissingPrelude = visitMode === 'FOLLOW_UP';
   const next: Record<TsKey, Date | null> = {
     takenAt: current.takenAt ? parseLocalToDate(current.takenAt) : null,
     arrivedAt: current.arrivedAt ? parseLocalToDate(current.arrivedAt) : null,
@@ -198,6 +210,7 @@ function validateTsChange(current: Record<TsKey, string>, key: TsKey, nextLocal:
   // Si se intenta borrar, no permitir si hay posteriores registrados
   if (proposed === null) {
     for (const later of TS_ORDER.slice(idx + 1)) {
+      if (allowMissingPrelude && key === 'checkInAt' && later === 'activityStartedAt') continue;
       if (next[later]) return `No puedes borrar ${key} mientras ${later} esté registrado. Borra primero los timestamps posteriores.`;
     }
     return null;
@@ -207,16 +220,20 @@ function validateTsChange(current: Record<TsKey, string>, key: TsKey, nextLocal:
   if (idx > 0) {
     const prevK = TS_ORDER[idx - 1];
     const prev = next[prevK];
-    if (!prev) return `Debes registrar ${prevK} antes de registrar/modificar ${key}.`;
-    if (proposed.getTime() < prev.getTime()) return `${key} no puede ser más temprano que ${prevK}.`;
+    const canSkipPrev = allowMissingPrelude && key === 'activityStartedAt';
+    if (!prev && !canSkipPrev) return `Debes registrar ${prevK} antes de registrar/modificar ${key}.`;
+    if (prev && proposed.getTime() < prev.getTime()) return `${key} no puede ser más temprano que ${prevK}.`;
   }
 
   // Consistencia global (por si editaste un timestamp anterior)
   for (let i = 1; i < TS_ORDER.length; i++) {
-    const a = next[TS_ORDER[i - 1]];
-    const b = next[TS_ORDER[i]];
-    if (b && !a) return `Debes registrar ${TS_ORDER[i - 1]} antes de ${TS_ORDER[i]}.`;
-    if (a && b && b.getTime() < a.getTime()) return `${TS_ORDER[i]} no puede ser más temprano que ${TS_ORDER[i - 1]}.`;
+    const prevK = TS_ORDER[i - 1];
+    const currK = TS_ORDER[i];
+    const a = next[prevK];
+    const b = next[currK];
+    const canSkipPrev = allowMissingPrelude && currK === 'activityStartedAt';
+    if (b && !a && !canSkipPrev) return `Debes registrar ${prevK} antes de ${currK}.`;
+    if (a && b && b.getTime() < a.getTime()) return `${currK} no puede ser más temprano que ${prevK}.`;
   }
 
   return null;
@@ -511,8 +528,59 @@ const canChangeStatus = isAdmin || (role === 'TECH' && isAssignedTech);
       technicianId: technicianId || undefined,
     });
   }
+
+  async function setVisitMode(mode: VisitMode) {
+    if (!id || !auth.token || !auth.tenantSlug || !data) return;
+    const currentFd = data.formData && typeof data.formData === 'object' ? (data.formData as any) : {};
+    const currentMode = getVisitModeFromFormData(currentFd);
+    if (currentMode === mode) return;
+
+    if (techBlocked) {
+      setUiInfo('Tienes un WorkLog abierto en otra OS. Debes cerrarlo antes de modificar esta OS.');
+      return;
+    }
+
+    setBusy(true);
+    setUiErr('');
+    setUiInfo('');
+    try {
+      await apiFetch(`/service-orders/${id}/form`, {
+        method: 'PATCH',
+        token: auth.token,
+        tenantSlug: auth.tenantSlug,
+        body: { formData: { ...currentFd, visitMode: mode } },
+      });
+
+      // En FOLLOW_UP dejamos explícitamente vacíos los tiempos previos al inicio de actividad.
+      if (mode === 'FOLLOW_UP') {
+        await apiFetch(`/service-orders/${id}/timestamps`, {
+          method: 'PATCH',
+          token: auth.token,
+          tenantSlug: auth.tenantSlug,
+          body: { takenAt: null, arrivedAt: null, checkInAt: null },
+        });
+      }
+
+      await mutate();
+      if (mode === 'FOLLOW_UP') {
+        setUiInfo('OS marcada como subsecuente en la visita. Se omiten toma/llegada/ingreso.');
+      } else {
+        setUiInfo('OS marcada como primera de visita. Se habilita la secuencia completa de timestamps.');
+      }
+    } catch (e: any) {
+      const parsed = parseApiError(e);
+      if (applyWorkLogBlockIfPresent(parsed)) return;
+      if (parsed.status === 403 || parsed.status === 409) setUiInfo(parsed.message);
+      else setUiErr(parsed.message || 'Error actualizando modo de visita');
+      await mutate();
+    } finally {
+      setBusy(false);
+    }
+  }
+
 async function setTimestamp(key: TsKey, localValue: string) {
-  const msg = validateTsChange(ts, key, localValue);
+  const visitMode = getVisitModeFromFormData((data as any)?.formData);
+  const msg = validateTsChange(ts, key, localValue, visitMode);
   if (msg) {
     setUiErr(msg);
     // revert a valor del backend
@@ -644,6 +712,8 @@ async function setTimestamp(key: TsKey, localValue: string) {
   }
 
   const fd = data.formData ?? {};
+  const visitMode = getVisitModeFromFormData(fd);
+  const isFollowUpVisit = visitMode === 'FOLLOW_UP';
   const showChecklist = data.serviceOrderType === 'ALISTAMIENTO' || data.serviceOrderType === 'PREVENTIVO';
   const requiredParts = (data.serviceOrderParts ?? []).filter((p) => (p as any).stage !== 'REPLACED');
   const replacedParts = (data.serviceOrderParts ?? []).filter((p) => (p as any).stage === 'REPLACED');
@@ -907,9 +977,43 @@ async function setTimestamp(key: TsKey, localValue: string) {
       <section className="border rounded p-4 space-y-3">
         <h2 className="font-semibold">Tiempos (timestamps)</h2>
 
+        <div className="border rounded p-3 bg-gray-50 space-y-2">
+          <div className="text-sm font-medium">Modo de visita</div>
+          <div className="flex flex-wrap gap-4">
+            <label className="text-sm flex items-center gap-2">
+              <input
+                type="radio"
+                name="visitMode"
+                checked={visitMode === 'PRIMARY'}
+                disabled={busy}
+                onChange={() => setVisitMode('PRIMARY')}
+              />
+              Primera OS de la visita
+            </label>
+            <label className="text-sm flex items-center gap-2">
+              <input
+                type="radio"
+                name="visitMode"
+                checked={visitMode === 'FOLLOW_UP'}
+                disabled={busy}
+                onChange={() => setVisitMode('FOLLOW_UP')}
+              />
+              OS subsecuente en la misma visita
+            </label>
+          </div>
+          <p className="text-xs text-gray-600">
+            En modo subsecuente no aplican <span className="font-mono">toma/llegada/ingreso</span>; el dashboard excluye esos tramos para esta OS.
+          </p>
+        </div>
+
         <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-          {TS_FIELDS.map(({ key, label, hint }) => (
-            <div key={key} className="border rounded p-2">
+          {TS_FIELDS.map(({ key, label, hint }) => {
+            const isPreludeField = key === 'takenAt' || key === 'arrivedAt' || key === 'checkInAt';
+            const disabledByVisitMode = isFollowUpVisit && isPreludeField;
+            const hintText = disabledByVisitMode ? 'No aplica para OS subsecuente en la visita.' : hint;
+
+            return (
+            <div key={key} className={`border rounded p-2 ${disabledByVisitMode ? 'bg-gray-50' : ''}`}>
               <label className="text-sm font-medium">{label}</label>
 
               <div className="mt-1 flex items-center gap-2">
@@ -917,6 +1021,7 @@ async function setTimestamp(key: TsKey, localValue: string) {
                   type="datetime-local"
                   className="border rounded px-3 py-2 w-full"
                   value={ts[key]}
+                  disabled={busy || disabledByVisitMode}
                   onChange={(e) => setTs((s) => ({ ...s, [key]: e.target.value }))}
                   onBlur={(e) => setTimestamp(key, e.target.value)}
                 />
@@ -925,7 +1030,7 @@ async function setTimestamp(key: TsKey, localValue: string) {
                 <button
                   type="button"
                   className="px-3 py-2 border rounded whitespace-nowrap disabled:opacity-50"
-                  disabled={busy}
+                  disabled={busy || disabledByVisitMode}
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={() => setTimestamp(key, nowLocalInputValue())}
                   title="Registrar hora actual"
@@ -936,7 +1041,7 @@ async function setTimestamp(key: TsKey, localValue: string) {
                 <button
                   type="button"
                   className="px-3 py-2 border rounded whitespace-nowrap disabled:opacity-50"
-                  disabled={busy || !ts[key]}
+                  disabled={busy || disabledByVisitMode || !ts[key]}
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={() => setTimestamp(key, '')}
                   title="Limpiar"
@@ -945,9 +1050,9 @@ async function setTimestamp(key: TsKey, localValue: string) {
                 </button>
               </div>
 
-              {hint ? <p className="text-xs text-gray-500 mt-1">{hint}</p> : null}
+              {hintText ? <p className="text-xs text-gray-500 mt-1">{hintText}</p> : null}
             </div>
-          ))}
+          )})}
         </div>
 
 {/* WorkLogs */}

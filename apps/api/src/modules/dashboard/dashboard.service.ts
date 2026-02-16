@@ -386,6 +386,84 @@ export class DashboardService {
       };
     });
 
+    type ClosedByTypeRow = {
+      serviceType: string;
+      closedCount: number;
+    };
+
+    type ClosedByTechTypeRow = {
+      userId: string;
+      name: string;
+      serviceType: string;
+      closedCount: number;
+    };
+
+    const closedByTypeRows = await this.prisma.$queryRaw<ClosedByTypeRow[]>(
+      Prisma.sql`
+        WITH closed_orders AS (
+          SELECT
+            w."id",
+            COALESCE(w."serviceOrderType"::text, 'UNSPECIFIED') AS "serviceType"
+          FROM "WorkOrder" w
+          WHERE w."tenantId" = ${tenantId}
+            AND w."kind" = 'SERVICE_ORDER'
+            AND w."status" IN ('COMPLETED','CLOSED')
+            AND COALESCE(w."deliveredAt", w."completedAt", w."updatedAt") >= ${from}
+            AND COALESCE(w."deliveredAt", w."completedAt", w."updatedAt") < ${to}
+        )
+        SELECT
+          "serviceType",
+          COUNT(*)::int AS "closedCount"
+        FROM closed_orders
+        GROUP BY "serviceType"
+        ORDER BY "closedCount" DESC, "serviceType" ASC;
+      `
+    );
+
+    const closedByTechTypeRows = await this.prisma.$queryRaw<ClosedByTechTypeRow[]>(
+      Prisma.sql`
+        WITH closed_orders AS (
+          SELECT
+            w."id",
+            COALESCE(w."serviceOrderType"::text, 'UNSPECIFIED') AS "serviceType"
+          FROM "WorkOrder" w
+          WHERE w."tenantId" = ${tenantId}
+            AND w."kind" = 'SERVICE_ORDER'
+            AND w."status" IN ('COMPLETED','CLOSED')
+            AND COALESCE(w."deliveredAt", w."completedAt", w."updatedAt") >= ${from}
+            AND COALESCE(w."deliveredAt", w."completedAt", w."updatedAt") < ${to}
+        ),
+        tech_assignments AS (
+          SELECT DISTINCT a."userId", a."workOrderId"
+          FROM "WOAssignment" a
+          JOIN closed_orders c ON c."id" = a."workOrderId"
+          WHERE a."tenantId" = ${tenantId}
+            AND a."role" = 'TECHNICIAN'
+        )
+        SELECT
+          ta."userId",
+          COALESCE(u."name", u."email", ta."userId")::text AS "name",
+          c."serviceType",
+          COUNT(*)::int AS "closedCount"
+        FROM tech_assignments ta
+        JOIN closed_orders c ON c."id" = ta."workOrderId"
+        LEFT JOIN "User" u ON u."id" = ta."userId" AND u."tenantId" = ${tenantId}
+        GROUP BY ta."userId", u."name", u."email", c."serviceType"
+        ORDER BY "closedCount" DESC, "name" ASC, "serviceType" ASC;
+      `
+    );
+
+    const byTechnicianMap = new Map<string, { userId: string; name: string; closedCount: number }>();
+    for (const row of closedByTechTypeRows) {
+      const cur = byTechnicianMap.get(row.userId);
+      if (!cur) byTechnicianMap.set(row.userId, { userId: row.userId, name: row.name, closedCount: row.closedCount });
+      else cur.closedCount += row.closedCount;
+    }
+    const closedByTechnician = Array.from(byTechnicianMap.values()).sort((a, b) => {
+      if (b.closedCount !== a.closedCount) return b.closedCount - a.closedCount;
+      return a.name.localeCompare(b.name);
+    });
+
     // Productividad semanal por técnico (cerradas por semana + horas trabajadas por semana)
     type TechWeeklyRow = {
       userId: string;
@@ -702,6 +780,7 @@ const workTimeByServiceOrderType = typeEffPauseRows.map(r => {
             w."takenAt",
             w."arrivedAt",
             w."checkInAt",
+            (COALESCE(w."formData"->>'visitMode', 'PRIMARY') = 'FOLLOW_UP') AS "isFollowUp",
             w."activityStartedAt",
             w."activityFinishedAt",
             COALESCE(w."deliveredAt", w."completedAt", w."updatedAt") AS "deliveredLike"
@@ -714,11 +793,11 @@ const workTimeByServiceOrderType = typeEffPauseRows.map(r => {
         ),
         d AS (
           SELECT
-            CASE WHEN "takenAt" IS NOT NULL AND "arrivedAt" IS NOT NULL AND "arrivedAt" >= "takenAt"
+            CASE WHEN COALESCE("isFollowUp", false) = false AND "takenAt" IS NOT NULL AND "arrivedAt" IS NOT NULL AND "arrivedAt" >= "takenAt"
               THEN EXTRACT(EPOCH FROM ("arrivedAt" - "takenAt")) END AS travel_s,
-            CASE WHEN "arrivedAt" IS NOT NULL AND "checkInAt" IS NOT NULL AND "checkInAt" >= "arrivedAt"
+            CASE WHEN COALESCE("isFollowUp", false) = false AND "arrivedAt" IS NOT NULL AND "checkInAt" IS NOT NULL AND "checkInAt" >= "arrivedAt"
               THEN EXTRACT(EPOCH FROM ("checkInAt" - "arrivedAt")) END AS intake_s,
-            CASE WHEN "checkInAt" IS NOT NULL AND "activityStartedAt" IS NOT NULL AND "activityStartedAt" >= "checkInAt"
+            CASE WHEN COALESCE("isFollowUp", false) = false AND "checkInAt" IS NOT NULL AND "activityStartedAt" IS NOT NULL AND "activityStartedAt" >= "checkInAt"
               THEN EXTRACT(EPOCH FROM ("activityStartedAt" - "checkInAt")) END AS handover_s,
             CASE WHEN "activityStartedAt" IS NOT NULL AND "activityFinishedAt" IS NOT NULL AND "activityFinishedAt" >= "activityStartedAt"
               THEN EXTRACT(EPOCH FROM ("activityFinishedAt" - "activityStartedAt")) END AS onsite_s,
@@ -885,6 +964,7 @@ const workTimeByServiceOrderType = typeEffPauseRows.map(r => {
             w."takenAt",
             w."arrivedAt",
             w."checkInAt",
+            (COALESCE(w."formData"->>'visitMode', 'PRIMARY') = 'FOLLOW_UP') AS "isFollowUp",
             w."activityStartedAt",
             w."activityFinishedAt",
             COALESCE(w."deliveredAt", w."completedAt", w."updatedAt") AS "deliveredLike"
@@ -899,11 +979,11 @@ const workTimeByServiceOrderType = typeEffPauseRows.map(r => {
           SELECT
             COALESCE("serviceOrderType"::text, 'UNSPECIFIED') AS group_key,
             NULL::text AS group_label,
-            CASE WHEN "takenAt" IS NOT NULL AND "arrivedAt" IS NOT NULL AND "arrivedAt" >= "takenAt"
+            CASE WHEN COALESCE("isFollowUp", false) = false AND "takenAt" IS NOT NULL AND "arrivedAt" IS NOT NULL AND "arrivedAt" >= "takenAt"
               THEN EXTRACT(EPOCH FROM ("arrivedAt" - "takenAt")) END AS travel_s,
-            CASE WHEN "arrivedAt" IS NOT NULL AND "checkInAt" IS NOT NULL AND "checkInAt" >= "arrivedAt"
+            CASE WHEN COALESCE("isFollowUp", false) = false AND "arrivedAt" IS NOT NULL AND "checkInAt" IS NOT NULL AND "checkInAt" >= "arrivedAt"
               THEN EXTRACT(EPOCH FROM ("checkInAt" - "arrivedAt")) END AS intake_s,
-            CASE WHEN "checkInAt" IS NOT NULL AND "activityStartedAt" IS NOT NULL AND "activityStartedAt" >= "checkInAt"
+            CASE WHEN COALESCE("isFollowUp", false) = false AND "checkInAt" IS NOT NULL AND "activityStartedAt" IS NOT NULL AND "activityStartedAt" >= "checkInAt"
               THEN EXTRACT(EPOCH FROM ("activityStartedAt" - "checkInAt")) END AS handover_s,
             CASE WHEN "activityStartedAt" IS NOT NULL AND "activityFinishedAt" IS NOT NULL AND "activityFinishedAt" >= "activityStartedAt"
               THEN EXTRACT(EPOCH FROM ("activityFinishedAt" - "activityStartedAt")) END AS onsite_s,
@@ -963,6 +1043,7 @@ const workTimeByServiceOrderType = typeEffPauseRows.map(r => {
             w."takenAt",
             w."arrivedAt",
             w."checkInAt",
+            (COALESCE(w."formData"->>'visitMode', 'PRIMARY') = 'FOLLOW_UP') AS "isFollowUp",
             w."activityStartedAt",
             w."activityFinishedAt",
             COALESCE(w."deliveredAt", w."completedAt", w."updatedAt") AS "deliveredLike",
@@ -981,11 +1062,11 @@ const workTimeByServiceOrderType = typeEffPauseRows.map(r => {
           SELECT
             COALESCE(customer, '(sin cliente)') AS group_key,
             NULL::text AS group_label,
-            CASE WHEN "takenAt" IS NOT NULL AND "arrivedAt" IS NOT NULL AND "arrivedAt" >= "takenAt"
+            CASE WHEN COALESCE("isFollowUp", false) = false AND "takenAt" IS NOT NULL AND "arrivedAt" IS NOT NULL AND "arrivedAt" >= "takenAt"
               THEN EXTRACT(EPOCH FROM ("arrivedAt" - "takenAt")) END AS travel_s,
-            CASE WHEN "arrivedAt" IS NOT NULL AND "checkInAt" IS NOT NULL AND "checkInAt" >= "arrivedAt"
+            CASE WHEN COALESCE("isFollowUp", false) = false AND "arrivedAt" IS NOT NULL AND "checkInAt" IS NOT NULL AND "checkInAt" >= "arrivedAt"
               THEN EXTRACT(EPOCH FROM ("checkInAt" - "arrivedAt")) END AS intake_s,
-            CASE WHEN "checkInAt" IS NOT NULL AND "activityStartedAt" IS NOT NULL AND "activityStartedAt" >= "checkInAt"
+            CASE WHEN COALESCE("isFollowUp", false) = false AND "checkInAt" IS NOT NULL AND "activityStartedAt" IS NOT NULL AND "activityStartedAt" >= "checkInAt"
               THEN EXTRACT(EPOCH FROM ("activityStartedAt" - "checkInAt")) END AS handover_s,
             CASE WHEN "activityStartedAt" IS NOT NULL AND "activityFinishedAt" IS NOT NULL AND "activityFinishedAt" >= "activityStartedAt"
               THEN EXTRACT(EPOCH FROM ("activityFinishedAt" - "activityStartedAt")) END AS onsite_s,
@@ -1045,6 +1126,7 @@ const workTimeByServiceOrderType = typeEffPauseRows.map(r => {
             w."takenAt",
             w."arrivedAt",
             w."checkInAt",
+            (COALESCE(w."formData"->>'visitMode', 'PRIMARY') = 'FOLLOW_UP') AS "isFollowUp",
             w."activityStartedAt",
             w."activityFinishedAt",
             COALESCE(w."deliveredAt", w."completedAt", w."updatedAt") AS "deliveredLike",
@@ -1062,11 +1144,11 @@ const workTimeByServiceOrderType = typeEffPauseRows.map(r => {
           SELECT
             COALESCE("locationId", '(sin sede)') AS group_key,
             NULL::text AS group_label,
-            CASE WHEN "takenAt" IS NOT NULL AND "arrivedAt" IS NOT NULL AND "arrivedAt" >= "takenAt"
+            CASE WHEN COALESCE("isFollowUp", false) = false AND "takenAt" IS NOT NULL AND "arrivedAt" IS NOT NULL AND "arrivedAt" >= "takenAt"
               THEN EXTRACT(EPOCH FROM ("arrivedAt" - "takenAt")) END AS travel_s,
-            CASE WHEN "arrivedAt" IS NOT NULL AND "checkInAt" IS NOT NULL AND "checkInAt" >= "arrivedAt"
+            CASE WHEN COALESCE("isFollowUp", false) = false AND "arrivedAt" IS NOT NULL AND "checkInAt" IS NOT NULL AND "checkInAt" >= "arrivedAt"
               THEN EXTRACT(EPOCH FROM ("checkInAt" - "arrivedAt")) END AS intake_s,
-            CASE WHEN "checkInAt" IS NOT NULL AND "activityStartedAt" IS NOT NULL AND "activityStartedAt" >= "checkInAt"
+            CASE WHEN COALESCE("isFollowUp", false) = false AND "checkInAt" IS NOT NULL AND "activityStartedAt" IS NOT NULL AND "activityStartedAt" >= "checkInAt"
               THEN EXTRACT(EPOCH FROM ("activityStartedAt" - "checkInAt")) END AS handover_s,
             CASE WHEN "activityStartedAt" IS NOT NULL AND "activityFinishedAt" IS NOT NULL AND "activityFinishedAt" >= "activityStartedAt"
               THEN EXTRACT(EPOCH FROM ("activityFinishedAt" - "activityStartedAt")) END AS onsite_s,
@@ -1124,6 +1206,7 @@ const workTimeByServiceOrderType = typeEffPauseRows.map(r => {
             w."takenAt",
             w."arrivedAt",
             w."checkInAt",
+            (COALESCE(w."formData"->>'visitMode', 'PRIMARY') = 'FOLLOW_UP') AS "isFollowUp",
             w."activityStartedAt",
             w."activityFinishedAt",
             COALESCE(w."deliveredAt", w."completedAt", w."updatedAt") AS "deliveredLike"
@@ -1163,11 +1246,11 @@ const workTimeByServiceOrderType = typeEffPauseRows.map(r => {
           SELECT
             lead."userId" AS group_key,
             NULL::text AS group_label,
-            CASE WHEN co."takenAt" IS NOT NULL AND co."arrivedAt" IS NOT NULL AND co."arrivedAt" >= co."takenAt"
+            CASE WHEN COALESCE(co."isFollowUp", false) = false AND co."takenAt" IS NOT NULL AND co."arrivedAt" IS NOT NULL AND co."arrivedAt" >= co."takenAt"
               THEN EXTRACT(EPOCH FROM (co."arrivedAt" - co."takenAt")) END AS travel_s,
-            CASE WHEN co."arrivedAt" IS NOT NULL AND co."checkInAt" IS NOT NULL AND co."checkInAt" >= co."arrivedAt"
+            CASE WHEN COALESCE(co."isFollowUp", false) = false AND co."arrivedAt" IS NOT NULL AND co."checkInAt" IS NOT NULL AND co."checkInAt" >= co."arrivedAt"
               THEN EXTRACT(EPOCH FROM (co."checkInAt" - co."arrivedAt")) END AS intake_s,
-            CASE WHEN co."checkInAt" IS NOT NULL AND co."activityStartedAt" IS NOT NULL AND co."activityStartedAt" >= co."checkInAt"
+            CASE WHEN COALESCE(co."isFollowUp", false) = false AND co."checkInAt" IS NOT NULL AND co."activityStartedAt" IS NOT NULL AND co."activityStartedAt" >= co."checkInAt"
               THEN EXTRACT(EPOCH FROM (co."activityStartedAt" - co."checkInAt")) END AS handover_s,
             CASE WHEN co."activityStartedAt" IS NOT NULL AND co."activityFinishedAt" IS NOT NULL AND co."activityFinishedAt" >= co."activityStartedAt"
               THEN EXTRACT(EPOCH FROM (co."activityFinishedAt" - co."activityStartedAt")) END AS onsite_s,
@@ -1268,6 +1351,11 @@ const workTimeByServiceOrderType = typeEffPauseRows.map(r => {
         technicianWeeklyProductivity,
         technicianEffectiveVsPauses,
         workTimeByServiceOrderType,
+        closedOrdersSummary: {
+          byTechnician: closedByTechnician,
+          byServiceType: closedByTypeRows,
+          byTechnicianAndServiceType: closedByTechTypeRows,
+        },
         operationalTimes,
         operationalTimesComparisons,
       },
