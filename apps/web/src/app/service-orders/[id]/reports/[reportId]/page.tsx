@@ -171,16 +171,18 @@ export default function ServiceOrderReportPage() {
   }>;
 
   const participants = Array.from(
-    workLogs.reduce((acc, wl) => {
-      const key = String(wl.userId || '').trim();
-      if (!key) return acc;
-      const cur = acc.get(key) ?? { userId: key, name: wl.user?.name ?? key, logs: 0, minutes: 0 };
-      cur.logs += 1;
-      cur.minutes += workLogDurationMinutes(wl.startedAt, wl.endedAt ?? null);
-      if (wl.user?.name) cur.name = wl.user.name;
-      acc.set(key, cur);
-      return acc;
-    }, new Map<string, { userId: string; name: string; logs: number; minutes: number }>()),
+    workLogs
+      .reduce((acc, wl) => {
+        const key = String(wl.userId || '').trim();
+        if (!key) return acc;
+        const cur = acc.get(key) ?? { userId: key, name: wl.user?.name ?? key, logs: 0, minutes: 0 };
+        cur.logs += 1;
+        cur.minutes += workLogDurationMinutes(wl.startedAt, wl.endedAt ?? null);
+        if (wl.user?.name) cur.name = wl.user.name;
+        acc.set(key, cur);
+        return acc;
+      }, new Map<string, { userId: string; name: string; logs: number; minutes: number }>())
+      .values(),
   ).sort((a, b) => b.minutes - a.minutes);
 
   return (
