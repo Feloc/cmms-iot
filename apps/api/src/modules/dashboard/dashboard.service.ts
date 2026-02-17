@@ -288,24 +288,24 @@ export class DashboardService {
             AND COALESCE(w."deliveredAt", w."completedAt", w."updatedAt") >= ${from}
             AND COALESCE(w."deliveredAt", w."completedAt", w."updatedAt") < ${to}
         ),
-        assignments AS (
-          SELECT DISTINCT a."userId", a."workOrderId"
-          FROM "WOAssignment" a
-          JOIN closed_orders c ON c."id" = a."workOrderId"
-          WHERE a."tenantId" = ${tenantId}
-            AND a."role" = 'TECHNICIAN'
+        participants AS (
+          SELECT DISTINCT l."userId", l."workOrderId"
+          FROM "WorkLog" l
+          JOIN closed_orders c ON c."id" = l."workOrderId"
+          JOIN "User" u ON u."id" = l."userId" AND u."tenantId" = ${tenantId} AND u."role" = 'TECH'
+          WHERE l."tenantId" = ${tenantId}
         ),
         per_tech_orders AS (
           SELECT
-            a."userId",
+            p."userId",
             COUNT(*)::int AS "closedCount",
             AVG(EXTRACT(EPOCH FROM (c."closedAt" - c."createdAt")))::float AS "avgCycleSeconds",
             AVG(EXTRACT(EPOCH FROM (c."startedAt" - c."createdAt"))) FILTER (WHERE c."startedAt" IS NOT NULL)::float AS "avgResponseSeconds",
             SUM(CASE WHEN c."dueDate" IS NOT NULL THEN 1 ELSE 0 END)::int AS "dueCount",
             SUM(CASE WHEN c."dueDate" IS NOT NULL AND c."closedAt" <= c."dueDate" THEN 1 ELSE 0 END)::int AS "onTimeCount"
-          FROM assignments a
-          JOIN closed_orders c ON c."id" = a."workOrderId"
-          GROUP BY a."userId"
+          FROM participants p
+          JOIN closed_orders c ON c."id" = p."workOrderId"
+          GROUP BY p."userId"
         ),
         per_tech_work AS (
           SELECT
@@ -433,22 +433,22 @@ export class DashboardService {
             AND COALESCE(w."deliveredAt", w."completedAt", w."updatedAt") >= ${from}
             AND COALESCE(w."deliveredAt", w."completedAt", w."updatedAt") < ${to}
         ),
-        tech_assignments AS (
-          SELECT DISTINCT a."userId", a."workOrderId"
-          FROM "WOAssignment" a
-          JOIN closed_orders c ON c."id" = a."workOrderId"
-          WHERE a."tenantId" = ${tenantId}
-            AND a."role" = 'TECHNICIAN'
+        tech_participants AS (
+          SELECT DISTINCT l."userId", l."workOrderId"
+          FROM "WorkLog" l
+          JOIN closed_orders c ON c."id" = l."workOrderId"
+          JOIN "User" ur ON ur."id" = l."userId" AND ur."tenantId" = ${tenantId} AND ur."role" = 'TECH'
+          WHERE l."tenantId" = ${tenantId}
         )
         SELECT
-          ta."userId",
-          COALESCE(u."name", u."email", ta."userId")::text AS "name",
+          tp."userId",
+          COALESCE(u."name", u."email", tp."userId")::text AS "name",
           c."serviceType",
           COUNT(*)::int AS "closedCount"
-        FROM tech_assignments ta
-        JOIN closed_orders c ON c."id" = ta."workOrderId"
-        LEFT JOIN "User" u ON u."id" = ta."userId" AND u."tenantId" = ${tenantId}
-        GROUP BY ta."userId", u."name", u."email", c."serviceType"
+        FROM tech_participants tp
+        JOIN closed_orders c ON c."id" = tp."workOrderId"
+        LEFT JOIN "User" u ON u."id" = tp."userId" AND u."tenantId" = ${tenantId}
+        GROUP BY tp."userId", u."name", u."email", c."serviceType"
         ORDER BY "closedCount" DESC, "name" ASC, "serviceType" ASC;
       `
     );
@@ -486,16 +486,16 @@ export class DashboardService {
             AND COALESCE(w."deliveredAt", w."completedAt", w."updatedAt") >= ${from}
             AND COALESCE(w."deliveredAt", w."completedAt", w."updatedAt") < ${to}
         ),
-        assigned_closed AS (
-          SELECT DISTINCT a."userId", c."id" AS "workOrderId", date_trunc('week', c."closedAt")::date AS "weekStart"
-          FROM "WOAssignment" a
-          JOIN closed_orders c ON c."id" = a."workOrderId"
-          WHERE a."tenantId" = ${tenantId}
-            AND a."role" = 'TECHNICIAN'
+        participant_closed AS (
+          SELECT DISTINCT l."userId", c."id" AS "workOrderId", date_trunc('week', c."closedAt")::date AS "weekStart"
+          FROM "WorkLog" l
+          JOIN closed_orders c ON c."id" = l."workOrderId"
+          JOIN "User" u ON u."id" = l."userId" AND u."tenantId" = ${tenantId} AND u."role" = 'TECH'
+          WHERE l."tenantId" = ${tenantId}
         ),
         closed_week AS (
           SELECT "userId", "weekStart", COUNT(*)::int AS "closedCount"
-          FROM assigned_closed
+          FROM participant_closed
           GROUP BY "userId", "weekStart"
         ),
         work_week AS (
@@ -505,6 +505,7 @@ export class DashboardService {
             SUM(EXTRACT(EPOCH FROM (COALESCE(l."endedAt", ${to}) - l."startedAt")))::float AS "workSeconds"
           FROM "WorkLog" l
           JOIN "WorkOrder" w ON w."id" = l."workOrderId"
+          JOIN "User" ux ON ux."id" = l."userId" AND ux."tenantId" = ${tenantId} AND ux."role" = 'TECH'
           WHERE l."tenantId" = ${tenantId}
             AND w."tenantId" = ${tenantId}
             AND w."kind" = 'SERVICE_ORDER'

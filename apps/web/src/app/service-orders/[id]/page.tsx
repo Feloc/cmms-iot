@@ -261,6 +261,8 @@ export default function ServiceOrderDetailPage() {
   const [editType, setEditType] = useState<string>('');
   const [editAssetCode, setEditAssetCode] = useState('');
   const [editPmPlanId, setEditPmPlanId] = useState('');
+  const [editingWorkLogId, setEditingWorkLogId] = useState<string | null>(null);
+  const [workLogDraft, setWorkLogDraft] = useState<{ startedAt: string; endedAt: string }>({ startedAt: '', endedAt: '' });
   const [partQ, setPartQ] = useState('');
   const [partQty, setPartQty] = useState<number>(1);
 
@@ -380,6 +382,95 @@ function applyWorkLogBlockIfPresent(parsed: { status?: number; message: string; 
       if (applyWorkLogBlockIfPresent(parsed)) return;
       if (parsed.status === 403 || parsed.status === 409) setUiInfo(parsed.message);
       else setUiErr(parsed.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function beginEditWorkLog(wl: WorkLog) {
+    if (!isAdmin) return;
+    setUiErr('');
+    setUiInfo('');
+    setEditingWorkLogId(wl.id);
+    setWorkLogDraft({
+      startedAt: isoToLocal(wl.startedAt),
+      endedAt: isoToLocal(wl.endedAt),
+    });
+  }
+
+  function cancelEditWorkLog() {
+    setEditingWorkLogId(null);
+    setWorkLogDraft({ startedAt: '', endedAt: '' });
+  }
+
+  async function saveWorkLogEdit(workLogId: string) {
+    if (!isAdmin || !id || !auth.token || !auth.tenantSlug) return;
+
+    const startedAtIso = localInputToIso(workLogDraft.startedAt);
+    const endedAtIso = workLogDraft.endedAt ? localInputToIso(workLogDraft.endedAt) : null;
+
+    if (!startedAtIso) {
+      setUiErr('Debes indicar una fecha/hora de inicio válida.');
+      return;
+    }
+    if (workLogDraft.endedAt && !endedAtIso) {
+      setUiErr('La fecha/hora de fin no es válida.');
+      return;
+    }
+    if (endedAtIso && new Date(endedAtIso).getTime() < new Date(startedAtIso).getTime()) {
+      setUiErr('La fecha/hora de fin no puede ser anterior al inicio.');
+      return;
+    }
+
+    setBusy(true);
+    setUiErr('');
+    setUiInfo('');
+    try {
+      const resp: any = await apiFetch(`/service-orders/${id}/worklogs/${workLogId}`, {
+        method: 'PATCH',
+        token: auth.token,
+        tenantSlug: auth.tenantSlug,
+        body: {
+          startedAt: startedAtIso,
+          endedAt: endedAtIso,
+        },
+      });
+      if (resp?._info) setUiInfo(String(resp._info));
+      await mutate();
+      cancelEditWorkLog();
+    } catch (e: any) {
+      const parsed = parseApiError(e);
+      if (applyWorkLogBlockIfPresent(parsed)) return;
+      if (parsed.status === 403 || parsed.status === 409) setUiInfo(parsed.message);
+      else setUiErr(parsed.message || 'Error actualizando WorkLog');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeWorkLog(workLogId: string) {
+    if (!isAdmin || !id || !auth.token || !auth.tenantSlug) return;
+
+    const ok = window.confirm('¿Eliminar este WorkLog? Esta acción no se puede deshacer.');
+    if (!ok) return;
+
+    setBusy(true);
+    setUiErr('');
+    setUiInfo('');
+    try {
+      const resp: any = await apiFetch(`/service-orders/${id}/worklogs/${workLogId}`, {
+        method: 'DELETE',
+        token: auth.token,
+        tenantSlug: auth.tenantSlug,
+      });
+      if (resp?._info) setUiInfo(String(resp._info));
+      await mutate();
+      if (editingWorkLogId === workLogId) cancelEditWorkLog();
+    } catch (e: any) {
+      const parsed = parseApiError(e);
+      if (applyWorkLogBlockIfPresent(parsed)) return;
+      if (parsed.status === 403 || parsed.status === 409) setUiInfo(parsed.message);
+      else setUiErr(parsed.message || 'Error eliminando WorkLog');
     } finally {
       setBusy(false);
     }
@@ -1110,26 +1201,95 @@ async function setTimestamp(key: TsKey, localValue: string) {
         <tbody>
           {(data.workLogs ?? []).map((wl) => {
             const canClose = !wl.endedAt && (isAdmin || (currentUserId && wl.userId === currentUserId));
+            const isEditing = isAdmin && editingWorkLogId === wl.id;
+            const draftStartIso = isEditing ? localInputToIso(workLogDraft.startedAt) : wl.startedAt;
+            const draftEndIso = isEditing ? (workLogDraft.endedAt ? localInputToIso(workLogDraft.endedAt) : null) : (wl.endedAt ?? null);
             return (
               <tr key={wl.id} className="border-b last:border-b-0">
                 <td className="py-2 pr-4">{wl.user?.name ?? wl.userId}</td>
-                <td className="py-2 pr-4">{fmtDateTime(wl.startedAt)}</td>
                 <td className="py-2 pr-4">
-                  {wl.endedAt ? fmtDateTime(wl.endedAt) : <span className="text-amber-700">En curso</span>}
-                </td>
-                <td className="py-2 pr-4">{fmtDuration(wl.startedAt, wl.endedAt ?? null)}</td>
-                <td className="py-2 pr-4">
-                  {canClose ? (
-                    <button
-                      type="button"
-                      className="px-3 py-1 border rounded disabled:opacity-50"
+                  {isEditing ? (
+                    <input
+                      type="datetime-local"
+                      className="border rounded px-2 py-1 w-full min-w-[220px]"
+                      value={workLogDraft.startedAt}
                       disabled={busy}
-                      onClick={() => closeWorkLog(wl.id)}
-                    >
-                      Cerrar
-                    </button>
+                      onChange={(e) => setWorkLogDraft((s) => ({ ...s, startedAt: e.target.value }))}
+                    />
                   ) : (
-                    <span className="text-gray-400">—</span>
+                    fmtDateTime(wl.startedAt)
+                  )}
+                </td>
+                <td className="py-2 pr-4">
+                  {isEditing ? (
+                    <input
+                      type="datetime-local"
+                      className="border rounded px-2 py-1 w-full min-w-[220px]"
+                      value={workLogDraft.endedAt}
+                      disabled={busy}
+                      onChange={(e) => setWorkLogDraft((s) => ({ ...s, endedAt: e.target.value }))}
+                    />
+                  ) : wl.endedAt ? (
+                    fmtDateTime(wl.endedAt)
+                  ) : (
+                    <span className="text-amber-700">En curso</span>
+                  )}
+                </td>
+                <td className="py-2 pr-4">{fmtDuration(draftStartIso, draftEndIso)}</td>
+                <td className="py-2 pr-4">
+                  {isEditing ? (
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        className="px-3 py-1 border rounded bg-black text-white disabled:opacity-50"
+                        disabled={busy}
+                        onClick={() => saveWorkLogEdit(wl.id)}
+                      >
+                        Guardar
+                      </button>
+                      <button
+                        type="button"
+                        className="px-3 py-1 border rounded disabled:opacity-50"
+                        disabled={busy}
+                        onClick={cancelEditWorkLog}
+                      >
+                        Cancelar
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2">
+                      {canClose ? (
+                        <button
+                          type="button"
+                          className="px-3 py-1 border rounded disabled:opacity-50"
+                          disabled={busy}
+                          onClick={() => closeWorkLog(wl.id)}
+                        >
+                          Cerrar
+                        </button>
+                      ) : null}
+                      {isAdmin ? (
+                        <button
+                          type="button"
+                          className="px-3 py-1 border rounded disabled:opacity-50"
+                          disabled={busy}
+                          onClick={() => beginEditWorkLog(wl)}
+                        >
+                          Editar
+                        </button>
+                      ) : null}
+                      {isAdmin ? (
+                        <button
+                          type="button"
+                          className="px-3 py-1 border rounded text-red-700 disabled:opacity-50"
+                          disabled={busy}
+                          onClick={() => removeWorkLog(wl.id)}
+                        >
+                          Eliminar
+                        </button>
+                      ) : null}
+                      {!canClose && !isAdmin ? <span className="text-gray-400">—</span> : null}
+                    </div>
                   )}
                 </td>
               </tr>

@@ -12,6 +12,7 @@ import { ServiceOrderSignaturesDto } from './dto/signatures.dto';
 import { AddServiceOrderPartDto } from './dto/parts.dto';
 import { MarkServiceOrderPartReplacedDto } from './dto/mark-part-replaced.dto';
 import { CreateServiceOrderReportDto } from './dto/create-report.dto';
+import { UpdateServiceOrderWorkLogDto } from './dto/update-worklog.dto';
 import { Prisma } from '@prisma/client';
 import { normalizeQueryArray } from './utils/query-array';
 import * as fs from 'fs/promises';
@@ -1125,6 +1126,136 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
       await this.appendAuditMany(tx, tenantId, id, auditEntries);
 
       return updated as any;
+    });
+  }
+
+  async updateWorkLog(id: string, workLogId: string, dto: UpdateServiceOrderWorkLogDto) {
+    const { tenantId } = await this.assertSo(id);
+    const actorUserId = this.getUserId();
+
+    return this.prisma.$transaction(async (tx) => {
+      const role = await this.getCurrentUserRole(tx, tenantId, actorUserId);
+      if (role !== 'ADMIN') throw new ForbiddenException('Admin only');
+
+      const log = await tx.workLog.findFirst({
+        where: { id: workLogId, tenantId, workOrderId: id },
+        select: { id: true, userId: true, startedAt: true, endedAt: true, note: true },
+      });
+      if (!log) throw new NotFoundException('Work log not found');
+
+      const nextStartedAt = dto.startedAt === undefined ? log.startedAt : this.coerceDate(dto.startedAt);
+      if (!nextStartedAt) throw new BadRequestException('startedAt is required');
+
+      const nextEndedAt =
+        dto.endedAt === undefined
+          ? log.endedAt
+          : dto.endedAt === null || dto.endedAt === ''
+          ? null
+          : this.coerceDate(dto.endedAt);
+
+      if (nextEndedAt && nextEndedAt.getTime() < nextStartedAt.getTime()) {
+        throw new BadRequestException('endedAt cannot be earlier than startedAt');
+      }
+
+      if (dto.endedAt !== undefined && nextEndedAt === null) {
+        const anotherOpen = await tx.workLog.findFirst({
+          where: { tenantId, userId: log.userId, endedAt: null, NOT: { id: workLogId } },
+          select: { id: true },
+        });
+        if (anotherOpen) {
+          throw new ConflictException('The user already has another open work log');
+        }
+      }
+
+      const data: any = {};
+      if (dto.startedAt !== undefined) data.startedAt = nextStartedAt;
+      if (dto.endedAt !== undefined) data.endedAt = nextEndedAt;
+      if (dto.note !== undefined) data.note = dto.note ?? null;
+
+      if (!Object.keys(data).length) return log as any;
+
+      const updated = await tx.workLog.update({
+        where: { id: workLogId },
+        data,
+      });
+
+      const auditEntries: any[] = [];
+      if (dto.startedAt !== undefined && log.startedAt.getTime() !== nextStartedAt.getTime()) {
+        auditEntries.push(this.buildAuditEntry(actorUserId, 'workLogs', `${workLogId}.startedAt`, log.startedAt, nextStartedAt));
+      }
+
+      if (dto.endedAt !== undefined) {
+        const prevEndedIso = log.endedAt ? new Date(log.endedAt).toISOString() : null;
+        const nextEndedIso = nextEndedAt ? new Date(nextEndedAt).toISOString() : null;
+        if (prevEndedIso !== nextEndedIso) {
+          auditEntries.push(this.buildAuditEntry(actorUserId, 'workLogs', `${workLogId}.endedAt`, log.endedAt, nextEndedAt));
+        }
+      }
+
+      if (dto.note !== undefined && (log.note ?? null) !== (dto.note ?? null)) {
+        auditEntries.push(this.buildAuditEntry(actorUserId, 'workLogs', `${workLogId}.note`, log.note ?? null, dto.note ?? null));
+      }
+
+      if (auditEntries.length) {
+        await this.appendAuditMany(tx, tenantId, id, auditEntries);
+      }
+
+      return updated as any;
+    });
+  }
+
+  async deleteWorkLog(id: string, workLogId: string) {
+    const { tenantId } = await this.assertSo(id);
+    const actorUserId = this.getUserId();
+
+    return this.prisma.$transaction(async (tx) => {
+      const role = await this.getCurrentUserRole(tx, tenantId, actorUserId);
+      if (role !== 'ADMIN') throw new ForbiddenException('Admin only');
+
+      const log = await tx.workLog.findFirst({
+        where: { id: workLogId, tenantId, workOrderId: id },
+        select: { id: true, userId: true, startedAt: true, endedAt: true, note: true },
+      });
+      if (!log) throw new NotFoundException('Work log not found');
+
+      const wasOpen = !log.endedAt;
+
+      await tx.workLog.delete({ where: { id: workLogId } });
+
+      const auditEntries: any[] = [
+        this.buildAuditEntry(
+          actorUserId,
+          'workLogs',
+          `${workLogId}.delete`,
+          {
+            userId: log.userId,
+            startedAt: log.startedAt,
+            endedAt: log.endedAt ?? null,
+            note: log.note ?? null,
+          },
+          null,
+        ),
+      ];
+
+      // Si se eliminó un log abierto y ya no queda ninguno abierto, pasar a ON_HOLD.
+      if (wasOpen) {
+        const remainingOpen = await tx.workLog.count({ where: { tenantId, workOrderId: id, endedAt: null } });
+        if (remainingOpen === 0) {
+          const so = await tx.workOrder.findFirst({
+            where: { id, tenantId, kind: 'SERVICE_ORDER' },
+            select: { status: true, activityStartedAt: true },
+          });
+          const s = String((so as any)?.status || 'OPEN').toUpperCase();
+          if (so?.activityStartedAt && s === 'IN_PROGRESS') {
+            await tx.workOrder.update({ where: { id }, data: { status: 'ON_HOLD' as any } });
+            auditEntries.push(this.buildAuditEntry(actorUserId, 'status', 'auto(worklog-delete)', 'IN_PROGRESS', 'ON_HOLD'));
+          }
+        }
+      }
+
+      await this.appendAuditMany(tx, tenantId, id, auditEntries);
+
+      return { ok: true, id: workLogId };
     });
   }
 

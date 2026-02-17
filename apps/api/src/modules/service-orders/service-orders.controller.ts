@@ -9,6 +9,7 @@ import { ServiceOrderSignaturesDto } from './dto/signatures.dto';
 import { AddServiceOrderPartDto } from './dto/parts.dto';
 import { MarkServiceOrderPartReplacedDto } from './dto/mark-part-replaced.dto';
 import { CreateServiceOrderReportDto } from './dto/create-report.dto';
+import { UpdateServiceOrderWorkLogDto } from './dto/update-worklog.dto';
 import { ListServiceOrdersQuery } from './dto/list-service-orders.query';
 import { ServiceOrdersCalendarQuery } from './dto/calendar.query';
 import { FilesInterceptor } from '@nestjs/platform-express';
@@ -77,6 +78,20 @@ export class ServiceOrdersController {
   @Post(':id/worklogs/:workLogId/close')
   closeWorkLog(@Param('id') id: string, @Param('workLogId') workLogId: string) {
     return this.svc.closeWorkLog(id, workLogId);
+  }
+
+  @Patch(':id/worklogs/:workLogId')
+  updateWorkLog(
+    @Param('id') id: string,
+    @Param('workLogId') workLogId: string,
+    @Body() dto: UpdateServiceOrderWorkLogDto,
+  ) {
+    return this.svc.updateWorkLog(id, workLogId, dto);
+  }
+
+  @Delete(':id/worklogs/:workLogId')
+  deleteWorkLog(@Param('id') id: string, @Param('workLogId') workLogId: string) {
+    return this.svc.deleteWorkLog(id, workLogId);
   }
 
   @Post(':id/parts')

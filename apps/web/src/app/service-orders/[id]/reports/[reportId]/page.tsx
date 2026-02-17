@@ -36,6 +36,14 @@ function fmtMins(mins?: number | null) {
   return `${h} h ${m} min`;
 }
 
+function workLogDurationMinutes(startedAt?: string | null, endedAt?: string | null) {
+  if (!startedAt || !endedAt) return 0;
+  const a = new Date(startedAt);
+  const b = new Date(endedAt);
+  if (isNaN(a.getTime()) || isNaN(b.getTime())) return 0;
+  return Math.max(0, Math.round((b.getTime() - a.getTime()) / 60000));
+}
+
 function audienceLabel(aud: Report['audience']) {
   return aud === 'CUSTOMER' ? 'Cliente' : 'Interno';
 }
@@ -162,6 +170,19 @@ export default function ServiceOrderReportPage() {
     user?: User | null;
   }>;
 
+  const participants = Array.from(
+    workLogs.reduce((acc, wl) => {
+      const key = String(wl.userId || '').trim();
+      if (!key) return acc;
+      const cur = acc.get(key) ?? { userId: key, name: wl.user?.name ?? key, logs: 0, minutes: 0 };
+      cur.logs += 1;
+      cur.minutes += workLogDurationMinutes(wl.startedAt, wl.endedAt ?? null);
+      if (wl.user?.name) cur.name = wl.user.name;
+      acc.set(key, cur);
+      return acc;
+    }, new Map<string, { userId: string; name: string; logs: number; minutes: number }>()),
+  ).sort((a, b) => b.minutes - a.minutes);
+
   return (
     <div className="p-6 max-w-4xl mx-auto space-y-6">
       <div className="flex items-start justify-between gap-4 flex-wrap">
@@ -221,7 +242,7 @@ export default function ServiceOrderReportPage() {
             <div className="text-gray-600">{asset?.brand ?? ''} {asset?.model ?? ''} {asset?.serialNumber ? `· SN: ${asset.serialNumber}` : ''}</div>
           </div>
           <div className="border rounded p-3">
-            <div className="font-medium mb-1">Asignaciones</div>
+            <div className="font-medium mb-1">Asignaciones de programación</div>
             {(so.assignments ?? []).length > 0 ? (
               <ul className="list-disc pl-5">
                 {(so.assignments ?? []).map((a: any) => (
@@ -230,6 +251,21 @@ export default function ServiceOrderReportPage() {
               </ul>
             ) : (
               <div className="text-gray-600">Sin asignaciones activas.</div>
+            )}
+
+            <div className="font-medium mt-3 mb-1">Participantes reales (según WorkLogs)</div>
+            {data.audience !== 'INTERNAL' ? (
+              <div className="text-gray-600">Visible en reporte interno.</div>
+            ) : participants.length > 0 ? (
+              <ul className="list-disc pl-5">
+                {participants.map((p) => (
+                  <li key={p.userId}>
+                    {p.name} · Tramos: {p.logs} · Tiempo: {fmtMins(p.minutes)}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <div className="text-gray-600">Sin participación registrada en WorkLogs.</div>
             )}
           </div>
         </div>
