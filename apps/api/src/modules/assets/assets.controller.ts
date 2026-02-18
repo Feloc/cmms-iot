@@ -4,6 +4,7 @@ import {
 import { AssetsService } from './assets.service';
 import { CreateAssetDto } from './dto/create-asset.dto';
 import { UpdateAssetDto } from './dto/update-asset.dto';
+import { GenerateAssetMaintenancePlanDto, UpsertAssetMaintenancePlanDto } from './dto/maintenance-plan.dto';
 import { FileInterceptor } from '@nestjs/platform-express';
 type FindAllQuery = {
   search?: string;
@@ -66,6 +67,11 @@ async listServiceOrderParts(@Param('id') id: string) {
   return this.service.listServiceOrderParts(id);
 }
 
+@Get(':id/maintenance-plan')
+async getMaintenancePlan(@Param('id') id: string) {
+  return this.service.getMaintenancePlan(id);
+}
+
   @Post()
   async create(@Body() dto: CreateAssetDto) {
     return this.service.create(dto as any);
@@ -75,6 +81,16 @@ async listServiceOrderParts(@Param('id') id: string) {
   @Patch(':id')
   async update(@Param('id') id: string, @Body() dto: UpdateAssetDto) {
     return this.service.update(id, dto as any);
+  }
+
+  @Patch(':id/maintenance-plan')
+  async upsertMaintenancePlan(@Param('id') id: string, @Body() dto: UpsertAssetMaintenancePlanDto) {
+    return this.service.upsertMaintenancePlan(id, dto);
+  }
+
+  @Post(':id/maintenance-plan/generate')
+  async generateMaintenancePlan(@Param('id') id: string, @Body() dto: GenerateAssetMaintenancePlanDto) {
+    return this.service.generateMaintenancePlan(id, dto ?? {});
   }
 
 

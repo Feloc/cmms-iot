@@ -74,6 +74,7 @@ model Tenant {
   ruleStates            RuleState[]
   assetEvents           AssetEvent[]
   pmPlans               PmPlan[]
+  assetMaintenancePlans AssetMaintenancePlan[]
 
   workOrderReports      WorkOrderReport[]
 }
@@ -171,6 +172,7 @@ model Asset {
   devices         Device[]
   rules           Rule[]
   assetEvents     AssetEvent[]
+  maintenancePlan AssetMaintenancePlan?
 
   @@unique([tenantId, code])
   @@index([tenantId, name])
@@ -747,9 +749,43 @@ model PmPlan {
   updatedAt                   DateTime @updatedAt
 
   workOrders                  WorkOrder[]
+  assetMaintenancePlans       AssetMaintenancePlan[]
 
   @@unique([tenantId, name])
   @@index([tenantId, name])
+}
+
+enum MaintenanceFrequencyUnit {
+  DAY
+  MONTH
+  YEAR
+}
+
+model AssetMaintenancePlan {
+  id                   String   @id @default(cuid())
+  tenantId             String
+  tenant               Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  assetId              String   @unique
+  asset                Asset    @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  pmPlanId             String
+  pmPlan               PmPlan   @relation(fields: [pmPlanId], references: [id], onDelete: Restrict)
+
+  frequencyValue       Int
+  frequencyUnit        MaintenanceFrequencyUnit
+
+  lastMaintenanceAt    DateTime?
+
+  planningHorizonValue Int      @default(6)
+  planningHorizonUnit  MaintenanceFrequencyUnit @default(MONTH)
+
+  active               Boolean  @default(true)
+
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  @@index([tenantId, pmPlanId])
 }
 
 model ServiceOrderPart {

@@ -12,6 +12,7 @@ const InventoryTab = dynamic(() => import('./tabs/InventoryTab'), { ssr: false, 
 const ParametersTab = dynamic(() => import('./tabs/ParametersTab'), { ssr: false, loading: () => <div className="p-4 text-sm text-gray-500">Cargando parámetros…</div> });
 const TelemetryTab = dynamic(() => import('./tabs/TelemetryTab'), {ssr: false, loading: () => <div className="p-4 text-sm text-gray-500">Cargando telemetría…</div>,});
 const ServiceOrderPartsTab = dynamic(() => import('./tabs/ServiceOrderPartsTab'), { ssr: false, loading: () => <div className="p-4 text-sm text-gray-500">Cargando repuestos…</div> });
+const MaintenancePlanTab = dynamic(() => import('./tabs/MaintenancePlanTab'), { ssr: false, loading: () => <div className="p-4 text-sm text-gray-500">Cargando plan PM…</div> });
 
 
 export default function AssetDetailPage() {
@@ -29,32 +30,31 @@ function DetailInner() {
   const [asset, setAsset] = React.useState<any>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [loading, setLoading] = React.useState(false);
-  const tabs = ['Resumen', 'Adjuntos', 'Inventario', 'Parámetros', 'Telemetría', 'Repuestos cambiados'] as const;
+  const tabs = ['Resumen', 'Plan PM', 'Adjuntos', 'Inventario', 'Parámetros', 'Telemetría', 'Repuestos cambiados'] as const;
   type TabKey = typeof tabs[number];
   const [active, setActive] = React.useState<TabKey>('Resumen');
 
-  React.useEffect(() => {
-    let cancelled = false;
-    async function load() {
-      if (!tenantSlug) return;
-      setLoading(true);
-      setError(null);
-      try {
-        const res = await fetch(`${apiBase}/assets/${assetId}`, { headers, credentials: 'include' });
-        const text = await res.text();
-        let json: any = {};
-        try { json = text ? JSON.parse(text) : {}; } catch {}
-        if (!res.ok) throw new Error(json?.message || json?.error || `HTTP ${res.status}`);
-        if (!cancelled) setAsset(json);
-      } catch (e: any) {
-        if (!cancelled) setError(e?.message || 'Error cargando activo');
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
+  const loadAsset = React.useCallback(async () => {
+    if (!tenantSlug) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`${apiBase}/assets/${assetId}`, { headers, credentials: 'include' });
+      const text = await res.text();
+      let json: any = {};
+      try { json = text ? JSON.parse(text) : {}; } catch {}
+      if (!res.ok) throw new Error(json?.message || json?.error || `HTTP ${res.status}`);
+      setAsset(json);
+    } catch (e: any) {
+      setError(e?.message || 'Error cargando activo');
+    } finally {
+      setLoading(false);
     }
-    load();
-    return () => { cancelled = true; };
-  }, [assetId, apiBase, headers, tenantSlug]);
+  }, [tenantSlug, apiBase, assetId, headers]);
+
+  React.useEffect(() => {
+    loadAsset();
+  }, [loadAsset]);
 
   return (
     <div className="max-w-7xl mx-auto p-6 space-y-6">
@@ -89,6 +89,7 @@ function DetailInner() {
       ) : asset ? (
         <div>
           {active === 'Resumen' && <OverviewTab asset={asset} />}
+          {active === 'Plan PM' && <MaintenancePlanTab asset={asset} onUpdated={loadAsset} />}
           {active === 'Adjuntos' && <AttachmentsTab />}
           {active === 'Inventario' && <InventoryTab />}
           {active === 'Parámetros' && <ParametersTab />}

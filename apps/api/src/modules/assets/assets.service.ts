@@ -4,6 +4,7 @@ import { PrismaService } from '../../prisma.service';
 import { tenantStorage } from '../../common/tenant-context';
 import { CreateAssetDto } from './dto/create-asset.dto';
 import { UpdateAssetDto } from './dto/update-asset.dto';
+import { GenerateAssetMaintenancePlanDto, MaintenanceFrequencyUnit, UpsertAssetMaintenancePlanDto } from './dto/maintenance-plan.dto';
 
 
 type FindAllQuery = {
@@ -19,6 +20,8 @@ type FindAllQuery = {
   size?: number; // page size
   orderBy?: 'createdAt:desc' | 'createdAt:asc' | 'name:asc' | 'name:desc';
 };
+
+type Unit = MaintenanceFrequencyUnit;
 
 @Injectable()
 export class AssetsService {
@@ -37,6 +40,57 @@ export class AssetsService {
       await tx.$executeRaw`SELECT set_config('app.tenant_id', ${tenantId}, true)`;
       return fn(tx);
     });
+  }
+
+  private assertUnit(v: any, field: string): Unit {
+    const unit = String(v ?? '').trim().toUpperCase();
+    if (unit !== 'DAY' && unit !== 'MONTH' && unit !== 'YEAR') {
+      throw new BadRequestException(`${field} must be DAY | MONTH | YEAR`);
+    }
+    return unit as Unit;
+  }
+
+  private toPositiveInt(v: any, field: string): number {
+    const n = Number(v);
+    if (!Number.isFinite(n) || n <= 0) throw new BadRequestException(`${field} must be a positive number`);
+    return Math.round(n);
+  }
+
+  private parseDateNullable(v: any, field: string): Date | null {
+    if (v === undefined) return null;
+    if (v === null || v === '') return null;
+    const d = v instanceof Date ? v : new Date(v);
+    if (isNaN(d.getTime())) throw new BadRequestException(`${field} is invalid`);
+    return d;
+  }
+
+  private addInterval(base: Date, value: number, unit: Unit): Date {
+    const val = this.toPositiveInt(value, 'interval');
+    const d = new Date(base.getTime());
+    if (unit === 'DAY') {
+      d.setUTCDate(d.getUTCDate() + val);
+      return d;
+    }
+    if (unit === 'MONTH') return this.addMonthsClamped(d, val);
+    return this.addMonthsClamped(d, val * 12);
+  }
+
+  private addMonthsClamped(base: Date, months: number): Date {
+    const y = base.getUTCFullYear();
+    const m = base.getUTCMonth();
+    const day = base.getUTCDate();
+    const hh = base.getUTCHours();
+    const mi = base.getUTCMinutes();
+    const ss = base.getUTCSeconds();
+    const ms = base.getUTCMilliseconds();
+
+    const first = new Date(Date.UTC(y, m + months, 1, hh, mi, ss, ms));
+    const targetY = first.getUTCFullYear();
+    const targetM = first.getUTCMonth();
+    const lastDay = new Date(Date.UTC(targetY, targetM + 1, 0)).getUTCDate();
+    const clampedDay = Math.min(day, lastDay);
+
+    return new Date(Date.UTC(targetY, targetM, clampedDay, hh, mi, ss, ms));
   }
 
   async findAll(q: FindAllQuery = {}) {
@@ -96,7 +150,16 @@ if (q.customer) where.customer = { contains: q.customer.trim(), mode: 'insensiti
   async findOne(id: string) {
     if (!id) throw new BadRequestException('id is required');
     return this.withTenantRLS(async (tx) => {
-      const asset = await tx.asset.findFirst({ where: { id } });
+      const asset = await tx.asset.findFirst({
+        where: { id },
+        include: {
+          maintenancePlan: {
+            include: {
+              pmPlan: { select: { id: true, name: true, intervalHours: true, defaultDurationMin: true, active: true } },
+            },
+          },
+        },
+      });
       if (!asset) throw new NotFoundException('Asset not found');
       return asset;
     });
@@ -163,6 +226,263 @@ if (q.customer) where.customer = { contains: q.customer.trim(), mode: 'insensiti
       }
       throw e;
     }
+  }
+
+  async getMaintenancePlan(assetId: string) {
+    if (!assetId) throw new BadRequestException('assetId is required');
+    const tenantId = this.getTenantId();
+
+    return this.withTenantRLS(async (tx) => {
+      const asset = await tx.asset.findFirst({
+        where: { id: assetId, tenantId },
+        select: { id: true, code: true, acquiredOn: true },
+      });
+      if (!asset) throw new NotFoundException('Asset not found');
+
+      const plan = await (tx as any).assetMaintenancePlan.findFirst({
+        where: { tenantId, assetId },
+        include: {
+          pmPlan: { select: { id: true, name: true, intervalHours: true, defaultDurationMin: true, active: true } },
+        },
+      });
+
+      const now = new Date();
+      const futureWhere: any = {
+        tenantId,
+        kind: 'SERVICE_ORDER',
+        serviceOrderType: 'PREVENTIVO',
+        assetCode: asset.code,
+        dueDate: { not: null, gte: now },
+        status: { notIn: ['CANCELED', 'COMPLETED', 'CLOSED'] },
+      };
+      if (plan?.pmPlanId) futureWhere.pmPlanId = plan.pmPlanId;
+
+      const futureServiceOrders = await tx.workOrder.findMany({
+        where: futureWhere,
+        orderBy: [{ dueDate: 'asc' }, { createdAt: 'desc' }],
+        select: { id: true, dueDate: true, status: true, title: true, pmPlanId: true },
+        take: 500,
+      });
+
+      return {
+        assetId: asset.id,
+        assetCode: asset.code,
+        acquiredOn: asset.acquiredOn,
+        plan: plan ?? null,
+        futureServiceOrders: (futureServiceOrders ?? []).map((wo: any) => ({
+          id: wo.id,
+          dueDate: wo?.dueDate ? new Date(wo.dueDate).toISOString() : null,
+          status: wo.status,
+          title: wo.title,
+          pmPlanId: wo.pmPlanId ?? null,
+        })),
+      };
+    });
+  }
+
+  async upsertMaintenancePlan(assetId: string, dto: UpsertAssetMaintenancePlanDto) {
+    if (!assetId) throw new BadRequestException('assetId is required');
+    const tenantId = this.getTenantId();
+
+    return this.withTenantRLS(async (tx) => {
+      const asset = await tx.asset.findFirst({
+        where: { id: assetId, tenantId },
+        select: { id: true, code: true, acquiredOn: true },
+      });
+      if (!asset) throw new NotFoundException('Asset not found');
+
+      const pmPlanId = String(dto.pmPlanId || '').trim();
+      if (!pmPlanId) throw new BadRequestException('pmPlanId is required');
+
+      const pmPlan = await tx.pmPlan.findFirst({
+        where: { id: pmPlanId, tenantId },
+        select: { id: true, name: true, active: true, defaultDurationMin: true, description: true },
+      });
+      if (!pmPlan) throw new BadRequestException('PM plan not found');
+
+      const frequencyValue = this.toPositiveInt(dto.frequencyValue, 'frequencyValue');
+      const frequencyUnit = this.assertUnit(dto.frequencyUnit, 'frequencyUnit');
+
+      const planningHorizonValue =
+        dto.planningHorizonValue === undefined
+          ? 6
+          : this.toPositiveInt(dto.planningHorizonValue, 'planningHorizonValue');
+      const planningHorizonUnit = this.assertUnit(dto.planningHorizonUnit ?? 'MONTH', 'planningHorizonUnit');
+
+      const lastMaintenanceAt =
+        dto.lastMaintenanceAt === undefined
+          ? undefined
+          : this.parseDateNullable(dto.lastMaintenanceAt, 'lastMaintenanceAt');
+
+      const updated = await (tx as any).assetMaintenancePlan.upsert({
+        where: { assetId },
+        create: {
+          tenantId,
+          assetId,
+          pmPlanId,
+          frequencyValue,
+          frequencyUnit,
+          lastMaintenanceAt: lastMaintenanceAt ?? null,
+          planningHorizonValue,
+          planningHorizonUnit,
+          active: dto.active === undefined ? true : !!dto.active,
+        },
+        update: {
+          pmPlanId,
+          frequencyValue,
+          frequencyUnit,
+          ...(lastMaintenanceAt !== undefined ? { lastMaintenanceAt } : {}),
+          planningHorizonValue,
+          planningHorizonUnit,
+          ...(dto.active !== undefined ? { active: !!dto.active } : {}),
+        },
+        include: {
+          pmPlan: { select: { id: true, name: true, intervalHours: true, defaultDurationMin: true, active: true } },
+        },
+      });
+
+      return {
+        assetId: asset.id,
+        assetCode: asset.code,
+        acquiredOn: asset.acquiredOn,
+        plan: updated,
+      };
+    });
+  }
+
+  async generateMaintenancePlan(assetId: string, dto: GenerateAssetMaintenancePlanDto) {
+    if (!assetId) throw new BadRequestException('assetId is required');
+    const tenantId = this.getTenantId();
+
+    return this.withTenantRLS(async (tx) => {
+      const asset = await tx.asset.findFirst({
+        where: { id: assetId, tenantId },
+        select: { id: true, code: true, name: true, acquiredOn: true },
+      });
+      if (!asset) throw new NotFoundException('Asset not found');
+
+      const plan = await (tx as any).assetMaintenancePlan.findFirst({
+        where: { tenantId, assetId },
+        include: {
+          pmPlan: { select: { id: true, name: true, description: true, defaultDurationMin: true, active: true } },
+        },
+      });
+      if (!plan) throw new BadRequestException('Asset has no maintenance plan configuration');
+      if (!plan.active) throw new BadRequestException('Asset maintenance plan is inactive');
+
+      const lastDone = await tx.workOrder.findFirst({
+        where: {
+          tenantId,
+          kind: 'SERVICE_ORDER',
+          serviceOrderType: 'PREVENTIVO' as any,
+          assetCode: asset.code,
+          pmPlanId: plan.pmPlanId,
+          status: { in: ['COMPLETED', 'CLOSED'] as any },
+        },
+        orderBy: [{ deliveredAt: 'desc' }, { completedAt: 'desc' }, { dueDate: 'desc' }, { updatedAt: 'desc' }],
+        select: { deliveredAt: true, completedAt: true, dueDate: true, updatedAt: true },
+      });
+
+      const inferredLastDate =
+        lastDone?.deliveredAt ??
+        lastDone?.completedAt ??
+        lastDone?.dueDate ??
+        lastDone?.updatedAt ??
+        null;
+
+      const baseDate = plan.lastMaintenanceAt
+        ? new Date(plan.lastMaintenanceAt)
+        : inferredLastDate
+        ? new Date(inferredLastDate)
+        : asset.acquiredOn
+        ? new Date(asset.acquiredOn)
+        : null;
+      if (!baseDate) {
+        throw new BadRequestException('No base date found. Set acquiredOn on the asset or lastMaintenanceAt in maintenance plan');
+      }
+
+      const freqValue = this.toPositiveInt(plan.frequencyValue, 'frequencyValue');
+      const freqUnit = this.assertUnit(plan.frequencyUnit, 'frequencyUnit');
+
+      const horizonValue =
+        dto?.horizonValue !== undefined
+          ? this.toPositiveInt(dto.horizonValue, 'horizonValue')
+          : this.toPositiveInt(plan.planningHorizonValue ?? 6, 'planningHorizonValue');
+      const horizonUnit = this.assertUnit(dto?.horizonUnit ?? plan.planningHorizonUnit ?? 'MONTH', 'horizonUnit');
+
+      const now = new Date();
+      const horizonEnd = this.addInterval(now, horizonValue, horizonUnit);
+
+      const existing = await tx.workOrder.findMany({
+        where: {
+          tenantId,
+          kind: 'SERVICE_ORDER',
+          serviceOrderType: 'PREVENTIVO' as any,
+          assetCode: asset.code,
+          pmPlanId: plan.pmPlanId,
+          dueDate: { not: null, gte: now, lte: horizonEnd } as any,
+        },
+        select: { id: true, dueDate: true },
+      });
+
+      const existingByTs = new Set(
+        (existing ?? [])
+          .map((e: any) => (e.dueDate ? new Date(e.dueDate).getTime() : null))
+          .filter((v: number | null): v is number => typeof v === 'number'),
+      );
+
+      const candidates: Date[] = [];
+      let cursor = new Date(baseDate.getTime());
+      let guard = 0;
+      while (cursor.getTime() <= horizonEnd.getTime() && guard < 5000) {
+        if (cursor.getTime() >= now.getTime()) {
+          const ts = cursor.getTime();
+          if (!existingByTs.has(ts)) candidates.push(new Date(cursor.getTime()));
+        }
+        cursor = this.addInterval(cursor, freqValue, freqUnit);
+        guard += 1;
+      }
+      if (guard >= 5000) throw new BadRequestException('Generation exceeded maximum iterations');
+
+      const created: Array<{ id: string; dueDate: string }> = [];
+      for (const due of candidates) {
+        const wo = await tx.workOrder.create({
+          data: {
+            tenantId,
+            kind: 'SERVICE_ORDER',
+            serviceOrderType: 'PREVENTIVO' as any,
+            pmPlanId: plan.pmPlanId,
+            assetCode: asset.code,
+            title: `PM ${plan.pmPlan?.name ?? 'Preventivo'} - ${asset.code}`,
+            description: plan.pmPlan?.description ?? `Generada automáticamente para ${asset.name || asset.code}`,
+            dueDate: due,
+            status: 'SCHEDULED' as any,
+            durationMin: Number(plan.pmPlan?.defaultDurationMin ?? 60),
+            formData: {
+              autoGeneratedPm: true,
+              generatedBy: 'ASSET_MAINTENANCE_PLAN',
+              generatedAt: new Date().toISOString(),
+              generatedFromAssetId: asset.id,
+              generatedFromPlanId: plan.id,
+            },
+          } as any,
+          select: { id: true, dueDate: true },
+        });
+        created.push({ id: wo.id, dueDate: wo.dueDate ? new Date(wo.dueDate).toISOString() : due.toISOString() });
+      }
+
+      return {
+        assetId: asset.id,
+        assetCode: asset.code,
+        pmPlanId: plan.pmPlanId,
+        frequency: { value: freqValue, unit: freqUnit },
+        baseDate: baseDate.toISOString(),
+        range: { from: now.toISOString(), to: horizonEnd.toISOString() },
+        existingCount: existingByTs.size,
+        generatedCount: created.length,
+        created,
+      };
+    });
   }
 
   async remove(id: string) {
