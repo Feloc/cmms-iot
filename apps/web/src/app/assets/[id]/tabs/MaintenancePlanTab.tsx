@@ -6,6 +6,14 @@ import { useAssetsDetail } from '../assets-detail.context';
 type Unit = 'DAY' | 'MONTH' | 'YEAR';
 type PmPlan = { id: string; name: string; intervalHours?: number | null; defaultDurationMin?: number | null; active?: boolean };
 type FutureServiceOrder = { id: string; dueDate?: string | null; status?: string | null; title?: string | null; pmPlanId?: string | null };
+type CompletedPreventiveOrder = {
+  id: string;
+  dueDate?: string | null;
+  executedAt?: string | null;
+  status?: string | null;
+  title?: string | null;
+  pmPlanId?: string | null;
+};
 
 function isoToDateInput(v?: string | null) {
   if (!v) return '';
@@ -35,6 +43,7 @@ export default function MaintenancePlanTab({
   const [info, setInfo] = React.useState<string | null>(null);
   const [generateResult, setGenerateResult] = React.useState<any>(null);
   const [futureOrders, setFutureOrders] = React.useState<FutureServiceOrder[]>([]);
+  const [lastMaintenances, setLastMaintenances] = React.useState<CompletedPreventiveOrder[]>([]);
   const [loadingFutureOrders, setLoadingFutureOrders] = React.useState(false);
 
   const [pmPlanId, setPmPlanId] = React.useState('');
@@ -89,6 +98,7 @@ export default function MaintenancePlanTab({
       try { json = text ? JSON.parse(text) : {}; } catch {}
       if (!res.ok) throw new Error(json?.message || json?.error || `HTTP ${res.status}`);
       setFutureOrders(Array.isArray(json?.futureServiceOrders) ? json.futureServiceOrders : []);
+      setLastMaintenances(Array.isArray(json?.lastPreventiveMaintenances) ? json.lastPreventiveMaintenances : []);
     } catch (e: any) {
       setErr(e?.message ?? 'Error cargando OS futuras');
     } finally {
@@ -102,7 +112,7 @@ export default function MaintenancePlanTab({
 
   const baseDateText = lastMaintenanceAt || isoToDateInput(asset?.acquiredOn);
 
-  async function saveConfig() {
+  async function saveConfig(syncFutureOrders = false) {
     setBusy(true);
     setErr(null);
     setInfo(null);
@@ -120,6 +130,7 @@ export default function MaintenancePlanTab({
         planningHorizonValue: Math.round(planningHorizonValue),
         planningHorizonUnit,
         active,
+        syncFutureOrders,
       };
 
       const res = await fetch(`${apiBase}/assets/${assetId}/maintenance-plan`, {
@@ -133,7 +144,14 @@ export default function MaintenancePlanTab({
       try { json = text ? JSON.parse(text) : {}; } catch {}
       if (!res.ok) throw new Error(json?.message || json?.error || `HTTP ${res.status}`);
 
-      setInfo('Configuración de mantenimiento guardada.');
+      const sync = json?.syncFutureOrders;
+      if (syncFutureOrders && sync) {
+        setInfo(
+          `Configuración guardada. OS futuras: ${sync.updatedCount ?? 0} actualizadas, ${sync.createdCount ?? 0} creadas, ${sync.canceledCount ?? 0} canceladas.`,
+        );
+      } else {
+        setInfo('Configuración de mantenimiento guardada.');
+      }
       await onUpdated?.();
       await loadFutureOrders();
     } catch (e: any) {
@@ -262,15 +280,18 @@ export default function MaintenancePlanTab({
         </div>
 
         <div className="flex items-center gap-2">
-          <button type="button" className="px-3 py-2 border rounded bg-black text-white disabled:opacity-50" disabled={busy} onClick={saveConfig}>
+          <button type="button" className="px-3 py-2 border rounded bg-black text-white disabled:opacity-50" disabled={busy} onClick={() => saveConfig(false)}>
             Guardar configuración
+          </button>
+          <button type="button" className="px-3 py-2 border rounded disabled:opacity-50" disabled={busy} onClick={() => saveConfig(true)}>
+            Guardar y actualizar OS futuras
           </button>
           <button type="button" className="px-3 py-2 border rounded disabled:opacity-50" disabled={busy} onClick={generateSchedule}>
             Generar OS futuras
           </button>
         </div>
         <div className="text-xs text-gray-500">
-          Recomendación: guarda la configuración antes de generar para usar el plan/frecuencia más recientes.
+          Puedes guardar solo la configuración o aplicar inmediatamente los cambios a las OS preventivas futuras registradas.
         </div>
       </div>
 
@@ -293,6 +314,24 @@ export default function MaintenancePlanTab({
           )}
         </div>
       ) : null}
+
+      <div className="border rounded-lg p-4 space-y-2">
+        <h3 className="font-semibold">Últimos 3 mantenimientos preventivos realizados</h3>
+        {loadingFutureOrders ? (
+          <div className="text-sm text-gray-600">Cargando…</div>
+        ) : lastMaintenances.length === 0 ? (
+          <div className="text-sm text-gray-600">No hay mantenimientos preventivos cerrados para este activo/plan.</div>
+        ) : (
+          <ul className="list-disc pl-5 text-sm">
+            {lastMaintenances.map((r) => (
+              <li key={r.id}>
+                {r?.executedAt ? new Date(r.executedAt).toLocaleString() : 'Sin fecha de cierre'} · {r?.status ?? '-'} ·{' '}
+                <a className="underline" href={`/service-orders/${r.id}`}>{r.title || r.id}</a>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
 
       <div className="border rounded-lg p-4 space-y-2">
         <h3 className="font-semibold">OS preventivas futuras registradas</h3>

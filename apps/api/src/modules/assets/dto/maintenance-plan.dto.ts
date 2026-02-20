@@ -8,6 +8,7 @@ export class UpsertAssetMaintenancePlanDto {
   planningHorizonValue?: number;
   planningHorizonUnit?: MaintenanceFrequencyUnit;
   active?: boolean;
+  syncFutureOrders?: boolean;
 }
 
 export class GenerateAssetMaintenancePlanDto {
