@@ -855,14 +855,16 @@ if (q.customer) where.customer = { contains: q.customer.trim(), mode: 'insensiti
           id: true,
           code: true,
           name: true,
-          maintenancePlan: {
-            include: { pmPlan: { select: { id: true, name: true, intervalHours: true } } },
-          },
         },
-      } as any);
+      });
       if (!asset) throw new NotFoundException('Asset not found');
 
-      const targetHoursRaw = asset?.maintenancePlan?.pmPlan?.intervalHours;
+      const plan = await (tx as any).assetMaintenancePlan.findFirst({
+        where: { tenantId, assetId: asset.id, active: true },
+        include: { pmPlan: { select: { intervalHours: true } } },
+      });
+
+      const targetHoursRaw = plan?.pmPlan?.intervalHours;
       const targetHours = targetHoursRaw == null ? null : Number(targetHoursRaw);
 
       const pmRowsRaw = await tx.workOrder.findMany({
@@ -885,19 +887,20 @@ if (q.customer) where.customer = { contains: q.customer.trim(), mode: 'insensiti
         take: safeLimit * 3,
       });
 
-      const pmRows = (pmRowsRaw ?? [])
-        .map((wo: any) => {
-          const closedAt = wo?.deliveredAt ?? wo?.completedAt ?? wo?.updatedAt ?? null;
-          if (!closedAt) return null;
-          return {
-            id: String(wo.id),
-            title: wo?.title ?? null,
-            status: wo?.status ?? null,
-            closedAt: new Date(closedAt as Date),
-          };
-        })
-        .filter((v: any) => !!v)
-        .sort((a: any, b: any) => a.closedAt.getTime() - b.closedAt.getTime());
+      const pmRows: Array<{ id: string; title: string | null; status: string | null; closedAt: Date }> = [];
+      for (const wo of pmRowsRaw ?? []) {
+        const closedAtRaw = (wo as any)?.deliveredAt ?? (wo as any)?.completedAt ?? (wo as any)?.updatedAt ?? null;
+        if (!closedAtRaw) continue;
+        const closedAt = new Date(closedAtRaw as Date);
+        if (Number.isNaN(closedAt.getTime())) continue;
+        pmRows.push({
+          id: String((wo as any).id),
+          title: (wo as any)?.title ?? null,
+          status: (wo as any)?.status ?? null,
+          closedAt,
+        });
+      }
+      pmRows.sort((a, b) => a.closedAt.getTime() - b.closedAt.getTime());
 
       const pmTrimmed = pmRows.slice(Math.max(0, pmRows.length - safeLimit));
       if (!pmTrimmed.length) {
@@ -908,7 +911,7 @@ if (q.customer) where.customer = { contains: q.customer.trim(), mode: 'insensiti
         };
       }
 
-      const pmIds = pmTrimmed.map((p: any) => p.id);
+      const pmIds = pmTrimmed.map((p) => p.id);
       const byOrderRows = await (tx as any).assetMeterReading.findMany({
         where: { tenantId, assetId, meterType: 'HOURMETER', workOrderId: { in: pmIds } },
         orderBy: [{ readingAt: 'desc' }, { createdAt: 'desc' }],
@@ -917,15 +920,25 @@ if (q.customer) where.customer = { contains: q.customer.trim(), mode: 'insensiti
 
       const byOrder = new Map<string, { reading: number; readingAt: Date }>();
       for (const row of byOrderRows ?? []) {
-        const workOrderId = String(row?.workOrderId || '');
+        const workOrderId = String((row as any)?.workOrderId || '');
         if (!workOrderId || byOrder.has(workOrderId)) continue;
+        const readingAt = new Date((row as any).readingAt);
+        if (Number.isNaN(readingAt.getTime())) continue;
         byOrder.set(workOrderId, {
-          reading: Number(row.reading),
-          readingAt: new Date(row.readingAt),
+          reading: Number((row as any).reading),
+          readingAt,
         });
       }
 
-      const maxClosedAt = pmTrimmed[pmTrimmed.length - 1].closedAt;
+      const lastPm = pmTrimmed[pmTrimmed.length - 1];
+      if (!lastPm) {
+        return {
+          asset: { id: asset.id, code: asset.code, name: asset.name ?? null },
+          targetHours,
+          items: [],
+        };
+      }
+      const maxClosedAt = lastPm.closedAt;
       const assetReadings = await (tx as any).assetMeterReading.findMany({
         where: {
           tenantId,
@@ -940,7 +953,7 @@ if (q.customer) where.customer = { contains: q.customer.trim(), mode: 'insensiti
 
       const meterRows = (assetReadings ?? [])
         .map((r: any) => ({ reading: Number(r.reading), readingAt: new Date(r.readingAt) }))
-        .filter((r: any) => !isNaN(r.readingAt.getTime()))
+        .filter((r: any) => !Number.isNaN(r.readingAt.getTime()))
         .sort((a: any, b: any) => a.readingAt.getTime() - b.readingAt.getTime());
 
       let meterIdx = 0;

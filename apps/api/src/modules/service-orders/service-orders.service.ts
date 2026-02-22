@@ -936,11 +936,12 @@ private async assertTechCanMutateServiceOrder(
       (this.prisma as any).serviceOrderIssue.count({ where }),
     ]);
 
-    const userIds = Array.from(
+    const userIds: string[] = Array.from(
       new Set(
         (rows ?? [])
           .flatMap((r: any) => [r?.openedByUserId, r?.ownerUserId, r?.resolvedByUserId, r?.verifiedByUserId])
-          .filter(Boolean),
+          .map((v: any) => String(v || '').trim())
+          .filter((v: string): v is string => v.length > 0),
       ),
     );
     const users = userIds.length
@@ -951,7 +952,13 @@ private async assertTechCanMutateServiceOrder(
       : [];
     const userById = new Map(users.map((u: any) => [u.id, u]));
 
-    const correctiveIds = Array.from(new Set((rows ?? []).map((r: any) => r?.resolutionWorkOrderId).filter(Boolean)));
+    const correctiveIds: string[] = Array.from(
+      new Set(
+        (rows ?? [])
+          .map((r: any) => String(r?.resolutionWorkOrderId || '').trim())
+          .filter((v: string): v is string => v.length > 0),
+      ),
+    );
     const correctiveRows = correctiveIds.length
       ? await this.prisma.workOrder.findMany({
           where: { tenantId, id: { in: correctiveIds }, kind: 'SERVICE_ORDER' },
