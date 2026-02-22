@@ -22,6 +22,7 @@ type FindAllQuery = {
 };
 
 type Unit = MaintenanceFrequencyUnit;
+type HourmeterBucket = 'day' | 'week' | 'month';
 
 @Injectable()
 export class AssetsService {
@@ -62,6 +63,43 @@ export class AssetsService {
     const d = v instanceof Date ? v : new Date(v);
     if (isNaN(d.getTime())) throw new BadRequestException(`${field} is invalid`);
     return d;
+  }
+
+  private parseHourmeterDateWindow(from?: string, to?: string, defaultDays = 90): { from: Date; to: Date } {
+    const end = to ? new Date(to) : new Date();
+    if (isNaN(end.getTime())) throw new BadRequestException('to is invalid');
+
+    const start = from ? new Date(from) : new Date(end.getTime() - defaultDays * 24 * 60 * 60 * 1000);
+    if (isNaN(start.getTime())) throw new BadRequestException('from is invalid');
+    if (start.getTime() > end.getTime()) throw new BadRequestException('from must be <= to');
+
+    return { from: start, to: end };
+  }
+
+  private normalizeHourmeterBucket(bucket?: string): HourmeterBucket {
+    const b = String(bucket || 'week').trim().toLowerCase();
+    if (b === 'day' || b === 'week' || b === 'month') return b;
+    throw new BadRequestException('bucket must be day | week | month');
+  }
+
+  private startOfBucketUTC(date: Date, bucket: HourmeterBucket): Date {
+    const d = new Date(date.getTime());
+    d.setUTCHours(0, 0, 0, 0);
+    if (bucket === 'day') return d;
+    if (bucket === 'month') {
+      d.setUTCDate(1);
+      return d;
+    }
+    const weekday = (d.getUTCDay() + 6) % 7; // Monday=0
+    d.setUTCDate(d.getUTCDate() - weekday);
+    return d;
+  }
+
+  private classifyPmCompliance(delta: number | null, targetHours: number | null): 'EARLY' | 'ON_TIME' | 'LATE' | 'UNKNOWN' {
+    if (delta == null || targetHours == null || !Number.isFinite(targetHours) || targetHours <= 0) return 'UNKNOWN';
+    if (delta < targetHours * 0.9) return 'EARLY';
+    if (delta <= targetHours * 1.1) return 'ON_TIME';
+    return 'LATE';
   }
 
   private addInterval(base: Date, value: number, unit: Unit): Date {
@@ -594,6 +632,531 @@ if (q.customer) where.customer = { contains: q.customer.trim(), mode: 'insensiti
             pmPlanId: wo.pmPlanId ?? null,
           };
         }),
+      };
+    });
+  }
+
+  async getHourmeterReadings(assetId: string, limit?: number) {
+    if (!assetId) throw new BadRequestException('assetId is required');
+    const tenantId = this.getTenantId();
+
+    return this.withTenantRLS(async (tx) => {
+      const asset = await tx.asset.findFirst({
+        where: { id: assetId, tenantId },
+        select: { id: true, code: true, name: true, latestHourmeter: true, latestHourmeterAt: true },
+      } as any);
+      if (!asset) throw new NotFoundException('Asset not found');
+
+      const safeLimit = Number.isFinite(Number(limit)) ? Math.min(500, Math.max(1, Number(limit))) : 200;
+
+      const rows = await (tx as any).assetMeterReading.findMany({
+        where: { tenantId, assetId, meterType: 'HOURMETER' },
+        orderBy: [{ readingAt: 'desc' }, { createdAt: 'desc' }],
+        take: safeLimit,
+        include: {
+          workOrder: { select: { id: true, title: true, serviceOrderType: true, status: true } },
+          createdByUser: { select: { id: true, name: true, email: true, role: true } },
+        },
+      });
+
+      const items = (rows ?? []).map((r: any) => ({
+        id: r.id,
+        reading: Number(r.reading),
+        readingAt: r?.readingAt ? new Date(r.readingAt).toISOString() : null,
+        phase: r?.phase ?? 'OTHER',
+        source: r?.source ?? 'MANUAL_OS',
+        note: r?.note ?? null,
+        deltaFromPrevious: r?.deltaFromPrevious == null ? null : Number(r.deltaFromPrevious),
+        workOrderId: r?.workOrderId ?? null,
+        workOrder: r?.workOrder
+          ? {
+              id: r.workOrder.id,
+              title: r.workOrder.title ?? null,
+              serviceOrderType: r.workOrder.serviceOrderType ?? null,
+              status: r.workOrder.status ?? null,
+            }
+          : null,
+        createdAt: r?.createdAt ? new Date(r.createdAt).toISOString() : null,
+        createdByUser: r?.createdByUser
+          ? {
+              id: r.createdByUser.id,
+              name: r.createdByUser.name,
+              email: r.createdByUser.email,
+              role: r.createdByUser.role,
+            }
+          : null,
+      }));
+
+      return {
+        asset: {
+          id: asset.id,
+          code: asset.code,
+          name: asset.name ?? null,
+          latestHourmeter: asset.latestHourmeter == null ? null : Number(asset.latestHourmeter),
+          latestHourmeterAt: asset.latestHourmeterAt ? new Date(asset.latestHourmeterAt).toISOString() : null,
+        },
+        latest: items.length ? items[0] : null,
+        items,
+      };
+    });
+  }
+
+  async getHourmeterAnalyticsSummary(assetId: string, from?: string, to?: string) {
+    if (!assetId) throw new BadRequestException('assetId is required');
+    const tenantId = this.getTenantId();
+    const window = this.parseHourmeterDateWindow(from, to, 90);
+
+    return this.withTenantRLS(async (tx) => {
+      const asset = await tx.asset.findFirst({
+        where: { id: assetId, tenantId },
+        select: { id: true, code: true, name: true },
+      } as any);
+      if (!asset) throw new NotFoundException('Asset not found');
+
+      const rows = await (tx as any).assetMeterReading.findMany({
+        where: {
+          tenantId,
+          assetId,
+          meterType: 'HOURMETER',
+          readingAt: { gte: window.from, lte: window.to },
+        },
+        orderBy: [{ readingAt: 'asc' }, { createdAt: 'asc' }],
+        select: {
+          reading: true,
+          readingAt: true,
+          deltaFromPrevious: true,
+        },
+      });
+
+      const count = rows.length;
+      const first = count ? Number(rows[0].reading) : null;
+      const last = count ? Number(rows[count - 1].reading) : null;
+      const delta = first != null && last != null ? Number(last - first) : null;
+
+      const firstAt = count ? new Date(rows[0].readingAt) : null;
+      const lastAt = count ? new Date(rows[count - 1].readingAt) : null;
+      const durationDays =
+        firstAt && lastAt ? Math.max(0, (lastAt.getTime() - firstAt.getTime()) / (24 * 60 * 60 * 1000)) : 0;
+
+      const avgHoursPerDay =
+        delta != null && durationDays > 0
+          ? Number((delta / durationDays).toFixed(4))
+          : null;
+      const avgHoursPerWeek = avgHoursPerDay == null ? null : Number((avgHoursPerDay * 7).toFixed(4));
+
+      const decreaseEvents = rows.reduce((acc: number, r: any) => {
+        const d = r?.deltaFromPrevious == null ? null : Number(r.deltaFromPrevious);
+        return d != null && d < 0 ? acc + 1 : acc;
+      }, 0);
+      const largeJumpEvents = rows.reduce((acc: number, r: any) => {
+        const d = r?.deltaFromPrevious == null ? null : Number(r.deltaFromPrevious);
+        return d != null && d > 50 ? acc + 1 : acc;
+      }, 0);
+
+      return {
+        asset: {
+          id: asset.id,
+          code: asset.code,
+          name: asset.name ?? null,
+        },
+        window: {
+          from: window.from.toISOString(),
+          to: window.to.toISOString(),
+        },
+        readings: {
+          count,
+          first,
+          last,
+          delta,
+        },
+        usage: {
+          avgHoursPerDay,
+          avgHoursPerWeek,
+        },
+        quality: {
+          decreaseEvents,
+          largeJumpEvents,
+        },
+      };
+    });
+  }
+
+  async getHourmeterAnalyticsSeries(assetId: string, from?: string, to?: string, bucket?: string) {
+    if (!assetId) throw new BadRequestException('assetId is required');
+    const tenantId = this.getTenantId();
+    const window = this.parseHourmeterDateWindow(from, to, 180);
+    const normalizedBucket = this.normalizeHourmeterBucket(bucket);
+
+    return this.withTenantRLS(async (tx) => {
+      const asset = await tx.asset.findFirst({
+        where: { id: assetId, tenantId },
+        select: { id: true, code: true, name: true },
+      } as any);
+      if (!asset) throw new NotFoundException('Asset not found');
+
+      const rows = await (tx as any).assetMeterReading.findMany({
+        where: {
+          tenantId,
+          assetId,
+          meterType: 'HOURMETER',
+          readingAt: { gte: window.from, lte: window.to },
+        },
+        orderBy: [{ readingAt: 'asc' }, { createdAt: 'asc' }],
+        select: { reading: true, readingAt: true },
+      });
+
+      const buckets = new Map<string, { periodStart: Date; reading: number }>();
+      for (const row of rows ?? []) {
+        const dt = new Date(row.readingAt);
+        if (isNaN(dt.getTime())) continue;
+        const periodStart = this.startOfBucketUTC(dt, normalizedBucket);
+        const key = periodStart.toISOString();
+        buckets.set(key, { periodStart, reading: Number(row.reading) });
+      }
+
+      const ordered = Array.from(buckets.values()).sort((a, b) => a.periodStart.getTime() - b.periodStart.getTime());
+      const items: Array<{ periodStart: string; reading: number; delta: number | null }> = [];
+      let prev: number | null = null;
+      for (const point of ordered) {
+        const delta = prev == null ? null : Number((point.reading - prev).toFixed(4));
+        items.push({
+          periodStart: point.periodStart.toISOString(),
+          reading: Number(point.reading.toFixed(4)),
+          delta,
+        });
+        prev = point.reading;
+      }
+
+      return {
+        asset: {
+          id: asset.id,
+          code: asset.code,
+          name: asset.name ?? null,
+        },
+        window: {
+          from: window.from.toISOString(),
+          to: window.to.toISOString(),
+        },
+        bucket: normalizedBucket,
+        items,
+      };
+    });
+  }
+
+  async getHourmeterPmPerformance(assetId: string, limit?: number) {
+    if (!assetId) throw new BadRequestException('assetId is required');
+    const tenantId = this.getTenantId();
+    const safeLimit = Number.isFinite(Number(limit)) ? Math.min(60, Math.max(1, Number(limit))) : 12;
+
+    return this.withTenantRLS(async (tx) => {
+      const asset = await tx.asset.findFirst({
+        where: { id: assetId, tenantId },
+        select: {
+          id: true,
+          code: true,
+          name: true,
+          maintenancePlan: {
+            include: { pmPlan: { select: { id: true, name: true, intervalHours: true } } },
+          },
+        },
+      } as any);
+      if (!asset) throw new NotFoundException('Asset not found');
+
+      const targetHoursRaw = asset?.maintenancePlan?.pmPlan?.intervalHours;
+      const targetHours = targetHoursRaw == null ? null : Number(targetHoursRaw);
+
+      const pmRowsRaw = await tx.workOrder.findMany({
+        where: {
+          tenantId,
+          kind: 'SERVICE_ORDER',
+          serviceOrderType: 'PREVENTIVO' as any,
+          assetCode: asset.code,
+          status: { in: ['COMPLETED', 'CLOSED'] as any },
+        },
+        orderBy: [{ deliveredAt: 'desc' }, { completedAt: 'desc' }, { updatedAt: 'desc' }],
+        select: {
+          id: true,
+          title: true,
+          status: true,
+          deliveredAt: true,
+          completedAt: true,
+          updatedAt: true,
+        },
+        take: safeLimit * 3,
+      });
+
+      const pmRows = (pmRowsRaw ?? [])
+        .map((wo: any) => {
+          const closedAt = wo?.deliveredAt ?? wo?.completedAt ?? wo?.updatedAt ?? null;
+          if (!closedAt) return null;
+          return {
+            id: String(wo.id),
+            title: wo?.title ?? null,
+            status: wo?.status ?? null,
+            closedAt: new Date(closedAt as Date),
+          };
+        })
+        .filter((v: any) => !!v)
+        .sort((a: any, b: any) => a.closedAt.getTime() - b.closedAt.getTime());
+
+      const pmTrimmed = pmRows.slice(Math.max(0, pmRows.length - safeLimit));
+      if (!pmTrimmed.length) {
+        return {
+          asset: { id: asset.id, code: asset.code, name: asset.name ?? null },
+          targetHours,
+          items: [],
+        };
+      }
+
+      const pmIds = pmTrimmed.map((p: any) => p.id);
+      const byOrderRows = await (tx as any).assetMeterReading.findMany({
+        where: { tenantId, assetId, meterType: 'HOURMETER', workOrderId: { in: pmIds } },
+        orderBy: [{ readingAt: 'desc' }, { createdAt: 'desc' }],
+        select: { workOrderId: true, reading: true, readingAt: true },
+      });
+
+      const byOrder = new Map<string, { reading: number; readingAt: Date }>();
+      for (const row of byOrderRows ?? []) {
+        const workOrderId = String(row?.workOrderId || '');
+        if (!workOrderId || byOrder.has(workOrderId)) continue;
+        byOrder.set(workOrderId, {
+          reading: Number(row.reading),
+          readingAt: new Date(row.readingAt),
+        });
+      }
+
+      const maxClosedAt = pmTrimmed[pmTrimmed.length - 1].closedAt;
+      const assetReadings = await (tx as any).assetMeterReading.findMany({
+        where: {
+          tenantId,
+          assetId,
+          meterType: 'HOURMETER',
+          readingAt: { lte: maxClosedAt },
+        },
+        orderBy: [{ readingAt: 'asc' }, { createdAt: 'asc' }],
+        select: { reading: true, readingAt: true },
+        take: 10000,
+      });
+
+      const meterRows = (assetReadings ?? [])
+        .map((r: any) => ({ reading: Number(r.reading), readingAt: new Date(r.readingAt) }))
+        .filter((r: any) => !isNaN(r.readingAt.getTime()))
+        .sort((a: any, b: any) => a.readingAt.getTime() - b.readingAt.getTime());
+
+      let meterIdx = 0;
+      let latestBefore: { reading: number; readingAt: Date } | null = null;
+      const ascendingItems: Array<{
+        workOrderId: string;
+        closedAt: string;
+        status: string | null;
+        title: string | null;
+        readingAtPm: number | null;
+        readingAtPmAt: string | null;
+        source: 'BY_ORDER' | 'FALLBACK_AT_CLOSE' | 'NONE';
+        deltaFromPreviousPm: number | null;
+        compliance: 'EARLY' | 'ON_TIME' | 'LATE' | 'UNKNOWN';
+      }> = [];
+
+      let previousPmReading: number | null = null;
+      for (const pm of pmTrimmed) {
+        while (meterIdx < meterRows.length && meterRows[meterIdx].readingAt.getTime() <= pm.closedAt.getTime()) {
+          latestBefore = meterRows[meterIdx];
+          meterIdx += 1;
+        }
+
+        const byOrderReading = byOrder.get(pm.id) ?? null;
+        const readingAtPm = byOrderReading
+          ? Number(byOrderReading.reading)
+          : latestBefore
+          ? Number(latestBefore.reading)
+          : null;
+        const readingAtPmAt = byOrderReading
+          ? byOrderReading.readingAt.toISOString()
+          : latestBefore
+          ? latestBefore.readingAt.toISOString()
+          : null;
+
+        const deltaFromPreviousPm =
+          readingAtPm != null && previousPmReading != null
+            ? Number((readingAtPm - previousPmReading).toFixed(4))
+            : null;
+
+        if (readingAtPm != null) previousPmReading = readingAtPm;
+
+        ascendingItems.push({
+          workOrderId: pm.id,
+          closedAt: pm.closedAt.toISOString(),
+          status: pm.status ?? null,
+          title: pm.title ?? null,
+          readingAtPm: readingAtPm == null ? null : Number(readingAtPm.toFixed(4)),
+          readingAtPmAt,
+          source: byOrderReading ? 'BY_ORDER' : latestBefore ? 'FALLBACK_AT_CLOSE' : 'NONE',
+          deltaFromPreviousPm,
+          compliance: this.classifyPmCompliance(deltaFromPreviousPm, targetHours),
+        });
+      }
+
+      return {
+        asset: { id: asset.id, code: asset.code, name: asset.name ?? null },
+        targetHours,
+        items: ascendingItems.slice().reverse(),
+      };
+    });
+  }
+
+  async getHourmeterRisk(limit?: number, customer?: string) {
+    const tenantId = this.getTenantId();
+    const safeLimit = Number.isFinite(Number(limit)) ? Math.min(200, Math.max(1, Number(limit))) : 50;
+    const customerFilter = String(customer || '').trim();
+
+    return this.withTenantRLS(async (tx) => {
+      const plans = await (tx as any).assetMaintenancePlan.findMany({
+        where: {
+          tenantId,
+          active: true,
+          pmPlan: { intervalHours: { not: null } },
+          ...(customerFilter
+            ? { asset: { customer: { contains: customerFilter, mode: 'insensitive' } } }
+            : {}),
+        },
+        include: {
+          asset: {
+            select: {
+              id: true,
+              code: true,
+              name: true,
+              customer: true,
+              latestHourmeter: true,
+            },
+          },
+          pmPlan: { select: { id: true, name: true, intervalHours: true } },
+        },
+        take: Math.max(safeLimit * 3, 200),
+      });
+
+      const rawItems: Array<{
+        assetId: string;
+        assetCode: string;
+        assetName: string | null;
+        customer: string | null;
+        pmPlanId: string;
+        pmPlanName: string | null;
+        targetHours: number;
+        lastPmWorkOrderId: string | null;
+        lastPmClosedAt: string | null;
+        lastPmReading: number | null;
+        latestReading: number | null;
+        hoursSinceLastPm: number | null;
+        remainingHours: number | null;
+        status: 'OVERDUE' | 'DUE_SOON' | 'OK' | 'UNKNOWN';
+      }> = [];
+
+      for (const plan of plans ?? []) {
+        const asset = plan?.asset;
+        const pmPlan = plan?.pmPlan;
+        if (!asset?.id || !asset?.code || pmPlan?.intervalHours == null) continue;
+
+        const targetHours = Number(pmPlan.intervalHours);
+        if (!Number.isFinite(targetHours) || targetHours <= 0) continue;
+
+        const lastPm = await tx.workOrder.findFirst({
+          where: {
+            tenantId,
+            kind: 'SERVICE_ORDER',
+            serviceOrderType: 'PREVENTIVO' as any,
+            assetCode: asset.code,
+            pmPlanId: plan.pmPlanId,
+            status: { in: ['COMPLETED', 'CLOSED'] as any },
+          },
+          orderBy: [{ deliveredAt: 'desc' }, { completedAt: 'desc' }, { updatedAt: 'desc' }],
+          select: { id: true, deliveredAt: true, completedAt: true, updatedAt: true },
+        });
+
+        const closedAt = lastPm?.deliveredAt ?? lastPm?.completedAt ?? lastPm?.updatedAt ?? null;
+
+        let latestReading = asset.latestHourmeter == null ? null : Number(asset.latestHourmeter);
+        if (latestReading == null) {
+          const latestRow = await (tx as any).assetMeterReading.findFirst({
+            where: { tenantId, assetId: asset.id, meterType: 'HOURMETER' },
+            orderBy: [{ readingAt: 'desc' }, { createdAt: 'desc' }],
+            select: { reading: true },
+          });
+          latestReading = latestRow?.reading == null ? null : Number(latestRow.reading);
+        }
+
+        let lastPmReading: number | null = null;
+        if (lastPm?.id) {
+          const byOrder = await (tx as any).assetMeterReading.findFirst({
+            where: { tenantId, assetId: asset.id, meterType: 'HOURMETER', workOrderId: lastPm.id },
+            orderBy: [{ readingAt: 'desc' }, { createdAt: 'desc' }],
+            select: { reading: true },
+          });
+          if (byOrder?.reading != null) {
+            lastPmReading = Number(byOrder.reading);
+          } else if (closedAt) {
+            const fallback = await (tx as any).assetMeterReading.findFirst({
+              where: { tenantId, assetId: asset.id, meterType: 'HOURMETER', readingAt: { lte: closedAt } },
+              orderBy: [{ readingAt: 'desc' }, { createdAt: 'desc' }],
+              select: { reading: true },
+            });
+            lastPmReading = fallback?.reading == null ? null : Number(fallback.reading);
+          }
+        }
+
+        const hoursSinceLastPm =
+          latestReading != null && lastPmReading != null
+            ? Number((latestReading - lastPmReading).toFixed(4))
+            : null;
+        const remainingHours =
+          hoursSinceLastPm == null
+            ? null
+            : Number((targetHours - hoursSinceLastPm).toFixed(4));
+
+        let status: 'OVERDUE' | 'DUE_SOON' | 'OK' | 'UNKNOWN' = 'UNKNOWN';
+        if (remainingHours != null) {
+          if (remainingHours < 0) status = 'OVERDUE';
+          else if (remainingHours <= Math.max(targetHours * 0.1, 1)) status = 'DUE_SOON';
+          else status = 'OK';
+        }
+
+        rawItems.push({
+          assetId: asset.id,
+          assetCode: asset.code,
+          assetName: asset.name ?? null,
+          customer: asset.customer ?? null,
+          pmPlanId: String(pmPlan.id),
+          pmPlanName: pmPlan?.name ?? null,
+          targetHours,
+          lastPmWorkOrderId: lastPm?.id ?? null,
+          lastPmClosedAt: closedAt ? new Date(closedAt).toISOString() : null,
+          lastPmReading,
+          latestReading,
+          hoursSinceLastPm,
+          remainingHours,
+          status,
+        });
+      }
+
+      const severity: Record<'OVERDUE' | 'DUE_SOON' | 'OK' | 'UNKNOWN', number> = {
+        OVERDUE: 0,
+        DUE_SOON: 1,
+        OK: 2,
+        UNKNOWN: 3,
+      };
+
+      const items = rawItems
+        .sort((a, b) => {
+          const s = severity[a.status] - severity[b.status];
+          if (s !== 0) return s;
+          const ar = a.remainingHours == null ? Number.POSITIVE_INFINITY : a.remainingHours;
+          const br = b.remainingHours == null ? Number.POSITIVE_INFINITY : b.remainingHours;
+          return ar - br;
+        })
+        .slice(0, safeLimit);
+
+      return {
+        items,
+        totalCandidates: rawItems.length,
       };
     });
   }

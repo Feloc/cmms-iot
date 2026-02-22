@@ -35,6 +35,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
       { href: '/calendar', label: 'Calendario' },
       { href: '/service-orders', label: 'Órdenes de servicio' },
       { href: '/assets', label: 'Activos' },
+      { href: '/inventory', label: 'Inventario' },
       { href: '/pm-plans', label: 'PM Plans' },
       { href: '/users', label: 'Usuarios', adminOnly: true },
       { href: '/tenants', label: 'Tenants', adminOnly: true },
@@ -172,6 +173,8 @@ function iconFor(href: string) {
       return '🧾';
     case '/assets':
       return '🛠️';
+    case '/inventory':
+      return '📦';
     case '/pm-plans':
       return '🧰';
     case '/users':

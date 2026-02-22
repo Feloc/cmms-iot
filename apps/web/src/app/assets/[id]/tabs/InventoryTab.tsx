@@ -53,7 +53,13 @@ export default function InventoryTab() {
                   <td className="px-3 py-2 border-t">{i.location ?? '—'}</td>
                   <td className="px-3 py-2 border-t">{i.unit ?? '—'}</td>
                   <td className="px-3 py-2 border-t">{i.minStock ?? '—'}</td>
-                  <td className="px-3 py-2 border-t">{typeof i.cost === 'number' ? i.cost.toFixed(2) : '—'}</td>
+                  <td className="px-3 py-2 border-t">
+                    {typeof i.unitPrice === 'number'
+                      ? i.unitPrice.toFixed(2)
+                      : typeof i.cost === 'number'
+                      ? i.cost.toFixed(2)
+                      : '—'}
+                  </td>
                   <td className="px-3 py-2 border-t">{i.updatedAt ? new Date(i.updatedAt).toLocaleString() : '—'}</td>
                 </tr>
               ))}

@@ -55,6 +55,13 @@ export class AssetsController {
     return this.service.findAll(q as any);
   }
 
+  @Get('hourmeter-analytics/risk')
+  async getHourmeterRisk(
+    @Query('limit') limit?: string,
+    @Query('customer') customer?: string,
+  ) {
+    return this.service.getHourmeterRisk(limit ? Number(limit) : undefined, customer);
+  }
 
   @Get(':id')
   async findOne(@Param('id') id: string) {
@@ -70,6 +77,38 @@ async listServiceOrderParts(@Param('id') id: string) {
 @Get(':id/maintenance-plan')
 async getMaintenancePlan(@Param('id') id: string) {
   return this.service.getMaintenancePlan(id);
+}
+
+@Get(':id/hourmeter-readings')
+async getHourmeterReadings(@Param('id') id: string, @Query('limit') limit?: string) {
+  return this.service.getHourmeterReadings(id, limit ? Number(limit) : undefined);
+}
+
+@Get(':id/hourmeter-analytics/summary')
+async getHourmeterAnalyticsSummary(
+  @Param('id') id: string,
+  @Query('from') from?: string,
+  @Query('to') to?: string,
+) {
+  return this.service.getHourmeterAnalyticsSummary(id, from, to);
+}
+
+@Get(':id/hourmeter-analytics/series')
+async getHourmeterAnalyticsSeries(
+  @Param('id') id: string,
+  @Query('from') from?: string,
+  @Query('to') to?: string,
+  @Query('bucket') bucket?: string,
+) {
+  return this.service.getHourmeterAnalyticsSeries(id, from, to, bucket);
+}
+
+@Get(':id/hourmeter-analytics/pm-performance')
+async getHourmeterPmPerformance(
+  @Param('id') id: string,
+  @Query('limit') limit?: string,
+) {
+  return this.service.getHourmeterPmPerformance(id, limit ? Number(limit) : undefined);
 }
 
   @Post()

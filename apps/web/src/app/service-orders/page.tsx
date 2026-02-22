@@ -14,11 +14,13 @@ type ServiceOrder = {
   description?: string | null;
   status: string;
   serviceOrderType?: string | null;
+  hasIssue?: boolean;
   dueDate?: string | null;
   durationMin?: number | null;
   createdAt?: string;
   assetCode: string;
   asset?: { customer?: string | null; brand?: string | null; model?: string | null; serialNumber?: string | null } | null;
+  serviceOrderIssue?: { status?: string | null; ownerUserId?: string | null; resolutionWorkOrderId?: string | null } | null;
   assignments?: Array<{
     id: string;
     role: string;
@@ -33,7 +35,9 @@ type Filter =
   | { id: string; field: 'q'; value: string }
   | { id: string; field: 'status'; value: string }
   | { id: string; field: 'type'; value: string }
-  | { id: string; field: 'technicianId'; value: string };
+  | { id: string; field: 'technicianId'; value: string }
+  | { id: string; field: 'hasIssue'; value: string }
+  | { id: string; field: 'issueStatus'; value: string };
 
 type EditRow = { dueLocal: string; technicianId: string };
 
@@ -224,6 +228,9 @@ export default function ServiceOrdersPage() {
             <button className="px-2 py-1 border rounded text-sm" onClick={() => addFilter('technicianId')} type="button">
               + Técnico
             </button>
+            <button className="px-2 py-1 border rounded text-sm" onClick={() => addFilter('hasIssue')} type="button">
+              + Novedad
+            </button>
           </div>
         </div>
 
@@ -239,6 +246,8 @@ export default function ServiceOrdersPage() {
                 <option value="status">Status</option>
                 <option value="type">Tipo</option>
                 <option value="technicianId">Técnico</option>
+                <option value="hasIssue">Novedad</option>
+                <option value="issueStatus">Estado novedad</option>
               </select>
 
               {f.field === 'q' ? (
@@ -283,6 +292,26 @@ export default function ServiceOrdersPage() {
                       {t.name}
                     </option>
                   ))}
+                </select>
+              ) : null}
+
+              {f.field === 'hasIssue' ? (
+                <select className="border rounded px-2 py-2 text-sm" value={f.value} onChange={(e) => setFilterValue(f.id, e.target.value)}>
+                  <option value="">(cualquiera)</option>
+                  <option value="true">Con novedad</option>
+                  <option value="false">Sin novedad</option>
+                </select>
+              ) : null}
+
+              {f.field === 'issueStatus' ? (
+                <select className="border rounded px-2 py-2 text-sm" value={f.value} onChange={(e) => setFilterValue(f.id, e.target.value)}>
+                  <option value="">(cualquiera)</option>
+                  <option value="OPEN">OPEN</option>
+                  <option value="IN_PROGRESS">IN_PROGRESS</option>
+                  <option value="WAITING_PARTS">WAITING_PARTS</option>
+                  <option value="RESOLVED">RESOLVED</option>
+                  <option value="VERIFIED">VERIFIED</option>
+                  <option value="CANCELED">CANCELED</option>
                 </select>
               ) : null}
 
@@ -332,6 +361,7 @@ export default function ServiceOrdersPage() {
               <th className="text-left p-2 border-b">Cliente / Serie</th>
               <th className="text-left p-2 border-b">Status</th>
               <th className="text-left p-2 border-b">Tipo</th>
+              <th className="text-left p-2 border-b">Novedad</th>
               <th className="text-left p-2 border-b">Programación</th>
               <th className="text-left p-2 border-b">Técnico</th>
               <th className="text-left p-2 border-b">Acciones</th>
@@ -355,6 +385,19 @@ export default function ServiceOrdersPage() {
                   </td>
                   <td className="p-2 border-b whitespace-nowrap">{so.status}</td>
                   <td className="p-2 border-b whitespace-nowrap">{so.serviceOrderType || '-'}</td>
+                  <td className="p-2 border-b whitespace-nowrap">
+                    {so.hasIssue ? (
+                      <span className="px-2 py-0.5 border rounded text-xs bg-amber-50 text-amber-800 border-amber-200">
+                        {so.serviceOrderIssue?.status || 'OPEN'}
+                      </span>
+                    ) : so.serviceOrderIssue?.status ? (
+                      <span className="px-2 py-0.5 border rounded text-xs bg-gray-50 text-gray-700 border-gray-200">
+                        {so.serviceOrderIssue.status}
+                      </span>
+                    ) : (
+                      <span className="text-gray-500">—</span>
+                    )}
+                  </td>
                   <td className="p-2 border-b whitespace-nowrap">
                     <input
                       type="datetime-local"
@@ -392,7 +435,7 @@ export default function ServiceOrdersPage() {
             })}
             {visibleItems.length === 0 ? (
               <tr>
-                <td className="p-4 text-gray-600" colSpan={8}>
+                <td className="p-4 text-gray-600" colSpan={9}>
                   Sin resultados.
                 </td>
               </tr>

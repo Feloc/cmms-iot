@@ -10,7 +10,11 @@ import { AddServiceOrderPartDto } from './dto/parts.dto';
 import { MarkServiceOrderPartReplacedDto } from './dto/mark-part-replaced.dto';
 import { CreateServiceOrderReportDto } from './dto/create-report.dto';
 import { UpdateServiceOrderWorkLogDto } from './dto/update-worklog.dto';
+import { CreateServiceOrderHourmeterReadingDto } from './dto/meter-reading.dto';
+import { CreateServiceOrderQuoteDto } from './dto/create-quote.dto';
 import { ListServiceOrdersQuery } from './dto/list-service-orders.query';
+import { ListServiceOrderIssuesQuery } from './dto/list-issues.query';
+import { UpsertServiceOrderIssueDto, CreateCorrectiveFromIssueDto } from './dto/issue.dto';
 import { ServiceOrdersCalendarQuery } from './dto/calendar.query';
 import { FilesInterceptor } from '@nestjs/platform-express';
 import { memoryStorage, diskStorage } from 'multer';
@@ -35,6 +39,11 @@ export class ServiceOrdersController {
     return this.svc.list(q);
   }
 
+  @Get('issues')
+  listIssues(@Query() q: ListServiceOrderIssuesQuery) {
+    return this.svc.listIssues(q);
+  }
+
   @Post()
   create(@Body() dto: CreateServiceOrderDto) {
     return this.svc.create(dto);
@@ -43,6 +52,61 @@ export class ServiceOrdersController {
   @Get(':id')
   get(@Param('id') id: string) {
     return this.svc.get(id);
+  }
+
+  @Get(':id/issue')
+  getIssue(@Param('id') id: string) {
+    return this.svc.getIssue(id);
+  }
+
+  @Get(':id/quotes')
+  listQuotes(@Param('id') id: string) {
+    return this.svc.listQuotes(id);
+  }
+
+  @Get(':id/quotes/:quoteId')
+  getQuote(@Param('id') id: string, @Param('quoteId') quoteId: string) {
+    return this.svc.getQuote(id, quoteId);
+  }
+
+  @Post(':id/quotes/from-required-parts')
+  createQuoteFromRequiredParts(
+    @Param('id') id: string,
+    @Body() dto: CreateServiceOrderQuoteDto,
+  ) {
+    return this.svc.createQuoteFromRequiredParts(id, dto ?? {});
+  }
+
+  @Post(':id/issue/create-corrective')
+  createCorrectiveFromIssue(
+    @Param('id') id: string,
+    @Body() dto: CreateCorrectiveFromIssueDto,
+  ) {
+    return this.svc.createCorrectiveFromIssue(id, dto ?? {});
+  }
+
+  @Patch(':id/issue')
+  upsertIssue(
+    @Param('id') id: string,
+    @Body() dto: UpsertServiceOrderIssueDto,
+  ) {
+    return this.svc.upsertIssue(id, dto ?? {});
+  }
+
+  @Get(':id/hourmeter')
+  getHourmeter(
+    @Param('id') id: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.svc.getHourmeter(id, limit ? Number(limit) : undefined);
+  }
+
+  @Post(':id/hourmeter')
+  addHourmeter(
+    @Param('id') id: string,
+    @Body() dto: CreateServiceOrderHourmeterReadingDto,
+  ) {
+    return this.svc.addHourmeter(id, dto);
   }
 
   @Patch(':id')

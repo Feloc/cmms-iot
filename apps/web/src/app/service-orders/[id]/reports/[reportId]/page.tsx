@@ -152,6 +152,7 @@ export default function ServiceOrderReportPage() {
   const asset = snap.asset ?? null;
   const op = snap.operationalTimes ?? { segments: [] };
   const parts = snap.parts ?? { required: [], replaced: [] };
+  const hourmeter = snap.hourmeter ?? { latest: null, byOrder: [] };
 
   const formData = so.formData ?? {};
   const notes = String(formData?.notes ?? '').trim();
@@ -349,6 +350,47 @@ export default function ServiceOrderReportPage() {
             <div className="text-sm text-gray-600">Sin checklist registrado.</div>
           )}
         </div>
+      </section>
+
+      {/* Horómetro */}
+      <section className="border rounded p-4 space-y-3">
+        <div className="font-semibold">Horómetro</div>
+        <div className="text-sm">
+          Última lectura del activo:{' '}
+          {hourmeter?.latest?.reading != null ? (
+            <b>
+              {hourmeter.latest.reading} h · {fmtDateTime(hourmeter.latest.readingAt)}
+            </b>
+          ) : (
+            <span className="text-gray-600">Sin lectura registrada.</span>
+          )}
+        </div>
+        {(hourmeter?.byOrder ?? []).length > 0 ? (
+          <div className="border rounded overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b bg-gray-50">
+                  <th className="text-left p-2">Lectura</th>
+                  <th className="text-left p-2">Fase</th>
+                  <th className="text-left p-2">Fecha</th>
+                  <th className="text-left p-2">Nota</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(hourmeter.byOrder ?? []).map((r: any, idx: number) => (
+                  <tr key={idx} className="border-b last:border-b-0">
+                    <td className="p-2">{r?.reading ?? '-'} h</td>
+                    <td className="p-2">{r?.phase ?? 'OTHER'}</td>
+                    <td className="p-2">{fmtDateTime(r?.readingAt)}</td>
+                    <td className="p-2">{r?.note ? String(r.note) : <span className="text-gray-600">—</span>}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="text-sm text-gray-600">Sin lecturas registradas en esta OS.</div>
+        )}
       </section>
 
       {/* Repuestos */}

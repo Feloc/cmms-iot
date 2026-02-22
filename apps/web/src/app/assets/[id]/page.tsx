@@ -13,6 +13,7 @@ const ParametersTab = dynamic(() => import('./tabs/ParametersTab'), { ssr: false
 const TelemetryTab = dynamic(() => import('./tabs/TelemetryTab'), {ssr: false, loading: () => <div className="p-4 text-sm text-gray-500">Cargando telemetría…</div>,});
 const ServiceOrderPartsTab = dynamic(() => import('./tabs/ServiceOrderPartsTab'), { ssr: false, loading: () => <div className="p-4 text-sm text-gray-500">Cargando repuestos…</div> });
 const MaintenancePlanTab = dynamic(() => import('./tabs/MaintenancePlanTab'), { ssr: false, loading: () => <div className="p-4 text-sm text-gray-500">Cargando plan PM…</div> });
+const HourmeterAnalyticsTab = dynamic(() => import('./tabs/HourmeterAnalyticsTab'), { ssr: false, loading: () => <div className="p-4 text-sm text-gray-500">Cargando analítica…</div> });
 
 
 export default function AssetDetailPage() {
@@ -30,7 +31,7 @@ function DetailInner() {
   const [asset, setAsset] = React.useState<any>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [loading, setLoading] = React.useState(false);
-  const tabs = ['Resumen', 'Plan PM', 'Adjuntos', 'Inventario', 'Parámetros', 'Telemetría', 'Repuestos cambiados'] as const;
+  const tabs = ['Resumen', 'Plan PM', 'Analítica Horómetro', 'Adjuntos', 'Inventario', 'Parámetros', 'Telemetría', 'Repuestos cambiados'] as const;
   type TabKey = typeof tabs[number];
   const [active, setActive] = React.useState<TabKey>('Resumen');
 
@@ -90,6 +91,7 @@ function DetailInner() {
         <div>
           {active === 'Resumen' && <OverviewTab asset={asset} />}
           {active === 'Plan PM' && <MaintenancePlanTab asset={asset} onUpdated={loadAsset} />}
+          {active === 'Analítica Horómetro' && <HourmeterAnalyticsTab asset={asset} />}
           {active === 'Adjuntos' && <AttachmentsTab />}
           {active === 'Inventario' && <InventoryTab />}
           {active === 'Parámetros' && <ParametersTab />}

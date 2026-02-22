@@ -13,8 +13,12 @@ import { AddServiceOrderPartDto } from './dto/parts.dto';
 import { MarkServiceOrderPartReplacedDto } from './dto/mark-part-replaced.dto';
 import { CreateServiceOrderReportDto } from './dto/create-report.dto';
 import { UpdateServiceOrderWorkLogDto } from './dto/update-worklog.dto';
+import { CreateServiceOrderHourmeterReadingDto } from './dto/meter-reading.dto';
+import { CreateServiceOrderQuoteDto } from './dto/create-quote.dto';
 import { Prisma } from '@prisma/client';
 import { normalizeQueryArray } from './utils/query-array';
+import { ListServiceOrderIssuesQuery } from './dto/list-issues.query';
+import { UpsertServiceOrderIssueDto, CreateCorrectiveFromIssueDto } from './dto/issue.dto';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
@@ -280,6 +284,87 @@ export class ServiceOrdersService {
     }
   }
 
+  private readonly ISSUE_OPEN_STATUSES = ['OPEN', 'IN_PROGRESS', 'WAITING_PARTS'] as const;
+  private readonly ISSUE_CLOSED_STATUSES = ['RESOLVED', 'VERIFIED', 'CANCELED'] as const;
+
+  private truthy(v: any): boolean {
+    const s = String(v ?? '').trim().toLowerCase();
+    return s === '1' || s === 'true' || s === 'yes';
+  }
+
+  private normalizeIssueStatus(v: any): 'OPEN' | 'IN_PROGRESS' | 'WAITING_PARTS' | 'RESOLVED' | 'VERIFIED' | 'CANCELED' {
+    const s = String(v ?? '').trim().toUpperCase();
+    if (s === 'OPEN' || s === 'IN_PROGRESS' || s === 'WAITING_PARTS' || s === 'RESOLVED' || s === 'VERIFIED' || s === 'CANCELED') return s;
+    throw new BadRequestException('Invalid issue status');
+  }
+
+  private issueStatusImpliesHasIssue(status: string): boolean {
+    return this.ISSUE_OPEN_STATUSES.includes(status as any);
+  }
+
+  private async ensureIssueOpen(
+    tx: any,
+    tenantId: string,
+    workOrderId: string,
+    actorUserId: string,
+  ) {
+    const existing = await (tx as any).serviceOrderIssue.findFirst({
+      where: { tenantId, workOrderId },
+      select: { id: true, status: true },
+    });
+    if (existing) return existing;
+
+    return (tx as any).serviceOrderIssue.create({
+      data: {
+        tenantId,
+        workOrderId,
+        status: 'OPEN',
+        openedByUserId: actorUserId,
+      },
+      select: { id: true, status: true },
+    });
+  }
+
+  private mapIssueRow(row: any, userById: Map<string, any>, correctiveById?: Map<string, any>) {
+    if (!row) return null;
+    const correctiveId = row?.resolutionWorkOrderId ? String(row.resolutionWorkOrderId) : '';
+    const corrective = correctiveId && correctiveById ? correctiveById.get(correctiveId) : null;
+    return {
+      id: row.id,
+      status: row.status,
+      openedAt: row?.openedAt ? new Date(row.openedAt).toISOString() : null,
+      openedByUserId: row?.openedByUserId ?? null,
+      openedByUser: row?.openedByUserId ? userById.get(String(row.openedByUserId)) ?? null : null,
+      ownerUserId: row?.ownerUserId ?? null,
+      ownerUser: row?.ownerUserId ? userById.get(String(row.ownerUserId)) ?? null : null,
+      targetResolutionAt: row?.targetResolutionAt ? new Date(row.targetResolutionAt).toISOString() : null,
+      lastFollowUpAt: row?.lastFollowUpAt ? new Date(row.lastFollowUpAt).toISOString() : null,
+      followUpNote: row?.followUpNote ?? null,
+      resolutionSummary: row?.resolutionSummary ?? null,
+      resolutionWorkOrderId: row?.resolutionWorkOrderId ?? null,
+      resolutionWorkOrder: corrective
+        ? {
+            id: corrective.id,
+            title: corrective.title ?? null,
+            status: corrective.status ?? null,
+            serviceOrderType: corrective.serviceOrderType ?? null,
+            dueDate: corrective?.dueDate ? new Date(corrective.dueDate).toISOString() : null,
+          }
+        : null,
+      resolvedAt: row?.resolvedAt ? new Date(row.resolvedAt).toISOString() : null,
+      resolvedByUserId: row?.resolvedByUserId ?? null,
+      resolvedByUser: row?.resolvedByUserId ? userById.get(String(row.resolvedByUserId)) ?? null : null,
+      verifiedAt: row?.verifiedAt ? new Date(row.verifiedAt).toISOString() : null,
+      verifiedByUserId: row?.verifiedByUserId ?? null,
+      verifiedByUser: row?.verifiedByUserId ? userById.get(String(row.verifiedByUserId)) ?? null : null,
+      verificationNotes: row?.verificationNotes ?? null,
+      createdAt: row?.createdAt ? new Date(row.createdAt).toISOString() : null,
+      updatedAt: row?.updatedAt ? new Date(row.updatedAt).toISOString() : null,
+      isUnresolved: this.ISSUE_OPEN_STATUSES.includes(String(row?.status || '').toUpperCase() as any),
+      isClosed: this.ISSUE_CLOSED_STATUSES.includes(String(row?.status || '').toUpperCase() as any),
+    };
+  }
+
 
 // ---- Timestamps: reglas de secuencia ----
 private readonly TS_ORDER = [
@@ -377,6 +462,175 @@ private async assertSo(id: string) {
   const so = await this.prisma.workOrder.findFirst({ where: { id, tenantId, kind: 'SERVICE_ORDER' } });
   if (!so) throw new NotFoundException('Service order not found');
   return { tenantId, so };
+}
+
+private normalizeMeasurementPhase(v: any): 'BEFORE' | 'AFTER' | 'OTHER' {
+  const phase = String(v ?? 'OTHER').trim().toUpperCase();
+  if (phase === 'BEFORE' || phase === 'AFTER') return phase;
+  return 'OTHER';
+}
+
+private mapHourmeterReading(row: any) {
+  return {
+    id: row.id,
+    reading: Number(row.reading),
+    readingAt: row?.readingAt ? new Date(row.readingAt).toISOString() : null,
+    phase: row?.phase ?? 'OTHER',
+    source: row?.source ?? 'MANUAL_OS',
+    note: row?.note ?? null,
+    deltaFromPrevious: row?.deltaFromPrevious == null ? null : Number(row.deltaFromPrevious),
+    workOrderId: row?.workOrderId ?? null,
+    createdAt: row?.createdAt ? new Date(row.createdAt).toISOString() : null,
+    createdByUser: row?.createdByUser
+      ? {
+          id: row.createdByUser.id,
+          name: row.createdByUser.name,
+          email: row.createdByUser.email,
+          role: row.createdByUser.role,
+        }
+      : null,
+  };
+}
+
+async getHourmeter(id: string, limit?: number) {
+  const tenantId = this.getTenantId();
+
+  const so = await this.prisma.workOrder.findFirst({
+    where: { id, tenantId, kind: 'SERVICE_ORDER' },
+    select: { id: true, assetCode: true, serviceOrderType: true, status: true },
+  });
+  if (!so) throw new NotFoundException('Service order not found');
+
+  const asset = await this.prisma.asset.findFirst({
+    where: { tenantId, code: so.assetCode },
+    select: { id: true, code: true, name: true },
+  });
+  if (!asset) throw new BadRequestException('Asset not found for service order');
+
+  const safeLimit = Number.isFinite(Number(limit)) ? Math.min(200, Math.max(1, Number(limit))) : 20;
+
+  const [recentRows, orderRows] = await Promise.all([
+    (this.prisma as any).assetMeterReading.findMany({
+      where: { tenantId, assetId: asset.id, meterType: 'HOURMETER' },
+      orderBy: [{ readingAt: 'desc' }, { createdAt: 'desc' }],
+      take: safeLimit,
+      include: {
+        createdByUser: { select: { id: true, name: true, email: true, role: true } },
+      },
+    }),
+    (this.prisma as any).assetMeterReading.findMany({
+      where: { tenantId, workOrderId: id, meterType: 'HOURMETER' },
+      orderBy: [{ readingAt: 'desc' }, { createdAt: 'desc' }],
+      take: 50,
+      include: {
+        createdByUser: { select: { id: true, name: true, email: true, role: true } },
+      },
+    }),
+  ]);
+
+  const recent = (recentRows ?? []).map((r: any) => this.mapHourmeterReading(r));
+  const byOrder = (orderRows ?? []).map((r: any) => this.mapHourmeterReading(r));
+
+  return {
+    serviceOrder: {
+      id: so.id,
+      status: so.status,
+      serviceOrderType: so.serviceOrderType ?? null,
+    },
+    asset: {
+      id: asset.id,
+      code: asset.code,
+      name: asset.name ?? null,
+    },
+    latest: recent.length ? recent[0] : null,
+    byOrder,
+    recent,
+  };
+}
+
+async addHourmeter(id: string, dto: CreateServiceOrderHourmeterReadingDto) {
+  const tenantId = this.getTenantId();
+  const actorUserId = this.getUserId();
+
+  const reading = Number(dto?.reading);
+  if (!Number.isFinite(reading) || reading < 0) {
+    throw new BadRequestException('reading must be a non-negative number');
+  }
+
+  const note = String(dto?.note ?? '').trim() || null;
+  const allowDecrease = dto?.allowDecrease === true;
+  if (allowDecrease && !note) {
+    throw new BadRequestException('note is required when allowDecrease=true');
+  }
+
+  const readingAt = dto?.readingAt ? this.coerceDate(dto.readingAt as any) : new Date();
+  if (!readingAt) throw new BadRequestException('readingAt is invalid');
+
+  await this.prisma.$transaction(async (tx) => {
+    const so = await tx.workOrder.findFirst({
+      where: { id, tenantId, kind: 'SERVICE_ORDER' },
+      select: { id: true, assetCode: true },
+    });
+    if (!so) throw new NotFoundException('Service order not found');
+
+    const role = await this.getCurrentUserRole(tx, tenantId, actorUserId);
+    await this.assertTechCanMutateServiceOrder(tx, tenantId, actorUserId, id, role);
+
+    const asset = await tx.asset.findFirst({
+      where: { tenantId, code: so.assetCode },
+      select: { id: true, code: true },
+    });
+    if (!asset) throw new BadRequestException('Asset not found for service order');
+
+    const previous = await (tx as any).assetMeterReading.findFirst({
+      where: { tenantId, assetId: asset.id, meterType: 'HOURMETER' },
+      orderBy: [{ readingAt: 'desc' }, { createdAt: 'desc' }],
+      select: { id: true, reading: true, readingAt: true },
+    });
+
+    if (previous && !allowDecrease && reading < Number(previous.reading)) {
+      throw new BadRequestException(
+        `El horómetro no puede disminuir. Última lectura: ${Number(previous.reading)} (${new Date(previous.readingAt).toISOString()}).`,
+      );
+    }
+
+    const deltaFromPrevious = previous ? Number(reading - Number(previous.reading)) : null;
+    const phase = this.normalizeMeasurementPhase(dto?.phase);
+    const source = allowDecrease ? 'ADJUSTMENT' : 'MANUAL_OS';
+
+    await (tx as any).assetMeterReading.create({
+      data: {
+        tenantId,
+        assetId: asset.id,
+        workOrderId: id,
+        meterType: 'HOURMETER',
+        source,
+        phase,
+        reading,
+        readingAt,
+        note,
+        deltaFromPrevious,
+        createdByUserId: actorUserId,
+      },
+    });
+
+    // Snapshot rápido en Asset para consultas de última lectura.
+    await tx.$executeRaw`
+      UPDATE "Asset"
+      SET
+        "latestHourmeter" = ${reading},
+        "latestHourmeterAt" = ${readingAt}
+      WHERE "id" = ${asset.id}
+        AND ("latestHourmeterAt" IS NULL OR "latestHourmeterAt" <= ${readingAt})
+    `;
+
+    const prevValue = previous ? Number(previous.reading) : null;
+    await this.appendAuditMany(tx, tenantId, id, [
+      this.buildAuditEntry(actorUserId, 'hourmeter', phase.toLowerCase(), prevValue, reading),
+    ]);
+  });
+
+  return this.getHourmeter(id, 20);
 }
 
 
@@ -621,6 +875,388 @@ private async assertTechCanMutateServiceOrder(
     return changes;
   }
 
+  async listIssues(q: ListServiceOrderIssuesQuery) {
+    await this.assertAdmin();
+    const tenantId = this.getTenantId();
+    const page = Math.max(1, Number((q as any)?.page ?? 1));
+    const size = Math.min(100, Math.max(1, Number((q as any)?.size ?? 20)));
+    const skip = (page - 1) * size;
+
+    const where: any = { tenantId };
+
+    const statusesRaw = normalizeQueryArray((q as any)?.status);
+    let statuses = statusesRaw.length ? statusesRaw.map((s) => this.normalizeIssueStatus(s)) : [];
+    if (this.truthy((q as any)?.openOnly)) {
+      statuses = statuses.length
+        ? statuses.filter((s) => this.ISSUE_OPEN_STATUSES.includes(s as any))
+        : [...this.ISSUE_OPEN_STATUSES];
+    }
+    if (statusesRaw.length > 0 && statuses.length === 0) {
+      return { items: [], total: 0, page, size };
+    }
+    if (statuses.length === 1) where.status = statuses[0];
+    else if (statuses.length > 1) where.status = { in: statuses };
+
+    const ownerIds = normalizeQueryArray((q as any)?.ownerUserId);
+    if (ownerIds.length === 1) where.ownerUserId = ownerIds[0];
+    else if (ownerIds.length > 1) where.ownerUserId = { in: ownerIds };
+
+    const workOrderWhere: any = { tenantId, kind: 'SERVICE_ORDER' };
+    const rawQ = String((q as any)?.q ?? '').trim();
+    if (rawQ) {
+      workOrderWhere.OR = [
+        { title: { contains: rawQ, mode: 'insensitive' } },
+        { assetCode: { contains: rawQ, mode: 'insensitive' } },
+      ];
+    }
+    where.workOrder = { is: workOrderWhere };
+
+    const [rows, total] = await this.prisma.$transaction([
+      (this.prisma as any).serviceOrderIssue.findMany({
+        where,
+        include: {
+          workOrder: {
+            select: {
+              id: true,
+              title: true,
+              status: true,
+              serviceOrderType: true,
+              assetCode: true,
+              dueDate: true,
+              hasIssue: true,
+              createdAt: true,
+              updatedAt: true,
+            },
+          },
+        },
+        orderBy: [{ updatedAt: 'desc' }, { createdAt: 'desc' }],
+        skip,
+        take: size,
+      }),
+      (this.prisma as any).serviceOrderIssue.count({ where }),
+    ]);
+
+    const userIds = Array.from(
+      new Set(
+        (rows ?? [])
+          .flatMap((r: any) => [r?.openedByUserId, r?.ownerUserId, r?.resolvedByUserId, r?.verifiedByUserId])
+          .filter(Boolean),
+      ),
+    );
+    const users = userIds.length
+      ? await this.prisma.user.findMany({
+          where: { tenantId, id: { in: userIds } },
+          select: { id: true, name: true, email: true, role: true },
+        })
+      : [];
+    const userById = new Map(users.map((u: any) => [u.id, u]));
+
+    const correctiveIds = Array.from(new Set((rows ?? []).map((r: any) => r?.resolutionWorkOrderId).filter(Boolean)));
+    const correctiveRows = correctiveIds.length
+      ? await this.prisma.workOrder.findMany({
+          where: { tenantId, id: { in: correctiveIds }, kind: 'SERVICE_ORDER' },
+          select: { id: true, title: true, status: true, serviceOrderType: true, dueDate: true },
+        })
+      : [];
+    const correctiveById = new Map(correctiveRows.map((r: any) => [r.id, r]));
+
+    const items = (rows ?? []).map((row: any) => ({
+      ...this.mapIssueRow(row, userById, correctiveById),
+      workOrder: row?.workOrder
+        ? {
+            id: row.workOrder.id,
+            title: row.workOrder.title ?? null,
+            status: row.workOrder.status ?? null,
+            serviceOrderType: row.workOrder.serviceOrderType ?? null,
+            assetCode: row.workOrder.assetCode ?? null,
+            dueDate: row.workOrder?.dueDate ? new Date(row.workOrder.dueDate).toISOString() : null,
+            hasIssue: !!row.workOrder.hasIssue,
+            createdAt: row.workOrder?.createdAt ? new Date(row.workOrder.createdAt).toISOString() : null,
+            updatedAt: row.workOrder?.updatedAt ? new Date(row.workOrder.updatedAt).toISOString() : null,
+          }
+        : null,
+    }));
+
+    return { items, total, page, size };
+  }
+
+  async getIssue(id: string) {
+    await this.assertAdmin();
+    const tenantId = this.getTenantId();
+    const so = await this.prisma.workOrder.findFirst({
+      where: { id, tenantId, kind: 'SERVICE_ORDER' },
+      select: {
+        id: true,
+        title: true,
+        status: true,
+        serviceOrderType: true,
+        assetCode: true,
+        hasIssue: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+    if (!so) throw new NotFoundException('Service order not found');
+
+    const issue = await (this.prisma as any).serviceOrderIssue.findFirst({
+      where: { tenantId, workOrderId: id },
+    });
+
+    const userIds = Array.from(
+      new Set([issue?.openedByUserId, issue?.ownerUserId, issue?.resolvedByUserId, issue?.verifiedByUserId].filter(Boolean)),
+    );
+    const users = userIds.length
+      ? await this.prisma.user.findMany({
+          where: { tenantId, id: { in: userIds } },
+          select: { id: true, name: true, email: true, role: true },
+        })
+      : [];
+    const userById = new Map(users.map((u: any) => [u.id, u]));
+
+    const correctiveById = new Map<string, any>();
+    if (issue?.resolutionWorkOrderId) {
+      const corrective = await this.prisma.workOrder.findFirst({
+        where: { tenantId, id: issue.resolutionWorkOrderId, kind: 'SERVICE_ORDER' },
+        select: { id: true, title: true, status: true, serviceOrderType: true, dueDate: true },
+      });
+      if (corrective) correctiveById.set(corrective.id, corrective);
+    }
+
+    return {
+      workOrder: {
+        id: so.id,
+        title: so.title ?? null,
+        status: so.status ?? null,
+        serviceOrderType: so.serviceOrderType ?? null,
+        assetCode: so.assetCode ?? null,
+        hasIssue: !!so.hasIssue,
+        createdAt: so?.createdAt ? new Date(so.createdAt).toISOString() : null,
+        updatedAt: so?.updatedAt ? new Date(so.updatedAt).toISOString() : null,
+      },
+      issue: this.mapIssueRow(issue, userById, correctiveById),
+    };
+  }
+
+  async upsertIssue(id: string, dto: UpsertServiceOrderIssueDto) {
+    await this.assertAdmin();
+    const tenantId = this.getTenantId();
+    const actorUserId = this.getUserId();
+
+    await this.prisma.$transaction(async (tx) => {
+      const so = await tx.workOrder.findFirst({
+        where: { id, tenantId, kind: 'SERVICE_ORDER' },
+        select: { id: true, status: true, hasIssue: true },
+      });
+      if (!so) throw new NotFoundException('Service order not found');
+
+      const role = await this.getCurrentUserRole(tx, tenantId, actorUserId);
+      await this.assertTechCanMutateServiceOrder(tx, tenantId, actorUserId, id, role);
+
+      const existing = await (tx as any).serviceOrderIssue.findFirst({
+        where: { tenantId, workOrderId: id },
+      });
+
+      const nextStatus = dto?.status
+        ? this.normalizeIssueStatus(dto.status)
+        : existing?.status
+        ? this.normalizeIssueStatus(existing.status)
+        : 'OPEN';
+
+      if (
+        nextStatus === 'VERIFIED' &&
+        !(existing?.resolvedAt || (existing?.status && String(existing.status).toUpperCase() === 'RESOLVED'))
+      ) {
+        throw new BadRequestException('No puedes marcar VERIFIED si la novedad no está resuelta');
+      }
+
+      const ownerUserId =
+        dto.ownerUserId === undefined ? undefined : String(dto.ownerUserId || '').trim() || null;
+      const targetResolutionAt =
+        dto.targetResolutionAt === undefined
+          ? undefined
+          : dto.targetResolutionAt
+          ? this.coerceDate(dto.targetResolutionAt as any)
+          : null;
+      const followUpNote =
+        dto.followUpNote === undefined ? undefined : String(dto.followUpNote || '').trim() || null;
+      const resolutionSummary =
+        dto.resolutionSummary === undefined ? undefined : String(dto.resolutionSummary || '').trim() || null;
+      const resolutionWorkOrderId =
+        dto.resolutionWorkOrderId === undefined ? undefined : String(dto.resolutionWorkOrderId || '').trim() || null;
+      const verificationNotes =
+        dto.verificationNotes === undefined ? undefined : String(dto.verificationNotes || '').trim() || null;
+
+      const now = new Date();
+      const data: any = {
+        status: nextStatus,
+        ...(ownerUserId !== undefined ? { ownerUserId } : {}),
+        ...(targetResolutionAt !== undefined ? { targetResolutionAt } : {}),
+        ...(followUpNote !== undefined ? { followUpNote, lastFollowUpAt: now } : {}),
+        ...(resolutionSummary !== undefined ? { resolutionSummary } : {}),
+        ...(resolutionWorkOrderId !== undefined ? { resolutionWorkOrderId } : {}),
+        ...(verificationNotes !== undefined ? { verificationNotes } : {}),
+      };
+
+      if (!existing) {
+        data.openedByUserId = actorUserId;
+        data.openedAt = now;
+      }
+
+      if (nextStatus === 'RESOLVED') {
+        data.resolvedAt = now;
+        data.resolvedByUserId = actorUserId;
+      } else if (nextStatus === 'VERIFIED') {
+        data.verifiedAt = now;
+        data.verifiedByUserId = actorUserId;
+        if (!existing?.resolvedAt) {
+          data.resolvedAt = now;
+          data.resolvedByUserId = actorUserId;
+        }
+      } else if (this.ISSUE_OPEN_STATUSES.includes(nextStatus as any)) {
+        data.verifiedAt = null;
+        data.verifiedByUserId = null;
+      }
+
+      if (existing) {
+        await (tx as any).serviceOrderIssue.update({ where: { id: existing.id }, data });
+      } else {
+        await (tx as any).serviceOrderIssue.create({
+          data: {
+            tenantId,
+            workOrderId: id,
+            ...data,
+          },
+        });
+      }
+
+      const hasIssue = this.issueStatusImpliesHasIssue(nextStatus);
+      await tx.workOrder.update({ where: { id }, data: { hasIssue } });
+
+      await this.appendAuditMany(tx, tenantId, id, [
+        this.buildAuditEntry(actorUserId, 'issueStatus', 'issue', existing?.status ?? null, nextStatus),
+      ]);
+    });
+
+    return this.getIssue(id);
+  }
+
+  async createCorrectiveFromIssue(id: string, dto: CreateCorrectiveFromIssueDto) {
+    await this.assertAdmin();
+    const tenantId = this.getTenantId();
+    const actorUserId = this.getUserId();
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      const source = await tx.workOrder.findFirst({
+        where: { id, tenantId, kind: 'SERVICE_ORDER' },
+        select: {
+          id: true,
+          assetCode: true,
+          title: true,
+          description: true,
+          status: true,
+        },
+      });
+      if (!source) throw new NotFoundException('Service order not found');
+
+      const role = await this.getCurrentUserRole(tx, tenantId, actorUserId);
+      await this.assertTechCanMutateServiceOrder(tx, tenantId, actorUserId, id, role);
+
+      const issue = await this.ensureIssueOpen(tx, tenantId, id, actorUserId);
+      const issueRow = await (tx as any).serviceOrderIssue.findFirst({
+        where: { tenantId, workOrderId: id },
+      });
+
+      const dueDate = dto?.dueDate ? this.coerceDate(dto.dueDate as any) : undefined;
+      const durationMin =
+        dto?.durationMin === undefined
+          ? 60
+          : Math.max(1, Math.round(Number(dto.durationMin)));
+      if (!Number.isFinite(durationMin) || durationMin <= 0) {
+        throw new BadRequestException('durationMin must be > 0');
+      }
+
+      const title = String(dto?.title || '').trim() || `CORRECTIVO por novedad ${source.assetCode} (${source.id})`;
+      const description =
+        String(dto?.description || '').trim() ||
+        issueRow?.followUpNote ||
+        issueRow?.resolutionSummary ||
+        source.description ||
+        `Generada desde novedad de OS ${source.id}`;
+
+      const corrective = await tx.workOrder.create({
+        data: {
+          tenantId,
+          kind: 'SERVICE_ORDER',
+          serviceOrderType: 'CORRECTIVO' as any,
+          assetCode: source.assetCode,
+          title,
+          description,
+          status: dueDate ? ('SCHEDULED' as any) : ('OPEN' as any),
+          dueDate: dueDate ?? undefined,
+          durationMin,
+          hasIssue: false,
+          formData: {
+            generatedFromIssue: true,
+            sourceServiceOrderId: source.id,
+            sourceIssueId: issue.id,
+            generatedAt: new Date().toISOString(),
+          },
+        } as any,
+        select: { id: true, title: true, status: true, serviceOrderType: true, dueDate: true },
+      });
+
+      const technicianId = String(dto?.technicianId || '').trim();
+      if (technicianId) {
+        const tech = await tx.user.findFirst({
+          where: { id: technicianId, tenantId },
+          select: { id: true },
+        });
+        if (!tech) throw new BadRequestException('Technician not found');
+        await tx.wOAssignment.create({
+          data: {
+            tenantId,
+            workOrderId: corrective.id,
+            userId: technicianId,
+            role: 'TECHNICIAN',
+            state: 'ACTIVE' as any,
+          } as any,
+        });
+      }
+
+      await (tx as any).serviceOrderIssue.update({
+        where: { id: issue.id },
+        data: {
+          resolutionWorkOrderId: corrective.id,
+          status: 'IN_PROGRESS',
+          lastFollowUpAt: new Date(),
+          followUpNote: 'OS correctiva generada para resolver novedad.',
+        },
+      });
+
+      await tx.workOrder.update({
+        where: { id: source.id },
+        data: { hasIssue: true },
+      });
+
+      await this.appendAuditMany(tx, tenantId, id, [
+        this.buildAuditEntry(actorUserId, 'issue', 'create-corrective', null, corrective.id),
+      ]);
+
+      return corrective;
+    });
+
+    return {
+      correctiveWorkOrder: {
+        id: result.id,
+        title: result.title ?? null,
+        status: result.status ?? null,
+        serviceOrderType: result.serviceOrderType ?? null,
+        dueDate: result?.dueDate ? new Date(result.dueDate).toISOString() : null,
+      },
+      issue: await this.getIssue(id),
+    };
+  }
+
 
   async list(q: ListServiceOrdersQuery) {
     const tenantId = this.getTenantId();
@@ -632,13 +1268,36 @@ private async assertTechCanMutateServiceOrder(
     const where: Prisma.WorkOrderWhereInput = {
       tenantId,
       kind: 'SERVICE_ORDER',
-    };const statuses = normalizeQueryArray((q as any).status);
-if (statuses.length === 1) where.status = statuses[0] as any;
-else if (statuses.length > 1) where.status = { in: statuses } as any;
+    };
 
-const types = normalizeQueryArray((q as any).type);
-if (types.length === 1) where.serviceOrderType = types[0] as any;
-else if (types.length > 1) where.serviceOrderType = { in: types } as any;
+    const statuses = normalizeQueryArray((q as any).status);
+    if (statuses.length === 1) where.status = statuses[0] as any;
+    else if (statuses.length > 1) where.status = { in: statuses } as any;
+
+    const types = normalizeQueryArray((q as any).type);
+    if (types.length === 1) where.serviceOrderType = types[0] as any;
+    else if (types.length > 1) where.serviceOrderType = { in: types } as any;
+
+    const hasIssueRaw = (q as any).hasIssue;
+    if (hasIssueRaw !== undefined && String(hasIssueRaw).trim() !== '') {
+      where.hasIssue = this.truthy(hasIssueRaw);
+    }
+
+    const issueStatusesRaw = normalizeQueryArray((q as any).issueStatus);
+    let issueStatuses = issueStatusesRaw.length ? issueStatusesRaw.map((s) => this.normalizeIssueStatus(s)) : [];
+    if (this.truthy((q as any).unresolvedIssueOnly)) {
+      issueStatuses = issueStatuses.length
+        ? issueStatuses.filter((s) => this.ISSUE_OPEN_STATUSES.includes(s as any))
+        : [...this.ISSUE_OPEN_STATUSES];
+    }
+    if (issueStatusesRaw.length > 0 && issueStatuses.length === 0) {
+      return { items: [], total: 0, page, size };
+    }
+    if (issueStatuses.length === 1) {
+      (where as any).serviceOrderIssue = { is: { status: issueStatuses[0] } };
+    } else if (issueStatuses.length > 1) {
+      (where as any).serviceOrderIssue = { is: { status: { in: issueStatuses } } };
+    }
 // Búsqueda por título/assetCode (para serie/cliente, el frontend usa /assets?search=)
     if (q.q) {
       const s = String(q.q).trim();
@@ -650,13 +1309,11 @@ else if (types.length > 1) where.serviceOrderType = { in: types } as any;
       }
     }
 
-    const truthy = (v: any) => String(v ?? '').trim() === '1' || String(v ?? '').trim().toLowerCase() === 'true';
-
     // Filtro por programadas / sin programar
     // - scheduledOnly=1 => dueDate NOT NULL
     // - unscheduledOnly=1 => dueDate IS NULL
-    const scheduledOnly = truthy((q as any).scheduledOnly);
-    const unscheduledOnly = truthy((q as any).unscheduledOnly);
+    const scheduledOnly = this.truthy((q as any).scheduledOnly);
+    const unscheduledOnly = this.truthy((q as any).unscheduledOnly);
 
     // Rango por fecha programada (dueDate)
     const start = this.coerceDate(q.start ?? undefined);
@@ -707,10 +1364,11 @@ const [items, total] = await this.prisma.$transaction([
         include: {
           assignments: { where: { state: 'ACTIVE' }, include: { user: true } },
           pmPlan: true,
+          serviceOrderIssue: true,
         },
         skip,
         take: size,
-      }),
+      } as any),
       this.prisma.workOrder.count({ where }),
     ]);
 
@@ -796,8 +1454,9 @@ const [items, total] = await this.prisma.$transaction([
       pmPlan: true,
       serviceOrderParts: { orderBy: [{ stage: 'asc' }, { createdAt: 'asc' }], include: { inventoryItem: true } },
       workLogs: { orderBy: { startedAt: 'asc' } },
+      serviceOrderIssue: true,
     },
-  });
+  } as any);
   if (!so) throw new NotFoundException('Service order not found');
 
   const asset = await this.prisma.asset.findFirst({
@@ -958,6 +1617,50 @@ return { ...(so as any), workLogs: enrichedLogs, formData, asset: asset ?? null,
     const updated = hasChanges
       ? await tx.workOrder.update({ where: { id }, data } as any)
       : await tx.workOrder.findFirst({ where: { id, tenantId, kind: 'SERVICE_ORDER' } });
+
+    // Sincroniza el registro robusto de novedad con el toggle hasIssue.
+    if ((dto as any).hasIssue !== undefined) {
+      const wantsIssue = !!(dto as any).hasIssue;
+      const existingIssue = await (tx as any).serviceOrderIssue.findFirst({
+        where: { tenantId, workOrderId: id },
+        select: { id: true, status: true },
+      });
+
+      if (wantsIssue) {
+        if (!existingIssue) {
+          await (tx as any).serviceOrderIssue.create({
+            data: {
+              tenantId,
+              workOrderId: id,
+              status: 'OPEN',
+              openedByUserId: actorUserId,
+            },
+          });
+        } else if (!this.ISSUE_OPEN_STATUSES.includes(String(existingIssue.status || '').toUpperCase() as any)) {
+          await (tx as any).serviceOrderIssue.update({
+            where: { id: existingIssue.id },
+            data: {
+              status: 'OPEN',
+              lastFollowUpAt: new Date(),
+              followUpNote: 'Novedad reabierta desde bandera hasIssue.',
+              verifiedAt: null,
+              verifiedByUserId: null,
+            },
+          });
+        }
+      } else if (existingIssue && this.ISSUE_OPEN_STATUSES.includes(String(existingIssue.status || '').toUpperCase() as any)) {
+        await (tx as any).serviceOrderIssue.update({
+          where: { id: existingIssue.id },
+          data: {
+            status: 'RESOLVED',
+            resolvedAt: new Date(),
+            resolvedByUserId: actorUserId,
+            lastFollowUpAt: new Date(),
+            followUpNote: 'Novedad cerrada desde bandera hasIssue.',
+          },
+        });
+      }
+    }
 
     // ---- WorkLogs automáticos por estados ----
     if (applyStatus) {
@@ -1790,6 +2493,267 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
     };
   }
 
+  private toMoney(v: any): number {
+    const n = Number(v ?? 0);
+    if (!Number.isFinite(n)) return 0;
+    return Math.round((n + Number.EPSILON) * 100) / 100;
+  }
+
+  private normalizeQuoteCurrency(v: any): string {
+    const c = String(v ?? 'COP').trim().toUpperCase();
+    if (!c) return 'COP';
+    if (c.length < 3 || c.length > 6) return 'COP';
+    return c;
+  }
+
+  private getQuotesFromFormData(formData: any): any[] {
+    const fd = formData && typeof formData === 'object' ? (formData as any) : {};
+    const arr = Array.isArray(fd?._quotes) ? (fd._quotes as any[]) : [];
+    return arr
+      .filter((q) => q && typeof q === 'object' && q.id)
+      .sort((a, b) => {
+        const av = Number(a?.version ?? 0);
+        const bv = Number(b?.version ?? 0);
+        if (av !== bv) return bv - av;
+        const ad = String(a?.createdAt ?? '');
+        const bd = String(b?.createdAt ?? '');
+        return bd.localeCompare(ad);
+      });
+  }
+
+  async listQuotes(serviceOrderId: string) {
+    await this.assertAdmin();
+    const tenantId = this.getTenantId();
+    const so = await this.prisma.workOrder.findFirst({
+      where: { id: serviceOrderId, tenantId, kind: 'SERVICE_ORDER' },
+      select: { id: true, formData: true },
+    });
+    if (!so) throw new NotFoundException('Service order not found');
+
+    const quotes = this.getQuotesFromFormData((so as any).formData);
+    return {
+      items: quotes.map((q: any) => ({
+        id: String(q.id),
+        version: Number(q.version ?? 0),
+        status: String(q.status ?? 'DRAFT'),
+        currency: String(q.currency ?? 'COP'),
+        total: this.toMoney(q.total),
+        subtotal: this.toMoney(q.subtotal),
+        createdAt: q.createdAt ?? null,
+        createdByUserId: q.createdByUserId ?? null,
+        missingPriceItems: Number(q.missingPriceItems ?? 0),
+      })),
+    };
+  }
+
+  async getQuote(serviceOrderId: string, quoteId: string) {
+    await this.assertAdmin();
+    const tenantId = this.getTenantId();
+    const so = await this.prisma.workOrder.findFirst({
+      where: { id: serviceOrderId, tenantId, kind: 'SERVICE_ORDER' },
+      select: {
+        id: true,
+        title: true,
+        status: true,
+        serviceOrderType: true,
+        hasIssue: true,
+        assetCode: true,
+        dueDate: true,
+        createdAt: true,
+        updatedAt: true,
+        formData: true,
+      },
+    });
+    if (!so) throw new NotFoundException('Service order not found');
+
+    const quotes = this.getQuotesFromFormData((so as any).formData);
+    const quote = quotes.find((q: any) => String(q?.id) === String(quoteId));
+    if (!quote) throw new NotFoundException('Quote not found');
+
+    const [tenant, asset] = await Promise.all([
+      this.prisma.tenant.findFirst({
+        where: { id: tenantId },
+        select: {
+          id: true,
+          slug: true,
+          name: true,
+          legalName: true,
+          taxId: true,
+          address: true,
+          phone: true,
+          email: true,
+          website: true,
+          logoUrl: true,
+        },
+      }),
+      this.prisma.asset.findFirst({
+        where: { tenantId, code: so.assetCode },
+        select: { id: true, code: true, customer: true, name: true, brand: true, model: true, serialNumber: true },
+      }),
+    ]);
+
+    return {
+      tenant: tenant ?? null,
+      serviceOrder: {
+        id: so.id,
+        title: so.title,
+        status: so.status,
+        serviceOrderType: so.serviceOrderType ?? null,
+        hasIssue: !!so.hasIssue,
+        assetCode: so.assetCode,
+        dueDate: so?.dueDate ? new Date(so.dueDate).toISOString() : null,
+        createdAt: so?.createdAt ? new Date(so.createdAt).toISOString() : null,
+        updatedAt: so?.updatedAt ? new Date(so.updatedAt).toISOString() : null,
+      },
+      asset: asset ?? null,
+      quote,
+    };
+  }
+
+  async createQuoteFromRequiredParts(serviceOrderId: string, dto: CreateServiceOrderQuoteDto) {
+    await this.assertAdmin();
+    const tenantId = this.getTenantId();
+    const actorUserId = this.getUserId();
+    let createdQuoteId = '';
+
+    await this.prisma.$transaction(async (tx) => {
+      const so = await tx.workOrder.findFirst({
+        where: { id: serviceOrderId, tenantId, kind: 'SERVICE_ORDER' },
+        select: {
+          id: true,
+          title: true,
+          status: true,
+          serviceOrderType: true,
+          hasIssue: true,
+          assetCode: true,
+          formData: true,
+          serviceOrderParts: {
+            where: { stage: 'REQUIRED' as any },
+            orderBy: [{ createdAt: 'asc' }],
+            include: { inventoryItem: true },
+          },
+        },
+      });
+      if (!so) throw new NotFoundException('Service order not found');
+
+      const role = await this.getCurrentUserRole(tx, tenantId, actorUserId);
+      if (role !== 'ADMIN' && role !== 'TECH') {
+        throw new ForbiddenException('Only ADMIN or TECH can generate quotes');
+      }
+      await this.assertTechCanMutateServiceOrder(tx, tenantId, actorUserId, serviceOrderId, role);
+
+      const issue = await (tx as any).serviceOrderIssue.findFirst({
+        where: { tenantId, workOrderId: serviceOrderId },
+        select: { id: true, status: true },
+      });
+      if (!so.hasIssue && !issue) {
+        throw new BadRequestException('La OS no tiene novedad registrada');
+      }
+
+      const requiredParts = (so.serviceOrderParts ?? []) as any[];
+      if (!requiredParts.length) {
+        throw new BadRequestException('No hay repuestos necesarios registrados para cotizar');
+      }
+
+      const currency = this.normalizeQuoteCurrency((dto as any)?.currency);
+      const taxPctRaw = (dto as any)?.taxPct;
+      const laborRaw = (dto as any)?.laborAmount;
+      const taxPct = taxPctRaw === undefined || taxPctRaw === null || String(taxPctRaw).trim() === ''
+        ? 0
+        : Number(taxPctRaw);
+      if (!Number.isFinite(taxPct) || taxPct < 0 || taxPct > 100) {
+        throw new BadRequestException('taxPct must be between 0 and 100');
+      }
+      const laborAmount = laborRaw === undefined || laborRaw === null || String(laborRaw).trim() === ''
+        ? 0
+        : Number(laborRaw);
+      if (!Number.isFinite(laborAmount) || laborAmount < 0) {
+        throw new BadRequestException('laborAmount must be >= 0');
+      }
+      const notes = String((dto as any)?.notes ?? '').trim() || null;
+
+      const items = requiredParts.map((p: any, idx: number) => {
+        const qty = this.toMoney(p?.qty ?? 0);
+        const inv = p?.inventoryItem ?? null;
+        const unitPrice = this.toMoney(inv?.unitPrice ?? 0);
+        const lineTotal = this.toMoney(qty * unitPrice);
+        const description = inv
+          ? `${inv.sku ?? ''} ${inv.name ? `- ${inv.name}` : ''}`.trim()
+          : String(p?.freeText ?? '').trim() || `Repuesto ${idx + 1}`;
+
+        return {
+          line: idx + 1,
+          partId: p?.id ?? null,
+          stage: p?.stage ?? 'REQUIRED',
+          source: inv ? 'INVENTORY' : 'TEXT',
+          inventoryItemId: inv?.id ?? null,
+          sku: inv?.sku ?? null,
+          name: inv?.name ?? null,
+          description,
+          qty,
+          unitPrice,
+          lineTotal,
+          priced: unitPrice > 0,
+        };
+      });
+
+      const subtotal = this.toMoney(items.reduce((acc, it) => acc + Number(it.lineTotal || 0), 0));
+      const labor = this.toMoney(laborAmount);
+      const taxableBase = this.toMoney(subtotal + labor);
+      const taxAmount = this.toMoney((taxableBase * Number(taxPct)) / 100);
+      const total = this.toMoney(taxableBase + taxAmount);
+      const missingPriceItems = items.filter((it) => !it.priced).length;
+
+      const fd = so?.formData && typeof so.formData === 'object' ? (so.formData as any) : {};
+      const quotes = this.getQuotesFromFormData(fd);
+      const nextVersion = (quotes.reduce((m, q: any) => Math.max(m, Number(q?.version ?? 0)), 0) || 0) + 1;
+
+      const quote = {
+        id: randomUUID(),
+        version: nextVersion,
+        createdAt: new Date().toISOString(),
+        createdByUserId: actorUserId,
+        status: 'DRAFT',
+        source: 'REQUIRED_PARTS',
+        currency,
+        notes,
+        generatedFromIssue: true,
+        issueStatus: issue?.status ?? null,
+        subtotal,
+        laborAmount: labor,
+        taxPct: this.toMoney(taxPct),
+        taxAmount,
+        total,
+        missingPriceItems,
+        items,
+      };
+
+      const nextQuotes = [quote, ...quotes].slice(0, 50);
+      await tx.workOrder.update({
+        where: { id: serviceOrderId },
+        data: {
+          formData: {
+            ...fd,
+            _quotes: nextQuotes,
+          },
+        } as any,
+      });
+
+      await this.appendAuditMany(tx, tenantId, serviceOrderId, [
+        this.buildAuditEntry(actorUserId, 'quote', 'generate', null, {
+          id: quote.id,
+          version: quote.version,
+          total: quote.total,
+          missingPriceItems: quote.missingPriceItems,
+        }),
+      ]);
+
+      createdQuoteId = String(quote.id);
+    });
+
+    return this.getQuote(serviceOrderId, createdQuoteId);
+  }
+
   async listReports(serviceOrderId: string) {
     const tenantId = this.getTenantId();
     await this.assertSo(serviceOrderId);
@@ -1855,8 +2819,22 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
 
     const asset = await this.prisma.asset.findFirst({
       where: { tenantId, code: (so as any).assetCode },
-      select: { code: true, customer: true, name: true, brand: true, model: true, serialNumber: true },
+      select: { id: true, code: true, customer: true, name: true, brand: true, model: true, serialNumber: true },
     });
+
+    const hourmeterByOrder = asset?.id
+      ? await (this.prisma as any).assetMeterReading.findMany({
+          where: { tenantId, assetId: asset.id, workOrderId: serviceOrderId, meterType: 'HOURMETER' },
+          orderBy: [{ readingAt: 'desc' }, { createdAt: 'desc' }],
+          take: 50,
+        })
+      : [];
+    const latestHourmeter = asset?.id
+      ? await (this.prisma as any).assetMeterReading.findFirst({
+          where: { tenantId, assetId: asset.id, meterType: 'HOURMETER' },
+          orderBy: [{ readingAt: 'desc' }, { createdAt: 'desc' }],
+        })
+      : null;
 
     // Enriquecer workLogs con user (WorkLog no tiene relación directa en el schema actual)
     const rawLogs = ((so as any).workLogs ?? []) as any[];
@@ -1933,6 +2911,24 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
           replacedAt: p.replacedAt ?? null,
           replacedByUser: p.replacedByUser ? { id: p.replacedByUser.id, name: p.replacedByUser.name, email: p.replacedByUser.email, role: p.replacedByUser.role } : null,
           inventoryItem: p.inventoryItem ? { id: p.inventoryItem.id, sku: p.inventoryItem.sku, name: p.inventoryItem.name, model: p.inventoryItem.model ?? null } : null,
+        })),
+      },
+      hourmeter: {
+        latest: latestHourmeter
+          ? {
+              reading: Number(latestHourmeter.reading),
+              readingAt: latestHourmeter?.readingAt ? new Date(latestHourmeter.readingAt).toISOString() : null,
+              phase: latestHourmeter?.phase ?? 'OTHER',
+              source: latestHourmeter?.source ?? 'MANUAL_OS',
+              note: latestHourmeter?.note ?? null,
+            }
+          : null,
+        byOrder: (hourmeterByOrder ?? []).map((r: any) => ({
+          reading: Number(r.reading),
+          readingAt: r?.readingAt ? new Date(r.readingAt).toISOString() : null,
+          phase: r?.phase ?? 'OTHER',
+          source: r?.source ?? 'MANUAL_OS',
+          note: r?.note ?? null,
         })),
       },
     };

@@ -63,6 +63,70 @@ type OpenWorkLogElsewhere = {
 };
 
 type PmPlan = { id: string; name: string; intervalHours?: number | null; defaultDurationMin?: number | null };
+type HourmeterReading = {
+  id: string;
+  reading: number;
+  readingAt?: string | null;
+  phase?: 'BEFORE' | 'AFTER' | 'OTHER' | string | null;
+  source?: string | null;
+  note?: string | null;
+  deltaFromPrevious?: number | null;
+  workOrderId?: string | null;
+  createdAt?: string | null;
+  createdByUser?: User | null;
+};
+type HourmeterResponse = {
+  serviceOrder: { id: string; status: string; serviceOrderType?: string | null };
+  asset: { id: string; code: string; name?: string | null };
+  latest?: HourmeterReading | null;
+  byOrder?: HourmeterReading[];
+  recent?: HourmeterReading[];
+};
+type IssueStatus = 'OPEN' | 'IN_PROGRESS' | 'WAITING_PARTS' | 'RESOLVED' | 'VERIFIED' | 'CANCELED';
+type ServiceOrderIssueTracking = {
+  id: string;
+  status: IssueStatus;
+  openedAt?: string | null;
+  openedByUserId?: string | null;
+  openedByUser?: User | null;
+  ownerUserId?: string | null;
+  ownerUser?: User | null;
+  targetResolutionAt?: string | null;
+  lastFollowUpAt?: string | null;
+  followUpNote?: string | null;
+  resolutionSummary?: string | null;
+  resolutionWorkOrderId?: string | null;
+  resolutionWorkOrder?: { id: string; title?: string | null; status?: string | null; serviceOrderType?: string | null; dueDate?: string | null } | null;
+  resolvedAt?: string | null;
+  resolvedByUserId?: string | null;
+  resolvedByUser?: User | null;
+  verifiedAt?: string | null;
+  verifiedByUserId?: string | null;
+  verifiedByUser?: User | null;
+  verificationNotes?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+  isUnresolved?: boolean;
+  isClosed?: boolean;
+};
+type IssueResponse = {
+  workOrder: { id: string; hasIssue: boolean; status?: string | null; serviceOrderType?: string | null };
+  issue?: ServiceOrderIssueTracking | null;
+};
+type QuoteSummary = {
+  id: string;
+  version: number;
+  status?: string | null;
+  currency?: string | null;
+  subtotal?: number | null;
+  total?: number | null;
+  createdAt?: string | null;
+  createdByUserId?: string | null;
+  missingPriceItems?: number | null;
+};
+type QuotesResponse = {
+  items: QuoteSummary[];
+};
 
 type ServiceOrder = {
   id: string;
@@ -87,6 +151,7 @@ type ServiceOrder = {
   receiverSignature?: string | null;
   serviceOrderParts?: Part[];
   workLogs?: WorkLog[];
+  serviceOrderIssue?: ServiceOrderIssueTracking | null;
   _meta?: { openWorkLogElsewhere?: OpenWorkLogElsewhere | null };
 };
 
@@ -265,6 +330,16 @@ export default function ServiceOrderDetailPage() {
   const [workLogDraft, setWorkLogDraft] = useState<{ startedAt: string; endedAt: string }>({ startedAt: '', endedAt: '' });
   const [partQ, setPartQ] = useState('');
   const [partQty, setPartQty] = useState<number>(1);
+  const [hourmeterReading, setHourmeterReading] = useState<string>('');
+  const [hourmeterPhase, setHourmeterPhase] = useState<'BEFORE' | 'AFTER' | 'OTHER'>('OTHER');
+  const [hourmeterNote, setHourmeterNote] = useState<string>('');
+  const [hourmeterAllowDecrease, setHourmeterAllowDecrease] = useState(false);
+  const [issueStatus, setIssueStatus] = useState<IssueStatus>('OPEN');
+  const [issueOwnerUserId, setIssueOwnerUserId] = useState<string>('');
+  const [issueTargetResolutionAt, setIssueTargetResolutionAt] = useState<string>('');
+  const [issueFollowUpNote, setIssueFollowUpNote] = useState<string>('');
+  const [issueResolutionSummary, setIssueResolutionSummary] = useState<string>('');
+  const [issueVerificationNotes, setIssueVerificationNotes] = useState<string>('');
 
   const { data, error, isLoading, mutate } = useApiSWR<ServiceOrder>(
     id ? `/service-orders/${id}` : null,
@@ -273,6 +348,21 @@ export default function ServiceOrderDetailPage() {
   );
   const { data: techs } = useApiSWR<User[]>(`/users?role=TECH`, auth.token, auth.tenantSlug);
   const { data: pmPlans } = useApiSWR<PmPlan[]>(`/pm-plans`, auth.token, auth.tenantSlug);
+  const { data: hourmeterData, mutate: mutateHourmeter } = useApiSWR<HourmeterResponse>(
+    id ? `/service-orders/${id}/hourmeter?limit=30` : null,
+    auth.token,
+    auth.tenantSlug,
+  );
+  const { data: issueData, mutate: mutateIssue } = useApiSWR<IssueResponse>(
+    id && isAdmin ? `/service-orders/${id}/issue` : null,
+    auth.token,
+    auth.tenantSlug,
+  );
+  const { data: quotesData, mutate: mutateQuotes } = useApiSWR<QuotesResponse>(
+    id && isAdmin ? `/service-orders/${id}/quotes` : null,
+    auth.token,
+    auth.tenantSlug,
+  );
   const { data: reportsData, mutate: mutateReports } = useApiSWR<{ items: WorkOrderReportRow[] }>(
     id ? `/service-orders/${id}/reports` : null,
     auth.token,
@@ -288,6 +378,26 @@ export default function ServiceOrderDetailPage() {
     (data as any)?._meta?.openWorkLogElsewhere?.workOrderId,
     (data as any)?._meta?.openWorkLogElsewhere?.workLogId,
   ]);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    const issue = issueData?.issue;
+    if (!issue) {
+      setIssueStatus((data?.hasIssue ? 'OPEN' : 'RESOLVED') as IssueStatus);
+      setIssueOwnerUserId('');
+      setIssueTargetResolutionAt('');
+      setIssueFollowUpNote('');
+      setIssueResolutionSummary('');
+      setIssueVerificationNotes('');
+      return;
+    }
+    setIssueStatus((String(issue.status || 'OPEN').toUpperCase() as IssueStatus) || 'OPEN');
+    setIssueOwnerUserId(String(issue.ownerUserId || ''));
+    setIssueTargetResolutionAt(isoToLocal(issue.targetResolutionAt));
+    setIssueFollowUpNote(String(issue.followUpNote || ''));
+    setIssueResolutionSummary(String(issue.resolutionSummary || ''));
+    setIssueVerificationNotes(String(issue.verificationNotes || ''));
+  }, [isAdmin, issueData?.issue?.id, issueData?.issue?.updatedAt, data?.hasIssue]);
 
   const techBlocked = isTech && !!openElsewhere?.workOrderId && openElsewhere.workOrderId !== id;
 
@@ -516,7 +626,6 @@ useEffect(() => {
   setEditStatus(String(data.status || 'OPEN'));
   setEditType(String(data.serviceOrderType || ''));
   setEditAssetCode(String(data.assetCode || ''));
-              setEditPmPlanId(String(data.pmPlan?.id || ''));
   setEditPmPlanId(String(data.pmPlan?.id || ''));
 }, [data?.id, editMode]);
 
@@ -802,12 +911,174 @@ async function setTimestamp(key: TsKey, localValue: string) {
 }
   }
 
+  async function saveHourmeter() {
+    if (!id || !auth.token || !auth.tenantSlug) return;
+    if (techBlocked) {
+      setUiInfo('Tienes un WorkLog abierto en otra OS. Debes cerrarlo antes de modificar esta OS.');
+      return;
+    }
+
+    const reading = Number(hourmeterReading);
+    if (!Number.isFinite(reading) || reading < 0) {
+      setUiErr('Ingresa un valor de horómetro válido (>= 0).');
+      return;
+    }
+
+    setBusy(true);
+    setUiErr('');
+    setUiInfo('');
+    try {
+      const body: any = { reading };
+      if (!isTech) {
+        body.phase = hourmeterPhase;
+        body.note = hourmeterNote.trim() || undefined;
+        body.allowDecrease = hourmeterAllowDecrease || undefined;
+      }
+
+      await apiFetch(`/service-orders/${id}/hourmeter`, {
+        method: 'POST',
+        token: auth.token,
+        tenantSlug: auth.tenantSlug,
+        body,
+      });
+      setHourmeterReading('');
+      setHourmeterNote('');
+      setHourmeterAllowDecrease(false);
+      setUiInfo('Lectura de horómetro registrada.');
+      await mutateHourmeter();
+    } catch (e: any) {
+      const parsed = parseApiError(e);
+      if (applyWorkLogBlockIfPresent(parsed)) return;
+      if (parsed.status === 403 || parsed.status === 409) setUiInfo(parsed.message);
+      else setUiErr(parsed.message || 'Error registrando horómetro');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function toggleHasIssue(next: boolean) {
+    await patch(`/service-orders/${id}`, { hasIssue: next });
+    await mutateIssue();
+  }
+
+  async function saveIssueTracking() {
+    if (!id || !auth.token || !auth.tenantSlug) return;
+    if (techBlocked) {
+      setUiInfo('Tienes un WorkLog abierto en otra OS. Debes cerrarlo antes de modificar esta OS.');
+      return;
+    }
+    setBusy(true);
+    setUiErr('');
+    setUiInfo('');
+    try {
+      await apiFetch(`/service-orders/${id}/issue`, {
+        method: 'PATCH',
+        token: auth.token,
+        tenantSlug: auth.tenantSlug,
+        body: {
+          status: issueStatus,
+          ownerUserId: issueOwnerUserId || null,
+          targetResolutionAt: issueTargetResolutionAt ? localInputToIso(issueTargetResolutionAt) : null,
+          followUpNote: issueFollowUpNote.trim() || null,
+          resolutionSummary: issueResolutionSummary.trim() || null,
+          verificationNotes: issueVerificationNotes.trim() || null,
+        },
+      });
+      await Promise.all([mutate(), mutateIssue()]);
+      setUiInfo('Seguimiento de novedad actualizado.');
+    } catch (e: any) {
+      const parsed = parseApiError(e);
+      if (applyWorkLogBlockIfPresent(parsed)) return;
+      if (parsed.status === 403 || parsed.status === 409) setUiInfo(parsed.message);
+      else setUiErr(parsed.message || 'Error guardando seguimiento de novedad');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function createCorrectiveFromIssue() {
+    if (!id || !auth.token || !auth.tenantSlug) return;
+    if (techBlocked) {
+      setUiInfo('Tienes un WorkLog abierto en otra OS. Debes cerrarlo antes de modificar esta OS.');
+      return;
+    }
+    setBusy(true);
+    setUiErr('');
+    setUiInfo('');
+    try {
+      const resp: any = await apiFetch(`/service-orders/${id}/issue/create-corrective`, {
+        method: 'POST',
+        token: auth.token,
+        tenantSlug: auth.tenantSlug,
+        body: {
+          dueDate: issueTargetResolutionAt ? localInputToIso(issueTargetResolutionAt) : undefined,
+          technicianId: issueOwnerUserId || undefined,
+        },
+      });
+      await Promise.all([mutate(), mutateIssue()]);
+      const correctiveId = String(resp?.correctiveWorkOrder?.id || '');
+      if (correctiveId) {
+        setUiInfo(`OS correctiva creada: ${correctiveId}`);
+      } else {
+        setUiInfo('OS correctiva creada.');
+      }
+    } catch (e: any) {
+      const parsed = parseApiError(e);
+      if (applyWorkLogBlockIfPresent(parsed)) return;
+      if (parsed.status === 403 || parsed.status === 409) setUiInfo(parsed.message);
+      else setUiErr(parsed.message || 'Error creando OS correctiva');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function generateQuoteFromRequiredParts() {
+    if (!id || !auth.token || !auth.tenantSlug) return;
+    if (techBlocked) {
+      setUiInfo('Tienes un WorkLog abierto en otra OS. Debes cerrarlo antes de modificar esta OS.');
+      return;
+    }
+    setBusy(true);
+    setUiErr('');
+    setUiInfo('');
+    try {
+      const resp: any = await apiFetch(`/service-orders/${id}/quotes/from-required-parts`, {
+        method: 'POST',
+        token: auth.token,
+        tenantSlug: auth.tenantSlug,
+        body: {},
+      });
+      await mutateQuotes();
+      const quoteId = String(resp?.quote?.id || '');
+      const quoteVersion = Number(resp?.quote?.version || 0);
+      if (quoteId) {
+        setUiInfo(`Cotización ${quoteVersion ? `v${quoteVersion} ` : ''}generada: ${quoteId}`);
+      } else {
+        setUiInfo('Cotización generada.');
+      }
+    } catch (e: any) {
+      const parsed = parseApiError(e);
+      if (applyWorkLogBlockIfPresent(parsed)) return;
+      if (parsed.status === 403 || parsed.status === 409) setUiInfo(parsed.message);
+      else setUiErr(parsed.message || 'Error generando cotización');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const fd = data.formData ?? {};
   const visitMode = getVisitModeFromFormData(fd);
   const isFollowUpVisit = visitMode === 'FOLLOW_UP';
   const showChecklist = data.serviceOrderType === 'ALISTAMIENTO' || data.serviceOrderType === 'PREVENTIVO';
   const requiredParts = (data.serviceOrderParts ?? []).filter((p) => (p as any).stage !== 'REPLACED');
   const replacedParts = (data.serviceOrderParts ?? []).filter((p) => (p as any).stage === 'REPLACED');
+  const hourmeterLatest = hourmeterData?.latest ?? null;
+  const hourmeterByOrder = hourmeterData?.byOrder ?? [];
+  const hourmeterRecent = hourmeterData?.recent ?? [];
+  const issue = issueData?.issue ?? null;
+  const hasIssueOpen = !!data.hasIssue || !!issue;
+  const linkedCorrectiveId = String(issue?.resolutionWorkOrderId || '');
+  const quoteItems = (quotesData?.items ?? []) as QuoteSummary[];
 
   return (
     <div className="p-4 space-y-6 max-w-4xl">
@@ -1342,6 +1613,158 @@ async function setTimestamp(key: TsKey, localValue: string) {
         )}
       </section>
 
+      {/* Horómetro */}
+      <section className="border rounded p-4 space-y-3">
+        <h2 className="font-semibold">Horómetro</h2>
+
+        {!isTech ? (
+          <div className="text-sm text-gray-700">
+            Última lectura registrada:{' '}
+            {hourmeterLatest?.reading != null ? (
+              <b>
+                {hourmeterLatest.reading} h · {fmtDateTime(hourmeterLatest.readingAt)}
+              </b>
+            ) : (
+              <span className="text-gray-500">Sin lecturas.</span>
+            )}
+          </div>
+        ) : null}
+
+        {isTech ? (
+          <label className="space-y-1 block">
+            <span className="text-sm font-medium">Lectura (horas acumuladas)</span>
+            <input
+              type="number"
+              min={0}
+              step="0.1"
+              className="border rounded px-3 py-2 w-full"
+              value={hourmeterReading}
+              onChange={(e) => setHourmeterReading(e.target.value)}
+              placeholder="Ej: 1234.5"
+            />
+          </label>
+        ) : (
+          <>
+            <div className="grid grid-cols-1 md:grid-cols-[1fr_180px_1fr] gap-2 items-end">
+              <label className="space-y-1">
+                <span className="text-sm font-medium">Lectura (horas acumuladas)</span>
+                <input
+                  type="number"
+                  min={0}
+                  step="0.1"
+                  className="border rounded px-3 py-2 w-full"
+                  value={hourmeterReading}
+                  onChange={(e) => setHourmeterReading(e.target.value)}
+                  placeholder="Ej: 1234.5"
+                />
+              </label>
+
+              <label className="space-y-1">
+                <span className="text-sm font-medium">Fase</span>
+                <select
+                  className="border rounded px-3 py-2 w-full"
+                  value={hourmeterPhase}
+                  onChange={(e) => setHourmeterPhase(e.target.value as 'BEFORE' | 'AFTER' | 'OTHER')}
+                >
+                  <option value="BEFORE">BEFORE</option>
+                  <option value="AFTER">AFTER</option>
+                  <option value="OTHER">OTHER</option>
+                </select>
+              </label>
+
+              <label className="space-y-1">
+                <span className="text-sm font-medium">Nota (opcional)</span>
+                <input
+                  className="border rounded px-3 py-2 w-full"
+                  value={hourmeterNote}
+                  onChange={(e) => setHourmeterNote(e.target.value)}
+                  placeholder="Observación de la lectura"
+                />
+              </label>
+            </div>
+
+            <label className="text-sm flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={hourmeterAllowDecrease}
+                onChange={(e) => setHourmeterAllowDecrease(e.target.checked)}
+              />
+              Permitir disminución (ajuste manual, requiere nota)
+            </label>
+          </>
+        )}
+
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            className="px-3 py-2 border rounded bg-black text-white disabled:opacity-50"
+            disabled={busy}
+            onClick={saveHourmeter}
+          >
+            Registrar horómetro
+          </button>
+        </div>
+
+        {isTech ? (
+          <div className="space-y-2">
+            <div className="text-sm font-medium">Historial reciente del activo</div>
+            {hourmeterRecent.length === 0 ? (
+              <div className="text-sm text-gray-600">Sin historial.</div>
+            ) : (
+              <ul className="text-sm space-y-1 max-h-56 overflow-auto pr-1">
+                {hourmeterRecent.map((r) => (
+                  <li key={r.id} className="border rounded px-2 py-1">
+                    <b>{r.reading} h</b> · {fmtDateTime(r.readingAt)} · {r.source ?? 'MANUAL_OS'}
+                    {r.workOrderId ? (
+                      <>
+                        {' '}· <a className="underline" href={`/service-orders/${r.workOrderId}`}>OS</a>
+                      </>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="space-y-2">
+              <div className="text-sm font-medium">Lecturas en esta OS</div>
+              {hourmeterByOrder.length === 0 ? (
+                <div className="text-sm text-gray-600">Sin lecturas en esta OS.</div>
+              ) : (
+                <ul className="text-sm space-y-1">
+                  {hourmeterByOrder.map((r) => (
+                    <li key={r.id} className="border rounded px-2 py-1">
+                      <b>{r.reading} h</b> · {r.phase ?? 'OTHER'} · {fmtDateTime(r.readingAt)}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <div className="text-sm font-medium">Historial reciente del activo</div>
+              {hourmeterRecent.length === 0 ? (
+                <div className="text-sm text-gray-600">Sin historial.</div>
+              ) : (
+                <ul className="text-sm space-y-1 max-h-56 overflow-auto pr-1">
+                  {hourmeterRecent.map((r) => (
+                    <li key={r.id} className="border rounded px-2 py-1">
+                      <b>{r.reading} h</b> · {fmtDateTime(r.readingAt)} · {r.source ?? 'MANUAL_OS'}
+                      {r.workOrderId ? (
+                        <>
+                          {' '}· <a className="underline" href={`/service-orders/${r.workOrderId}`}>OS</a>
+                        </>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        )}
+      </section>
+
       {/* Novedad / Repuestos necesarios */}
       <section className="border rounded p-4 space-y-3">
         <div className="flex items-center justify-between">
@@ -1349,15 +1772,174 @@ async function setTimestamp(key: TsKey, localValue: string) {
           <label className="text-sm flex items-center gap-2">
             <input
               type="checkbox"
-              defaultChecked={data.hasIssue}
-              onChange={(e) => patch(`/service-orders/${id}`, { hasIssue: e.target.checked })}
+              checked={!!data.hasIssue}
+              onChange={(e) => toggleHasIssue(e.target.checked)}
             />
             Tiene novedad
           </label>
         </div>
 
-        {data.hasIssue && (
+        {hasIssueOpen && (
           <div className="space-y-3">
+            {isAdmin ? (
+              <div className="border rounded p-3 space-y-3">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <div className="font-medium">Seguimiento de resolución</div>
+                  {issue ? (
+                    <span className="text-xs px-2 py-0.5 border rounded bg-amber-50 text-amber-800 border-amber-200">
+                      Estado: {issue.status}
+                    </span>
+                  ) : (
+                    <span className="text-xs text-gray-600">Sin registro detallado aún</span>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                  <label className="space-y-1">
+                    <span className="text-sm font-medium">Estado novedad</span>
+                    <select
+                      className="border rounded px-3 py-2 w-full"
+                      value={issueStatus}
+                      onChange={(e) => setIssueStatus(e.target.value as IssueStatus)}
+                    >
+                      <option value="OPEN">OPEN</option>
+                      <option value="IN_PROGRESS">IN_PROGRESS</option>
+                      <option value="WAITING_PARTS">WAITING_PARTS</option>
+                      <option value="RESOLVED">RESOLVED</option>
+                      <option value="VERIFIED">VERIFIED</option>
+                      <option value="CANCELED">CANCELED</option>
+                    </select>
+                  </label>
+
+                  <label className="space-y-1">
+                    <span className="text-sm font-medium">Responsable</span>
+                    <select
+                      className="border rounded px-3 py-2 w-full"
+                      value={issueOwnerUserId}
+                      onChange={(e) => setIssueOwnerUserId(e.target.value)}
+                    >
+                      <option value="">(sin asignar)</option>
+                      {(techs ?? []).map((t) => (
+                        <option key={t.id} value={t.id}>
+                          {t.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="space-y-1">
+                    <span className="text-sm font-medium">Fecha objetivo</span>
+                    <input
+                      type="datetime-local"
+                      className="border rounded px-3 py-2 w-full"
+                      value={issueTargetResolutionAt}
+                      onChange={(e) => setIssueTargetResolutionAt(e.target.value)}
+                    />
+                  </label>
+                </div>
+
+                <label className="space-y-1 block">
+                  <span className="text-sm font-medium">Seguimiento / nota</span>
+                  <textarea
+                    className="border rounded px-3 py-2 w-full"
+                    rows={2}
+                    value={issueFollowUpNote}
+                    onChange={(e) => setIssueFollowUpNote(e.target.value)}
+                    placeholder="Ej: pendiente repuesto, visita reagendada, etc."
+                  />
+                </label>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                  <label className="space-y-1 block">
+                    <span className="text-sm font-medium">Resumen de resolución</span>
+                    <textarea
+                      className="border rounded px-3 py-2 w-full"
+                      rows={2}
+                      value={issueResolutionSummary}
+                      onChange={(e) => setIssueResolutionSummary(e.target.value)}
+                    />
+                  </label>
+                  <label className="space-y-1 block">
+                    <span className="text-sm font-medium">Notas de verificación</span>
+                    <textarea
+                      className="border rounded px-3 py-2 w-full"
+                      rows={2}
+                      value={issueVerificationNotes}
+                      onChange={(e) => setIssueVerificationNotes(e.target.value)}
+                    />
+                  </label>
+                </div>
+
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    type="button"
+                    className="px-3 py-2 border rounded bg-black text-white disabled:opacity-50"
+                    disabled={busy}
+                    onClick={saveIssueTracking}
+                  >
+                    Guardar seguimiento
+                  </button>
+                  <button
+                    type="button"
+                    className="px-3 py-2 border rounded disabled:opacity-50"
+                    disabled={busy}
+                    onClick={createCorrectiveFromIssue}
+                  >
+                    Generar OS correctiva
+                  </button>
+                  {linkedCorrectiveId ? (
+                    <a className="text-sm underline" href={`/service-orders/${linkedCorrectiveId}`}>
+                      Ir a OS correctiva vinculada
+                    </a>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
+
+            {isAdmin ? (
+              <div className="border rounded p-3 space-y-3">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <div className="font-medium">Cotización para cliente</div>
+                  <button
+                    type="button"
+                    className="px-3 py-2 border rounded bg-black text-white disabled:opacity-50"
+                    disabled={busy}
+                    onClick={generateQuoteFromRequiredParts}
+                  >
+                    Generar cotización
+                  </button>
+                </div>
+
+                {quoteItems.length > 0 ? (
+                  <ul className="space-y-2">
+                    {quoteItems.map((q) => (
+                      <li key={q.id} className="border rounded px-3 py-2 flex items-center justify-between gap-2 flex-wrap">
+                        <div className="text-sm">
+                          <span className="font-medium">v{q.version}</span>
+                          <span className="ml-2 text-gray-700">
+                            {q.currency ?? 'COP'} {Number(q.total ?? 0).toFixed(2)}
+                          </span>
+                          {Number(q.missingPriceItems ?? 0) > 0 ? (
+                            <span className="ml-2 text-amber-700">
+                              · {Number(q.missingPriceItems)} ítems sin precio
+                            </span>
+                          ) : null}
+                          <span className="ml-2 text-gray-500">· {fmtDateTime(q.createdAt)}</span>
+                        </div>
+                        <a className="text-sm underline" href={`/service-orders/${id}/quotes/${q.id}`} target="_blank">
+                          Ver / imprimir
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <div className="text-sm text-gray-600">
+                    No hay cotizaciones generadas todavía.
+                  </div>
+                )}
+              </div>
+            ) : null}
+
             <div className="space-y-1">
               <label className="text-sm font-medium">Buscar repuesto (sku / nombre / modelo)</label>
 	              <div className="flex gap-2 items-center">
