@@ -46,6 +46,8 @@ function fmtPrice(n?: number | null) {
 export default function InventoryPage() {
   const { data: session } = useSession();
   const auth = getAuthFromSession(session);
+  const role = (session as any)?.user?.role as string | undefined;
+  const isAdmin = role === 'ADMIN';
 
   const [items, setItems] = useState<InventoryItem[]>([]);
   const [loading, setLoading] = useState(false);
@@ -67,7 +69,7 @@ export default function InventoryPage() {
   }, [sku, name, creating]);
 
   async function loadItems() {
-    if (!auth.token || !auth.tenantSlug) return;
+    if (!auth.token || !auth.tenantSlug || !isAdmin) return;
     setLoading(true);
     setErr('');
     try {
@@ -85,8 +87,12 @@ export default function InventoryPage() {
   }
 
   useEffect(() => {
+    if (!isAdmin) {
+      setItems([]);
+      return;
+    }
     loadItems();
-  }, [auth.token, auth.tenantSlug]);
+  }, [auth.token, auth.tenantSlug, isAdmin]);
 
   async function createOne(e: FormEvent) {
     e.preventDefault();
@@ -201,6 +207,7 @@ export default function InventoryPage() {
   }
 
   if (!auth.token || !auth.tenantSlug) return <div className="p-6">Inicia sesión.</div>;
+  if (!isAdmin) return <div className="p-6">No autorizado. Inventario solo para ADMIN.</div>;
 
   return (
     <div className="p-6 space-y-4">

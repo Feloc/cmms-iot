@@ -4,10 +4,16 @@ import { PrismaService } from '../../prisma.service';
 import { CreateTenantDto } from './dto/create-tenant.dto';
 import { ListTenantsQuery } from './dto/list-tenants.query';
 import { ProvisionTenantDto } from './dto/provision-tenant.dto';
+import { UpdateTenantBrandingDto } from './dto/update-tenant-branding.dto';
 
 @Injectable()
 export class TenantsService {
   constructor(private prisma: PrismaService) {}
+
+  private toNullableTrimmed(value?: string | null) {
+    const s = String(value ?? '').trim();
+    return s ? s : null;
+  }
 
   async list(q: ListTenantsQuery) {
     const page = Math.max(1, Number(q.page ?? 1));
@@ -81,6 +87,55 @@ export class TenantsService {
       });
 
       return { tenant, admin };
+    });
+  }
+
+  async getBranding(tenantId: string) {
+    return this.prisma.tenant.findFirst({
+      where: { id: tenantId },
+      select: {
+        id: true,
+        slug: true,
+        name: true,
+        legalName: true,
+        taxId: true,
+        address: true,
+        phone: true,
+        email: true,
+        website: true,
+        logoUrl: true,
+        updatedAt: true,
+      },
+    });
+  }
+
+  async updateBranding(tenantId: string, dto: UpdateTenantBrandingDto) {
+    const data: Record<string, string | null> = {};
+
+    if (dto.legalName !== undefined) data.legalName = this.toNullableTrimmed(dto.legalName);
+    if (dto.taxId !== undefined) data.taxId = this.toNullableTrimmed(dto.taxId);
+    if (dto.address !== undefined) data.address = this.toNullableTrimmed(dto.address);
+    if (dto.phone !== undefined) data.phone = this.toNullableTrimmed(dto.phone);
+    if (dto.email !== undefined) data.email = this.toNullableTrimmed(dto.email);
+    if (dto.website !== undefined) data.website = this.toNullableTrimmed(dto.website);
+    if (dto.logoUrl !== undefined) data.logoUrl = this.toNullableTrimmed(dto.logoUrl);
+
+    return this.prisma.tenant.update({
+      where: { id: tenantId },
+      data,
+      select: {
+        id: true,
+        slug: true,
+        name: true,
+        legalName: true,
+        taxId: true,
+        address: true,
+        phone: true,
+        email: true,
+        website: true,
+        logoUrl: true,
+        updatedAt: true,
+      },
     });
   }
 }

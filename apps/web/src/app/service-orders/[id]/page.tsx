@@ -638,11 +638,12 @@ useEffect(() => {
   }
 }, []);
 const invPath = useMemo(() => {
+    if (!isAdmin && !isTech) return null;
     const q = partQ.trim();
     if (!q) return null;
     const qs = new URLSearchParams({ q });
     return `/inventory/search?${qs.toString()}`;
-  }, [partQ]);
+  }, [partQ, isAdmin, isTech]);
   const { data: invMatches } = useApiSWR<InventoryItem[]>(invPath, auth.token, auth.tenantSlug);
 
   if (!auth.token || !auth.tenantSlug) return <div className="p-6">Inicia sesión.</div>;

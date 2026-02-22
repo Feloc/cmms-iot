@@ -4,6 +4,7 @@ import React from 'react';
 import Link from 'next/link';
 import dynamic from 'next/dynamic';
 import { useParams } from 'next/navigation';
+import { useSession } from 'next-auth/react';
 import { useAssetsDetail, AssetsDetailProvider } from './assets-detail.context';
 
 const OverviewTab = dynamic(() => import('./tabs/OverviewTab'), { ssr: false, loading: () => <div className="p-4 text-sm text-gray-500">Cargando resumen…</div> });
@@ -27,13 +28,24 @@ export default function AssetDetailPage() {
 }
 
 function DetailInner() {
+  const { data: session } = useSession();
+  const role = (session as any)?.user?.role as string | undefined;
+  const isAdmin = role === 'ADMIN';
   const { assetId, apiBase, headers, tenantSlug } = useAssetsDetail();
   const [asset, setAsset] = React.useState<any>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [loading, setLoading] = React.useState(false);
-  const tabs = ['Resumen', 'Plan PM', 'Analítica Horómetro', 'Adjuntos', 'Inventario', 'Parámetros', 'Telemetría', 'Repuestos cambiados'] as const;
-  type TabKey = typeof tabs[number];
+  const allTabs = ['Resumen', 'Plan PM', 'Analítica Horómetro', 'Adjuntos', 'Inventario', 'Parámetros', 'Telemetría', 'Repuestos cambiados'] as const;
+  type TabKey = typeof allTabs[number];
+  const tabs = React.useMemo<TabKey[]>(
+    () => (isAdmin ? [...allTabs] : allTabs.filter((t) => t !== 'Inventario')),
+    [isAdmin],
+  );
   const [active, setActive] = React.useState<TabKey>('Resumen');
+
+  React.useEffect(() => {
+    if (!isAdmin && active === 'Inventario') setActive('Resumen');
+  }, [isAdmin, active]);
 
   const loadAsset = React.useCallback(async () => {
     if (!tenantSlug) return;

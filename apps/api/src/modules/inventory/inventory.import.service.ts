@@ -19,6 +19,10 @@ export class InventoryImportService {
   constructor(private readonly inventoryService: InventoryService) {}
 
   async preview(filePath: string) {
+    const tenantId = getTenant();
+    if (!tenantId) throw new BadRequestException('No tenant in context');
+    await this.inventoryService.assertAdmin(tenantId);
+
     const rows = this.parse(filePath);
     return this.summarize(rows, 200);
   }
@@ -26,6 +30,7 @@ export class InventoryImportService {
   async commit(filePath: string) {
     const tenantId = getTenant();
     if (!tenantId) throw new BadRequestException('No tenant in context');
+    await this.inventoryService.assertAdmin(tenantId);
 
     const rows = this.parse(filePath);
     const valid = rows.filter((r) => r._errors.length === 0);

@@ -1,13 +1,37 @@
-import { BadRequestException, ConflictException, Injectable } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable } from '@nestjs/common';
 import { PrismaService } from '../../prisma.service';
 import { Prisma } from '@prisma/client';
 import { CreateInventoryItemDto } from './dto/create-inventory-item.dto';
+import { tenantStorage } from '../../common/tenant-context';
 
 @Injectable()
 export class InventoryService {
   constructor(private prisma: PrismaService) {}
 
-  list(tenantId: string, q?: string) {
+  async assertAdmin(tenantId: string) {
+    const userId = tenantStorage.getStore()?.userId;
+    if (!userId) throw new ForbiddenException('Admin only');
+    const u = await this.prisma.user.findFirst({
+      where: { id: userId, tenantId },
+      select: { role: true },
+    });
+    if (!u || u.role !== 'ADMIN') throw new ForbiddenException('Admin only');
+  }
+
+  async assertAdminOrTech(tenantId: string) {
+    const userId = tenantStorage.getStore()?.userId;
+    if (!userId) throw new ForbiddenException('Admin or tech only');
+    const u = await this.prisma.user.findFirst({
+      where: { id: userId, tenantId },
+      select: { role: true },
+    });
+    if (!u || (u.role !== 'ADMIN' && u.role !== 'TECH')) {
+      throw new ForbiddenException('Admin or tech only');
+    }
+  }
+
+  async list(tenantId: string, q?: string) {
+    await this.assertAdmin(tenantId);
     const where: Prisma.InventoryItemWhereInput = { tenantId };
     const s = String(q ?? '').trim();
     if (s) {
@@ -19,7 +43,8 @@ export class InventoryService {
     return this.prisma.inventoryItem.findMany({ where, orderBy: [{ name: 'asc' }, { sku: 'asc' }] });
   }
 
-  search(tenantId: string, q: string) {
+  async search(tenantId: string, q: string) {
+    await this.assertAdminOrTech(tenantId);
     const s = q.trim();
     const where: Prisma.InventoryItemWhereInput = { tenantId };
     if (s) {
@@ -33,6 +58,7 @@ export class InventoryService {
   }
 
   async create(tenantId: string, dto: CreateInventoryItemDto) {
+    await this.assertAdmin(tenantId);
     const sku = String(dto?.sku ?? '').trim();
     const name = String(dto?.name ?? '').trim();
     if (!sku) throw new BadRequestException('sku is required');
@@ -75,6 +101,7 @@ export class InventoryService {
     tenantId: string,
     rows: Array<{ sku: string; name: string; qty: number; unitPrice?: number | null }>,
   ) {
+    await this.assertAdmin(tenantId);
     let created = 0;
     let updated = 0;
     const issues: Array<{ row: number; sku?: string; error: string }> = [];
