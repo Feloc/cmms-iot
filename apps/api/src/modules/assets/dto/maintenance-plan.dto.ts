@@ -5,6 +5,7 @@ export class UpsertAssetMaintenancePlanDto {
   frequencyValue!: number;
   frequencyUnit!: MaintenanceFrequencyUnit;
   lastMaintenanceAt?: string | Date | null;
+  planStartAt?: string | Date | null;
   planningHorizonValue?: number;
   planningHorizonUnit?: MaintenanceFrequencyUnit;
   active?: boolean;

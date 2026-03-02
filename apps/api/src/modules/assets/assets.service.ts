@@ -267,6 +267,8 @@ export class AssetsService {
       ? new Date(plan.lastMaintenanceAt)
       : inferredLastDate
       ? new Date(inferredLastDate)
+      : plan?.planStartAt
+      ? new Date(plan.planStartAt)
       : asset.acquiredOn
       ? new Date(asset.acquiredOn)
       : null;
@@ -1207,6 +1209,10 @@ if (q.customer) where.customer = { contains: q.customer.trim(), mode: 'insensiti
         dto.lastMaintenanceAt === undefined
           ? undefined
           : this.parseDateNullable(dto.lastMaintenanceAt, 'lastMaintenanceAt');
+      const planStartAt =
+        dto.planStartAt === undefined
+          ? undefined
+          : this.parseDateNullable(dto.planStartAt, 'planStartAt');
 
       const previousConfig = await (tx as any).assetMaintenancePlan.findFirst({
         where: { tenantId, assetId },
@@ -1222,6 +1228,7 @@ if (q.customer) where.customer = { contains: q.customer.trim(), mode: 'insensiti
           frequencyValue,
           frequencyUnit,
           lastMaintenanceAt: lastMaintenanceAt ?? null,
+          planStartAt: planStartAt ?? null,
           planningHorizonValue,
           planningHorizonUnit,
           active: dto.active === undefined ? true : !!dto.active,
@@ -1231,6 +1238,7 @@ if (q.customer) where.customer = { contains: q.customer.trim(), mode: 'insensiti
           frequencyValue,
           frequencyUnit,
           ...(lastMaintenanceAt !== undefined ? { lastMaintenanceAt } : {}),
+          ...(planStartAt !== undefined ? { planStartAt } : {}),
           planningHorizonValue,
           planningHorizonUnit,
           ...(dto.active !== undefined ? { active: !!dto.active } : {}),
@@ -1305,11 +1313,13 @@ if (q.customer) where.customer = { contains: q.customer.trim(), mode: 'insensiti
         ? new Date(plan.lastMaintenanceAt)
         : inferredLastDate
         ? new Date(inferredLastDate)
+        : plan?.planStartAt
+        ? new Date(plan.planStartAt)
         : asset.acquiredOn
         ? new Date(asset.acquiredOn)
         : null;
       if (!baseDate) {
-        throw new BadRequestException('No base date found. Set acquiredOn on the asset or lastMaintenanceAt in maintenance plan');
+        throw new BadRequestException('No base date found. Set lastMaintenanceAt/planStartAt in maintenance plan or acquiredOn on the asset');
       }
 
       const freqValue = this.toPositiveInt(plan.frequencyValue, 'frequencyValue');

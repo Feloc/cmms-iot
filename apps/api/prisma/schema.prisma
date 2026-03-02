@@ -870,6 +870,7 @@ model AssetMaintenancePlan {
   frequencyUnit        MaintenanceFrequencyUnit
 
   lastMaintenanceAt    DateTime?
+  planStartAt          DateTime?
 
   planningHorizonValue Int      @default(6)
   planningHorizonUnit  MaintenanceFrequencyUnit @default(MONTH)

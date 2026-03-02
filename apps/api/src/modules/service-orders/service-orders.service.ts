@@ -1436,6 +1436,7 @@ const [items, total] = await this.prisma.$transaction([
       take: 2000,
       include: {
         assignments: { where: { state: 'ACTIVE' }, include: { user: { select: { id: true, name: true } } } },
+        pmPlan: { select: { intervalHours: true } },
       },
     });
 

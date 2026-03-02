@@ -50,6 +50,7 @@ export default function MaintenancePlanTab({
   const [frequencyValue, setFrequencyValue] = React.useState<number>(1);
   const [frequencyUnit, setFrequencyUnit] = React.useState<Unit>('MONTH');
   const [lastMaintenanceAt, setLastMaintenanceAt] = React.useState('');
+  const [planStartAt, setPlanStartAt] = React.useState('');
   const [planningHorizonValue, setPlanningHorizonValue] = React.useState<number>(6);
   const [planningHorizonUnit, setPlanningHorizonUnit] = React.useState<Unit>('MONTH');
   const [active, setActive] = React.useState(true);
@@ -61,10 +62,11 @@ export default function MaintenancePlanTab({
     setFrequencyValue(Number(configuredPlan?.frequencyValue ?? 1));
     setFrequencyUnit((String(configuredPlan?.frequencyUnit || 'MONTH').toUpperCase() as Unit) || 'MONTH');
     setLastMaintenanceAt(isoToDateInput(configuredPlan?.lastMaintenanceAt));
+    setPlanStartAt(isoToDateInput(configuredPlan?.planStartAt));
     setPlanningHorizonValue(Number(configuredPlan?.planningHorizonValue ?? 6));
     setPlanningHorizonUnit((String(configuredPlan?.planningHorizonUnit || 'MONTH').toUpperCase() as Unit) || 'MONTH');
     setActive(configuredPlan?.active !== false);
-  }, [configuredPlan?.id, configuredPlan?.pmPlanId, configuredPlan?.frequencyValue, configuredPlan?.frequencyUnit, configuredPlan?.lastMaintenanceAt, configuredPlan?.planningHorizonValue, configuredPlan?.planningHorizonUnit, configuredPlan?.active]);
+  }, [configuredPlan?.id, configuredPlan?.pmPlanId, configuredPlan?.frequencyValue, configuredPlan?.frequencyUnit, configuredPlan?.lastMaintenanceAt, configuredPlan?.planStartAt, configuredPlan?.planningHorizonValue, configuredPlan?.planningHorizonUnit, configuredPlan?.active]);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -110,7 +112,7 @@ export default function MaintenancePlanTab({
     loadFutureOrders();
   }, [loadFutureOrders]);
 
-  const baseDateText = lastMaintenanceAt || isoToDateInput(asset?.acquiredOn);
+  const baseDateText = lastMaintenanceAt || planStartAt || isoToDateInput(asset?.acquiredOn);
 
   async function saveConfig(syncFutureOrders = false) {
     setBusy(true);
@@ -127,6 +129,7 @@ export default function MaintenancePlanTab({
         frequencyValue: Math.round(frequencyValue),
         frequencyUnit,
         lastMaintenanceAt: lastMaintenanceAt ? new Date(`${lastMaintenanceAt}T00:00:00`).toISOString() : null,
+        planStartAt: planStartAt ? new Date(`${planStartAt}T00:00:00`).toISOString() : null,
         planningHorizonValue: Math.round(planningHorizonValue),
         planningHorizonUnit,
         active,
@@ -202,7 +205,7 @@ export default function MaintenancePlanTab({
         <div>
           <h2 className="font-semibold">Plan de mantenimiento por activo</h2>
           <p className="text-sm text-gray-600">
-            La fecha base será la última ejecución registrada. Si no existe, se usa la fecha de adquisición del activo.
+            Fecha base para generación: último mantenimiento, luego fecha inicial del plan y luego fecha de adquisición.
           </p>
         </div>
 
@@ -220,6 +223,11 @@ export default function MaintenancePlanTab({
           <label className="space-y-1">
             <span className="text-sm font-medium">Último mantenimiento</span>
             <input type="date" className="border rounded px-3 py-2 w-full" value={lastMaintenanceAt} disabled={busy} onChange={(e) => setLastMaintenanceAt(e.target.value)} />
+          </label>
+
+          <label className="space-y-1">
+            <span className="text-sm font-medium">Fecha inicial del plan</span>
+            <input type="date" className="border rounded px-3 py-2 w-full" value={planStartAt} disabled={busy} onChange={(e) => setPlanStartAt(e.target.value)} />
           </label>
 
           <div className="grid grid-cols-[1fr_1fr] gap-2">

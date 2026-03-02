@@ -34,6 +34,9 @@ type ServiceOrder = {
   assetCode: string;
   status: string;
   serviceOrderType?: string | null;
+  pmPlan?: {
+    intervalHours?: number | null;
+  } | null;
   dueDate?: string | null;
   durationMin?: number | null;
   assignments?: Array<{
@@ -171,6 +174,36 @@ function buildSidebarTitle(so: ServiceOrder) {
   return so.title?.trim() ? so.title.trim() : buildCompactTitle(so);
 }
 
+function getPreventiveIntervalHours(so: ServiceOrder): number | null {
+  const serviceType = String(so.serviceOrderType ?? '').trim().toUpperCase();
+  if (serviceType !== 'PREVENTIVO') return null;
+  const interval = Number(so.pmPlan?.intervalHours);
+  if (!Number.isFinite(interval) || interval <= 0) return null;
+  return Math.round(interval);
+}
+
+function intervalHoursStyle(intervalHours: number): CSSProperties {
+  if (intervalHours === 200) return { fontWeight: 700, color: '#1d4ed8' };
+  if (intervalHours === 600) return { fontWeight: 700, color: '#c2410c' };
+  if (intervalHours === 1200) return { fontWeight: 700, color: '#b91c1c' };
+  return { fontWeight: 700, color: '#111827' };
+}
+
+function buildOrderedEventText(so: ServiceOrder) {
+  const customer = so.asset?.customer?.trim() ? so.asset.customer.trim() : '';
+  const serviceType = so.serviceOrderType?.trim() ? so.serviceOrderType.trim() : '';
+  const intervalHours = getPreventiveIntervalHours(so);
+  const serviceTypeWithInterval = serviceType
+    ? `${serviceType}${intervalHours != null ? ` ${intervalHours}h` : ''}`
+    : '';
+  const assetName = so.asset?.name?.trim() ? so.asset.name.trim() : (so.assetCode?.trim() || '');
+  const assetModel = so.asset?.model?.trim() ? so.asset.model.trim() : '';
+  const serial = so.asset?.serialNumber?.trim() ? so.asset.serialNumber.trim() : '';
+  const description = so.description?.trim() ? so.description.trim() : '';
+
+  return [customer, serviceTypeWithInterval, assetName, assetModel, serial, description].filter(Boolean).join(' · ');
+}
+
 function clampText(s: string, max: number) {
   const t = (s || '').trim();
   if (t.length <= max) return t;
@@ -220,8 +253,10 @@ export default function CalendarPage() {
   const [view, setView] = useState<View>(Views.DAY);
   const [date, setDate] = useState<Date>(new Date());
   const [onlyTechId, setOnlyTechId] = useState<string>('');
+  const [dayVisibleResourceIds, setDayVisibleResourceIds] = useState<string[]>([]);
   const [hoverResourceId, setHoverResourceId] = useState<string>('');
   const hoverResourceIdRef = useRef<string>('');
+  const dayColumnsTouchedRef = useRef(false);
 
   const [techs, setTechs] = useState<User[]>([]);
   const [events, setEvents] = useState<CalEvent[]>([]);
@@ -235,10 +270,41 @@ export default function CalendarPage() {
   const eventsReqSeq = useRef(0);
   const unscheduledReqSeq = useRef(0);
 
+  const allDayResourceIds = useMemo(() => [UNASSIGNED, ...techs.map((t) => t.id)], [techs]);
+
+  useEffect(() => {
+    setDayVisibleResourceIds((prev) => {
+      if (!dayColumnsTouchedRef.current) return [...allDayResourceIds];
+      const allowed = new Set(allDayResourceIds);
+      const next = prev.filter((id) => allowed.has(id));
+      return next.length > 0 ? next : [...allDayResourceIds];
+    });
+  }, [allDayResourceIds]);
+
+  function toggleDayVisibleResource(id: string) {
+    dayColumnsTouchedRef.current = true;
+    setDayVisibleResourceIds((prev) => {
+      const has = prev.includes(id);
+      if (has) {
+        if (prev.length <= 1) return prev;
+        return prev.filter((v) => v !== id);
+      }
+      return [...prev, id];
+    });
+  }
+
+  function selectAllDayVisibleResources() {
+    dayColumnsTouchedRef.current = true;
+    setDayVisibleResourceIds([...allDayResourceIds]);
+  }
+
   const resources: Resource[] = useMemo(() => {
     const list: Resource[] = [{ id: UNASSIGNED, title: 'Sin asignar' }, ...techs.map((t) => ({ id: t.id, title: t.name }))];
-    return onlyTechId ? list.filter((r) => r.id === onlyTechId) : list;
-  }, [techs, onlyTechId]);
+    const filteredByTech = onlyTechId ? list.filter((r) => r.id === onlyTechId) : list;
+    if (view !== Views.DAY || onlyTechId) return filteredByTech;
+    const dayVisible = new Set(dayVisibleResourceIds);
+    return filteredByTech.filter((r) => dayVisible.has(r.id));
+  }, [techs, onlyTechId, view, dayVisibleResourceIds]);
 
   function setHoverResource(id: string) {
     hoverResourceIdRef.current = id;
@@ -302,13 +368,17 @@ export default function CalendarPage() {
             activeAssignments.length > 0
               ? activeAssignments.map((a) => ({ assignmentId: a.assignmentId, resourceId: a.technicianId }))
               : [{ assignmentId: null, resourceId: UNASSIGNED }];
-          const slots = onlyTechId ? allSlots.filter((s) => s.resourceId === onlyTechId) : allSlots;
+          const byTechSlots = onlyTechId ? allSlots.filter((s) => s.resourceId === onlyTechId) : allSlots;
+          const slots =
+            view === Views.DAY && !onlyTechId
+              ? byTechSlots.filter((s) => dayVisibleResourceIds.includes(s.resourceId))
+              : byTechSlots;
 
           return slots.map((slot) => ({
             id: slot.assignmentId ? `${so.id}:${slot.assignmentId}` : `${so.id}:UNASSIGNED`,
             soId: so.id,
             assignmentId: slot.assignmentId,
-            title: buildCompactTitle(so),
+            title: buildOrderedEventText(so),
             start: startAt,
             end: endAt,
             resourceId: slot.resourceId,
@@ -364,7 +434,7 @@ export default function CalendarPage() {
     if (!auth.token || !auth.tenantSlug) return;
     loadEvents();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [auth.token, auth.tenantSlug, view, date, onlyTechId]);
+  }, [auth.token, auth.tenantSlug, view, date, onlyTechId, dayVisibleResourceIds]);
 
   useEffect(() => {
     if (!auth.token || !auth.tenantSlug) return;
@@ -586,6 +656,10 @@ export default function CalendarPage() {
       isFullscreen={isFullscreen}
       onToggleFullscreen={toggleFullscreen}
       onRefresh={() => { loadEvents(); loadUnscheduled(); }}
+      techs={techs}
+      dayVisibleResourceIds={dayVisibleResourceIds}
+      onToggleDayVisibleResource={toggleDayVisibleResource}
+      onSelectAllDayVisibleResources={selectAllDayVisibleResources}
     />
   );
 
@@ -724,6 +798,7 @@ export default function CalendarPage() {
               culture="es"
               messages={messagesEs as any}
               events={events}
+              showAllEvents={view === Views.MONTH}
               view={view}
               date={date}
               onView={setView}
@@ -772,7 +847,28 @@ export default function CalendarPage() {
               style={{ height: isFullscreen ? '100vh' : 760 }}
               onDoubleClickEvent={(e: any) => { router.push(`/service-orders/${e.soId}`); }}
               eventPropGetter={(event: any) => {
-                const base = { whiteSpace: 'normal', wordBreak: 'break-word', overflow: 'hidden', lineHeight: 1.15 };
+                const base =
+                  view === Views.MONTH
+                    ? {
+                        whiteSpace: 'nowrap',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        lineHeight: 1,
+                        fontSize: '10px',
+                        paddingTop: 0,
+                        paddingBottom: 0,
+                        paddingLeft: 2,
+                        paddingRight: 2,
+                        minHeight: 14,
+                      }
+                    : {
+                        whiteSpace: 'normal',
+                        wordBreak: 'break-word',
+                        overflow: 'hidden',
+                        lineHeight: 1.15,
+                        borderRadius: 6,
+                        boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.38), 0 1px 2px rgba(0,0,0,0.1)',
+                      };
                 const st = statusToStyle(event?.so?.status);
                 return { style: { ...(base as any), ...(st as any) } };
               }}
@@ -793,6 +889,10 @@ function CalendarToolbar({
   isFullscreen,
   onToggleFullscreen,
   onRefresh,
+  techs,
+  dayVisibleResourceIds,
+  onToggleDayVisibleResource,
+  onSelectAllDayVisibleResources,
 }: any) {
   const [open, setOpen] = useState(false);
   const popoverRef = useRef<HTMLDivElement | null>(null);
@@ -805,6 +905,10 @@ function CalendarToolbar({
   }, [date]);
 
   const canPick = String(view) === Views.DAY;
+  const visibleSet = useMemo(
+    () => new Set<string>(Array.isArray(dayVisibleResourceIds) ? dayVisibleResourceIds : []),
+    [dayVisibleResourceIds],
+  );
 
   useEffect(() => {
     if (!open) return;
@@ -860,6 +964,50 @@ function CalendarToolbar({
             <button className="px-2 py-1 border rounded text-sm" onClick={() => onView(Views.DAY)}>Día</button>
           </div>
 
+          <details className="relative">
+            <summary className="list-none px-2 py-1 border rounded text-sm cursor-pointer select-none">
+              Columnas día
+            </summary>
+            <div className="absolute right-0 mt-2 w-72 p-2 border rounded bg-white shadow z-50 space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="text-xs font-medium text-gray-700">Técnicos visibles</div>
+                <button
+                  type="button"
+                  className="text-xs underline"
+                  onClick={() => onSelectAllDayVisibleResources?.()}
+                >
+                  Todos
+                </button>
+              </div>
+
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={visibleSet.has(UNASSIGNED)}
+                  onChange={() => onToggleDayVisibleResource?.(UNASSIGNED)}
+                />
+                <span>Sin asignar</span>
+              </label>
+
+              <div className="max-h-56 overflow-auto space-y-1 pr-1">
+                {(techs ?? []).map((t: any) => (
+                  <label key={t.id} className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={visibleSet.has(String(t.id))}
+                      onChange={() => onToggleDayVisibleResource?.(String(t.id))}
+                    />
+                    <span>{t.name}</span>
+                  </label>
+                ))}
+              </div>
+
+              <div className="text-[11px] text-gray-500">
+                Aplica a la vista Día.
+              </div>
+            </div>
+          </details>
+
           {typeof onRefresh === 'function' ? (
             <button className="px-2 py-1 border rounded text-sm" onClick={onRefresh}>Actualizar</button>
           ) : null}
@@ -875,12 +1023,45 @@ function CalendarToolbar({
 
 function EventBox({ event, view, onUnschedule }: { event: CalEvent; view: View; onUnschedule: () => void }) {
   const so = event.so;
-  const serial = so.asset?.serialNumber ? `Serie: ${so.asset.serialNumber}` : '';
-  const assetName = so.asset?.name?.trim() ? so.asset.name.trim() : '';
-  const assetModel = so.asset?.model?.trim() ? so.asset.model.trim() : '';
+  const orderedText = buildOrderedEventText(so) || event.title;
   const customer = so.asset?.customer?.trim() ? so.asset.customer.trim() : '';
-  const title = so.title?.trim() ? so.title.trim() : event.title;
-  const desc = so.description?.trim() ? so.description.trim() : '';
+  const serviceType = so.serviceOrderType?.trim() ? so.serviceOrderType.trim() : '';
+  const intervalHours = getPreventiveIntervalHours(so);
+  const assetName = so.asset?.name?.trim() ? so.asset.name.trim() : (so.assetCode?.trim() || '');
+  const assetModel = so.asset?.model?.trim() ? so.asset.model.trim() : '';
+  const serial = so.asset?.serialNumber?.trim() ? so.asset.serialNumber.trim() : '';
+  const description = so.description?.trim() ? so.description.trim() : '';
+
+  const orderedParts = useMemo(() => {
+    const pieces: Array<JSX.Element | string> = [];
+    const pushPiece = (key: string, node: JSX.Element | string) => {
+      if (pieces.length > 0) {
+        pieces.push(<span key={`sep-${key}`} className="opacity-80">{' · '}</span>);
+      }
+      pieces.push(<span key={key}>{node}</span>);
+    };
+
+    if (customer) {
+      pushPiece('customer', <span style={{ fontWeight: 700 }}>{customer}</span>);
+    }
+    if (serviceType) {
+      pushPiece(
+        'serviceType',
+        <span>
+          {serviceType}
+          {intervalHours != null ? (
+            <span style={intervalHoursStyle(intervalHours)}>{` ${intervalHours}h`}</span>
+          ) : null}
+        </span>,
+      );
+    }
+    if (assetName) pushPiece('assetName', assetName);
+    if (assetModel) pushPiece('assetModel', assetModel);
+    if (serial) pushPiece('serial', serial);
+    if (description) pushPiece('description', description);
+
+    return pieces;
+  }, [customer, serviceType, intervalHours, assetName, assetModel, serial, description]);
 
   const outerRef = useRef<HTMLDivElement | null>(null);
   const innerRef = useRef<HTMLDivElement | null>(null);
@@ -930,7 +1111,7 @@ function EventBox({ event, view, onUnschedule }: { event: CalEvent; view: View; 
       ro.disconnect();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view, event.id, event.title, serial, assetName, assetModel, customer, title, desc]);
+  }, [view, event.id, event.title, orderedText]);
 
   const Button = (
     <button
@@ -946,6 +1127,16 @@ function EventBox({ event, view, onUnschedule }: { event: CalEvent; view: View; 
     </button>
   );
 
+  if (view === Views.MONTH) {
+    return (
+      <div className="min-w-0">
+        <div className="truncate text-[10px] leading-none whitespace-nowrap">
+          {orderedParts.length ? orderedParts : clampText(orderedText, 36)}
+        </div>
+      </div>
+    );
+  }
+
   if (view !== Views.DAY) {
     return (
       <div ref={outerRef} className="h-full overflow-hidden">
@@ -960,10 +1151,7 @@ function EventBox({ event, view, onUnschedule }: { event: CalEvent; view: View; 
         >
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0">
-              <div className="leading-tight whitespace-normal break-words">{event.title}</div>
-              <div className="text-[11px] opacity-90 leading-tight whitespace-normal break-words">
-                {[assetName || so.assetCode, assetModel, customer].filter(Boolean).join(' · ')}
-              </div>
+              <div className="leading-tight whitespace-normal break-words">{orderedParts.length ? orderedParts : orderedText}</div>
             </div>
             {Button}
           </div>
@@ -985,15 +1173,9 @@ function EventBox({ event, view, onUnschedule }: { event: CalEvent; view: View; 
         className="h-full"
       >
         <div className="flex items-start justify-between gap-2">
-          <div>
-            {serial ? <div style={{ fontWeight: 700 }}>{serial}</div> : null}
-            <div style={{ fontWeight: 700 }}>{[assetName || so.assetCode, assetModel].filter(Boolean).join(' · ')}</div>
-            {customer ? <div style={{ fontSize: 12, opacity: 0.95 }}>{customer}</div> : null}
-            <div style={{ fontWeight: 600 }}>{title}</div>
-          </div>
+          <div className="whitespace-normal break-words">{orderedParts.length ? orderedParts : orderedText}</div>
           {Button}
         </div>
-        {desc ? <div style={{ fontSize: 12, opacity: 0.9 }}>{desc}</div> : null}
       </div>
     </div>
   );
