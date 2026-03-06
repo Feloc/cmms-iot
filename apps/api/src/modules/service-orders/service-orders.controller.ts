@@ -196,6 +196,15 @@ export class ServiceOrdersController {
     return this.svc.getReport(id, reportId);
   }
 
+  @Get(':id/reports/:reportId/pdf')
+  async getReportPdf(@Param('id') id: string, @Param('reportId') reportId: string, @Res() res: Response) {
+    const { buffer, filename } = await this.svc.getReportPdf(id, reportId);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Length', String(buffer.length));
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    return res.send(buffer);
+  }
+
 @Get(':id/images')
 listImages(@Param('id') id: string) {
   return this.svc.listImages(id);

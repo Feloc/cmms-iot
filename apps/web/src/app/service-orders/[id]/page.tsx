@@ -5,7 +5,7 @@ import { useParams } from 'next/navigation';
 import { useSession } from 'next-auth/react';
 import { getAuthFromSession } from '@/lib/auth';
 import { useApiSWR } from '@/lib/swr';
-import { apiFetch } from '@/lib/api';
+import { apiBase, apiFetch } from '@/lib/api';
 import { SignatureCanvas } from '@/components/SignatureCanvas';
 import { ServiceOrderImagesGallery } from '@/components/ServiceOrderImagesGallery';
 import { ServiceOrderFilesSection } from '@/components/ServiceOrderFilesSection';
@@ -679,11 +679,52 @@ const canChangeStatus = isAdmin || (role === 'TECH' && isAssignedTech);
         body: { audience },
       });
       await mutateReports();
-      // Abre el reporte en una nueva pestaña (ideal para imprimir/Guardar PDF)
-      if (created?.id) window.open(`/service-orders/${id}/reports/${created.id}`, '_blank');
+      if (created?.id) {
+        if (audience === 'CUSTOMER') {
+          await downloadReportPdf(created.id);
+        } else {
+          window.open(`/service-orders/${id}/reports/${created.id}`, '_blank');
+        }
+      }
+    } catch (e: any) {
+      setUiErr(e?.message ?? 'No se pudo generar/descargar el reporte');
     } finally {
       setBusy(false);
     }
+  }
+
+  async function downloadReportPdf(reportId: string) {
+    if (!auth.token || !auth.tenantSlug) {
+      setUiErr('No hay credenciales disponibles. Inicia sesión.');
+      return;
+    }
+    setUiErr('');
+    const url = `${apiBase}/service-orders/${id}/reports/${reportId}/pdf`;
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${auth.token}`,
+        'x-tenant': auth.tenantSlug,
+      },
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(`No se pudo descargar PDF (${res.status}) ${text}`);
+    }
+
+    const blob = await res.blob();
+    const cd = res.headers.get('content-disposition') ?? '';
+    const m = /filename\*?=(?:UTF-8''|")?([^\";]+)/i.exec(cd);
+    const filename = m?.[1] ? decodeURIComponent(m[1].replace(/\"/g, '').trim()) : `reporte-os-${id}-${reportId}.pdf`;
+
+    const objUrl = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = objUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(objUrl);
   }
 
 

@@ -10,6 +10,8 @@ RUN npm install
 # ===== dev/runtime =====
 FROM node:20-alpine AS dev
 WORKDIR /app
+ENV CHROMIUM_BIN=/usr/bin/chromium-browser
+RUN apk add --no-cache chromium nss freetype harfbuzz ca-certificates ttf-freefont
 
 COPY --from=deps /app/node_modules ./node_modules
 COPY . ./

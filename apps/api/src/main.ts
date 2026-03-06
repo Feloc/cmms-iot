@@ -23,7 +23,11 @@ if (String(process.env.AUTO_SEED || '').toLowerCase() === 'true') {
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean);
-  app.enableCors({ origin: origins.length ? origins : true, credentials: true, exposedHeaders: ['Content-Length','Content-Type'] });
+  app.enableCors({
+    origin: origins.length ? origins : true,
+    credentials: true,
+    exposedHeaders: ['Content-Length', 'Content-Type', 'Content-Disposition'],
+  });
 
   app.use(cookieParser());
   const jwt = app.get(JwtService);

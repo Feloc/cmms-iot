@@ -48,6 +48,73 @@ function audienceLabel(aud: Report['audience']) {
   return aud === 'CUSTOMER' ? 'Cliente' : 'Interno';
 }
 
+function normalizeImageFilename(v: any): string | null {
+  if (typeof v === 'string') return v.trim() || null;
+  if (!v || typeof v !== 'object') return null;
+  const candidate = v.filename ?? v.name ?? v.file ?? v.path;
+  if (typeof candidate !== 'string') return null;
+  const safe = candidate.trim();
+  return safe || null;
+}
+
+function toChecklistView(raw: any): { templateName?: string; items: Array<{ label: string; done: boolean; notes?: string; required?: boolean }> } {
+  if (!raw) return { items: [] };
+  if (Array.isArray(raw)) {
+    return {
+      items: raw.map((it: any, idx: number) => ({
+        label: String(it?.label ?? it?.name ?? `Ítem ${idx + 1}`),
+        done: !!(it?.done ?? it?.checked),
+        notes: it?.notes ? String(it.notes) : '',
+        required: !!it?.required,
+      })),
+    };
+  }
+  if (Array.isArray(raw?.items)) {
+    return {
+      templateName: raw?.templateName ? String(raw.templateName) : undefined,
+      items: raw.items.map((it: any, idx: number) => ({
+        label: String(it?.label ?? it?.name ?? `Ítem ${idx + 1}`),
+        done: !!(it?.done ?? it?.checked),
+        notes: it?.notes ? String(it.notes) : '',
+        required: !!it?.required,
+      })),
+    };
+  }
+  return { items: [] };
+}
+
+function resolveChecklist(formData: any, soTypeKey: string) {
+  const byType = (formData?.checklists && typeof formData.checklists === 'object') ? formData.checklists : {};
+  let selected: any = null;
+
+  if (soTypeKey) {
+    selected =
+      (byType as any)[soTypeKey] ??
+      (byType as any)[soTypeKey.toLowerCase()] ??
+      Object.entries(byType as Record<string, any>).find(([k]) => String(k).toUpperCase() === soTypeKey)?.[1] ??
+      null;
+  }
+  if (!selected) {
+    const first = Object.values(byType as any)[0];
+    if (first) selected = first;
+  }
+  if (!selected && formData?.checklist) selected = formData.checklist;
+
+  const view = toChecklistView(selected);
+  if (view.items.length > 0) return view;
+
+  if (formData?.checked && typeof formData.checked === 'object') {
+    const items = Object.entries(formData.checked as Record<string, any>).map(([label, val]) => ({
+      label,
+      done: !!val,
+      notes: '',
+      required: false,
+    }));
+    return { items };
+  }
+  return { items: [] };
+}
+
 export default function ServiceOrderReportPage() {
   const { id, reportId } = useParams<{ id: string; reportId: string }>();
   const { data: session } = useSession();
@@ -69,6 +136,16 @@ export default function ServiceOrderReportPage() {
     auth.token,
     auth.tenantSlug,
   );
+  const { data: liveSo } = useApiSWR<any>(
+    id ? `/service-orders/${id}` : null,
+    auth.token,
+    auth.tenantSlug,
+  );
+  const { data: liveHourmeter } = useApiSWR<any>(
+    id ? `/service-orders/${id}/hourmeter?limit=5` : null,
+    auth.token,
+    auth.tenantSlug,
+  );
 
   function revokeAll(list: PhotoItem[]) {
     for (const it of list) {
@@ -80,7 +157,7 @@ export default function ServiceOrderReportPage() {
 
   // Cargar fotos como blobs para que funcionen con auth + tenant (y se impriman en PDF)
   const imageKey = Array.isArray((data as any)?.data?.images)
-    ? ((data as any).data.images as string[]).join('|')
+    ? ((data as any).data.images as any[]).map(normalizeImageFilename).filter(Boolean).join('|')
     : '';
 
   useEffect(() => {
@@ -90,7 +167,21 @@ export default function ServiceOrderReportPage() {
       if (!auth.token || !auth.tenantSlug) return;
       if (!data) return;
 
-      const files = Array.isArray((data as any)?.data?.images) ? ((data as any).data.images as string[]) : [];
+      const snapshotFiles = Array.isArray((data as any)?.data?.images)
+        ? ((data as any).data.images as any[]).map(normalizeImageFilename).filter((v): v is string => !!v)
+        : [];
+      let files = snapshotFiles;
+      if (!files.length) {
+        const listResp = await fetch(`${apiBase}/service-orders/${id}/attachments?type=IMAGE`, {
+          method: 'GET',
+          headers,
+        });
+        if (listResp.ok) {
+          const json = await listResp.json().catch(() => ({ items: [] as string[] }));
+          files = Array.isArray(json?.items) ? (json.items as any[]).map(normalizeImageFilename).filter((v): v is string => !!v) : [];
+        }
+      }
+      files = Array.from(new Set(files));
       if (!files.length) {
         setPhotos((prev) => {
           revokeAll(prev);
@@ -148,22 +239,25 @@ export default function ServiceOrderReportPage() {
 
   const snap = data.data ?? {};
   const tenant = snap.tenant ?? null;
-  const so = snap.serviceOrder ?? {};
-  const asset = snap.asset ?? null;
+  const so = (snap.serviceOrder && typeof snap.serviceOrder === 'object') ? snap.serviceOrder : (liveSo ?? {});
+  const asset = snap.asset ?? liveSo?.asset ?? null;
   const op = snap.operationalTimes ?? { segments: [] };
-  const parts = snap.parts ?? { required: [], replaced: [] };
+  const parts = snap.parts ?? null;
   const hourmeter = snap.hourmeter ?? { latest: null, byOrder: [] };
 
-  const formData = so.formData ?? {};
+  const formData = (so.formData && typeof so.formData === 'object')
+    ? so.formData
+    : ((liveSo?.formData && typeof liveSo.formData === 'object') ? liveSo.formData : {});
   const notes = String(formData?.notes ?? '').trim();
   const result = String(formData?.result ?? '').trim();
   const soTypeKey = String(so.serviceOrderType ?? '').toUpperCase();
-  const checklists = (formData?.checklists && typeof formData.checklists === 'object') ? formData.checklists : {};
-  const primaryChecklist = (soTypeKey && (checklists as any)[soTypeKey]) ? (checklists as any)[soTypeKey] : null;
-  const fallbackChecklist = !primaryChecklist ? (Object.values(checklists as any)[0] as any) : null;
-  const checklist = primaryChecklist ?? fallbackChecklist;
-  const checklistItems = Array.isArray(checklist?.items) ? checklist.items : [];
-  const workLogs = (snap.workLogs ?? []) as Array<{
+  const checklistView = resolveChecklist(formData, soTypeKey);
+  const checklistItems = checklistView.items;
+
+  const rawWorkLogs = (Array.isArray(snap.workLogs) && snap.workLogs.length > 0)
+    ? snap.workLogs
+    : (Array.isArray(liveSo?.workLogs) ? liveSo.workLogs : []);
+  const workLogs = rawWorkLogs as Array<{
     id: string;
     userId: string;
     startedAt: string;
@@ -185,6 +279,24 @@ export default function ServiceOrderReportPage() {
       }, new Map<string, { userId: string; name: string; logs: number; minutes: number }>())
       .values(),
   ).sort((a, b) => b.minutes - a.minutes);
+  const technicians = participants.map((p) => p.name).filter(Boolean);
+  const visibleSegments = (op.segments ?? []).filter((s: any) => {
+    const label = String(s?.label ?? '').toLowerCase();
+    const key = String(s?.key ?? '').toLowerCase();
+    return !label.includes('desplazamiento') && key !== 'travel' && key !== 'desplazamiento';
+  });
+  const requiredParts = Array.isArray(parts?.required)
+    ? parts.required
+    : (Array.isArray(liveSo?.serviceOrderParts) ? liveSo.serviceOrderParts.filter((p: any) => String(p?.stage ?? 'REQUIRED') === 'REQUIRED') : []);
+  const replacedParts = Array.isArray(parts?.replaced)
+    ? parts.replaced
+    : (Array.isArray(liveSo?.serviceOrderParts) ? liveSo.serviceOrderParts.filter((p: any) => String(p?.stage ?? 'REQUIRED') === 'REPLACED') : []);
+  const hasParts = requiredParts.length > 0 || replacedParts.length > 0;
+  const hourmeterReading =
+    ((hourmeter?.byOrder ?? [])[0]?.reading ?? null) ??
+    (hourmeter?.latest?.reading ?? null) ??
+    ((liveHourmeter?.byOrder ?? [])[0]?.reading ?? null) ??
+    (liveHourmeter?.latest?.reading ?? null);
 
   return (
     <div className="p-6 max-w-4xl mx-auto space-y-6">
@@ -228,10 +340,6 @@ export default function ServiceOrderReportPage() {
 
       {/* Datos OS */}
       <section className="border rounded p-4 space-y-3">
-        <div className="flex items-center justify-between flex-wrap gap-2">
-          <div className="font-semibold">OS: {so.id}</div>
-          <div className="text-sm">Estado: <b>{String(so.status ?? '')}</b></div>
-        </div>
         <div>
           <div className="text-lg font-semibold">{so.title}</div>
           {so.description ? <div className="text-sm text-gray-700 whitespace-pre-wrap">{so.description}</div> : null}
@@ -245,30 +353,15 @@ export default function ServiceOrderReportPage() {
             <div className="text-gray-600">{asset?.brand ?? ''} {asset?.model ?? ''} {asset?.serialNumber ? `· SN: ${asset.serialNumber}` : ''}</div>
           </div>
           <div className="border rounded p-3">
-            <div className="font-medium mb-1">Asignaciones de programación</div>
-            {(so.assignments ?? []).length > 0 ? (
+            <div className="font-medium mb-1">Tecnico</div>
+            {technicians.length > 0 ? (
               <ul className="list-disc pl-5">
-                {(so.assignments ?? []).map((a: any) => (
-                  <li key={a.id}>{a.user?.name ?? a.userId} ({a.role})</li>
+                {technicians.map((name, idx) => (
+                  <li key={`${name}-${idx}`}>{name}</li>
                 ))}
               </ul>
             ) : (
-              <div className="text-gray-600">Sin asignaciones activas.</div>
-            )}
-
-            <div className="font-medium mt-3 mb-1">Participantes reales (según WorkLogs)</div>
-            {data.audience !== 'INTERNAL' ? (
-              <div className="text-gray-600">Visible en reporte interno.</div>
-            ) : participants.length > 0 ? (
-              <ul className="list-disc pl-5">
-                {participants.map((p) => (
-                  <li key={p.userId}>
-                    {p.name} · Tramos: {p.logs} · Tiempo: {fmtMins(p.minutes)}
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <div className="text-gray-600">Sin participación registrada en WorkLogs.</div>
+              <div className="text-gray-600">Sin participación registrada.</div>
             )}
           </div>
         </div>
@@ -276,7 +369,7 @@ export default function ServiceOrderReportPage() {
 
       {/* Tiempos operativos */}
       <section className="border rounded p-4 space-y-3">
-        <div className="font-semibold">Tiempos operativos reales</div>
+        <div className="font-semibold">Tiempos</div>
         <div className="border rounded">
           <table className="w-full text-sm">
             <thead>
@@ -288,7 +381,7 @@ export default function ServiceOrderReportPage() {
               </tr>
             </thead>
             <tbody>
-              {(op.segments ?? []).map((s: any) => (
+              {visibleSegments.map((s: any) => (
                 <tr key={s.key} className="border-b last:border-b-0">
                   <td className="p-2">{String(s.label ?? '').replace(/\s*\([^)]*\)\s*/g, '').trim()}</td>
                   <td className="p-2">{fmtDateTime(s.start)}</td>
@@ -305,30 +398,35 @@ export default function ServiceOrderReportPage() {
       <section className="border rounded p-4 space-y-4">
         <div className="font-semibold">Checklist, resultado y observaciones</div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
-          <div className="border rounded p-3">
-            <div className="font-medium mb-1">Observaciones</div>
-            {notes ? <div className="whitespace-pre-wrap">{notes}</div> : <div className="text-gray-600">—</div>}
+        {(notes || result) ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+            {notes ? (
+              <div className="border rounded p-3">
+                <div className="font-medium mb-1">Observaciones</div>
+                <div className="whitespace-pre-wrap">{notes}</div>
+              </div>
+            ) : null}
+            {result ? (
+              <div className="border rounded p-3">
+                <div className="font-medium mb-1">Resultado</div>
+                <div className="whitespace-pre-wrap">{result}</div>
+              </div>
+            ) : null}
           </div>
-          <div className="border rounded p-3">
-            <div className="font-medium mb-1">Resultado</div>
-            {result ? <div className="whitespace-pre-wrap">{result}</div> : <div className="text-gray-600">—</div>}
-          </div>
-        </div>
+        ) : null}
 
         <div className="space-y-2">
           <div className="text-sm font-medium">Checklist</div>
           {checklistItems.length > 0 ? (
             <>
-              {checklist?.templateName ? (
-                <div className="text-xs text-gray-600">{checklist.templateName}</div>
+              {checklistView?.templateName ? (
+                <div className="text-xs text-gray-600">{checklistView.templateName}</div>
               ) : null}
               <div className="border rounded overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b bg-gray-50">
                       <th className="text-left p-2">Ítem</th>
-                      <th className="text-left p-2">Requerido</th>
                       <th className="text-left p-2">Estado</th>
                       <th className="text-left p-2">Nota</th>
                     </tr>
@@ -337,7 +435,6 @@ export default function ServiceOrderReportPage() {
                     {checklistItems.map((it: any, idx: number) => (
                       <tr key={idx} className="border-b last:border-b-0">
                         <td className="p-2">{it.label ?? '-'}</td>
-                        <td className="p-2">{it.required ? 'Sí' : 'No'}</td>
                         <td className="p-2">{it.done ? 'OK' : 'Pendiente'}</td>
                         <td className="p-2">{it.notes ? <span className="whitespace-pre-wrap">{String(it.notes)}</span> : <span className="text-gray-600">—</span>}</td>
                       </tr>
@@ -356,81 +453,50 @@ export default function ServiceOrderReportPage() {
       <section className="border rounded p-4 space-y-3">
         <div className="font-semibold">Horómetro</div>
         <div className="text-sm">
-          Última lectura del activo:{' '}
-          {hourmeter?.latest?.reading != null ? (
-            <b>
-              {hourmeter.latest.reading} h · {fmtDateTime(hourmeter.latest.readingAt)}
-            </b>
+          {hourmeterReading != null ? (
+            <b>{hourmeterReading} h</b>
           ) : (
             <span className="text-gray-600">Sin lectura registrada.</span>
           )}
         </div>
-        {(hourmeter?.byOrder ?? []).length > 0 ? (
-          <div className="border rounded overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b bg-gray-50">
-                  <th className="text-left p-2">Lectura</th>
-                  <th className="text-left p-2">Fase</th>
-                  <th className="text-left p-2">Fecha</th>
-                  <th className="text-left p-2">Nota</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(hourmeter.byOrder ?? []).map((r: any, idx: number) => (
-                  <tr key={idx} className="border-b last:border-b-0">
-                    <td className="p-2">{r?.reading ?? '-'} h</td>
-                    <td className="p-2">{r?.phase ?? 'OTHER'}</td>
-                    <td className="p-2">{fmtDateTime(r?.readingAt)}</td>
-                    <td className="p-2">{r?.note ? String(r.note) : <span className="text-gray-600">—</span>}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <div className="text-sm text-gray-600">Sin lecturas registradas en esta OS.</div>
-        )}
       </section>
 
       {/* Repuestos */}
-      <section className="border rounded p-4 space-y-4">
-        <div className="font-semibold">Repuestos</div>
+      {hasParts ? (
+        <section className="border rounded p-4 space-y-4">
+          <div className="font-semibold">Repuestos</div>
 
-        <div className="space-y-2">
-          <div className="text-sm font-medium">Necesarios (diagnóstico)</div>
-          {(parts.required ?? []).length > 0 ? (
-            <ul className="list-disc pl-5 text-sm">
-              {(parts.required ?? []).map((p: any) => (
-                <li key={p.id}>
-                  {(p.inventoryItem ? `${p.inventoryItem.sku} — ${p.inventoryItem.name}` : p.freeText ?? '-')}
-                  <span className="text-gray-600"> · Qty: {p.qty}</span>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <div className="text-sm text-gray-600">Sin repuestos necesarios.</div>
-          )}
-        </div>
+          {requiredParts.length > 0 ? (
+            <div className="space-y-2">
+              <div className="text-sm font-medium">Necesarios (diagnóstico)</div>
+              <ul className="list-disc pl-5 text-sm">
+                {requiredParts.map((p: any) => (
+                  <li key={p.id}>
+                    {(p.inventoryItem ? `${p.inventoryItem.sku} — ${p.inventoryItem.name}` : p.freeText ?? '-')}
+                    <span className="text-gray-600"> · Qty: {p.qty}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
 
-        <div className="space-y-2">
-          <div className="text-sm font-medium">Cambiados (historial)</div>
-          {(parts.replaced ?? []).length > 0 ? (
-            <ul className="list-disc pl-5 text-sm">
-              {(parts.replaced ?? []).map((p: any) => (
-                <li key={p.id}>
-                  {(p.inventoryItem ? `${p.inventoryItem.sku} — ${p.inventoryItem.name}` : p.freeText ?? '-')}
-                  <span className="text-gray-600"> · Qty: {p.qty}</span>
-                  {p.replacedAt ? <span className="text-gray-600"> · {String(p.replacedAt).slice(0, 10)}</span> : null}
-                  {p.replacedByUser?.name ? <span className="text-gray-600"> · Por: {p.replacedByUser.name}</span> : null}
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <div className="text-sm text-gray-600">Sin repuestos cambiados.</div>
-          )}
-        </div>
-      </section>
+          {replacedParts.length > 0 ? (
+            <div className="space-y-2">
+              <div className="text-sm font-medium">Cambiados (historial)</div>
+              <ul className="list-disc pl-5 text-sm">
+                {replacedParts.map((p: any) => (
+                  <li key={p.id}>
+                    {(p.inventoryItem ? `${p.inventoryItem.sku} — ${p.inventoryItem.name}` : p.freeText ?? '-')}
+                    <span className="text-gray-600"> · Qty: {p.qty}</span>
+                    {p.replacedAt ? <span className="text-gray-600"> · {String(p.replacedAt).slice(0, 10)}</span> : null}
+                    {p.replacedByUser?.name ? <span className="text-gray-600"> · Por: {p.replacedByUser.name}</span> : null}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+        </section>
+      ) : null}
 
       {/* Fotos */}
       <section className="border rounded p-4 space-y-3">

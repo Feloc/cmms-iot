@@ -22,6 +22,9 @@ import { UpsertServiceOrderIssueDto, CreateCorrectiveFromIssueDto } from './dto/
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
+import * as os from 'os';
+import { spawn } from 'child_process';
+import { pathToFileURL } from 'url';
 
 type Unit = 'DAY' | 'MONTH' | 'YEAR';
 
@@ -2784,6 +2787,132 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
     return rep;
   }
 
+  async getReportPdf(serviceOrderId: string, reportId: string) {
+    const rep = await this.getReport(serviceOrderId, reportId);
+    const tenantId = this.getTenantId();
+    const snapshot = ((rep as any)?.data && typeof (rep as any).data === 'object') ? ({ ...(rep as any).data } as any) : {};
+
+    const soLive = await this.prisma.workOrder.findFirst({
+      where: { id: serviceOrderId, tenantId, kind: 'SERVICE_ORDER' },
+      include: {
+        serviceOrderParts: {
+          orderBy: [{ stage: 'asc' }, { createdAt: 'asc' }],
+          include: { inventoryItem: true, replacedByUser: { select: { id: true, name: true, email: true, role: true } } },
+        },
+        workLogs: { orderBy: { startedAt: 'asc' } },
+      },
+    });
+    if (!soLive) throw new NotFoundException('Service order not found');
+
+    const assetCode = String((snapshot?.serviceOrder as any)?.assetCode ?? (soLive as any).assetCode ?? '');
+    const assetLive = assetCode
+      ? await this.prisma.asset.findFirst({
+          where: { tenantId, code: assetCode },
+          select: { id: true, code: true, customer: true, name: true, brand: true, model: true, serialNumber: true },
+        })
+      : null;
+
+    if (!snapshot.serviceOrder || typeof snapshot.serviceOrder !== 'object') snapshot.serviceOrder = {};
+    snapshot.serviceOrder = {
+      ...(snapshot.serviceOrder ?? {}),
+      id: (snapshot.serviceOrder as any)?.id ?? (soLive as any).id,
+      title: (snapshot.serviceOrder as any)?.title ?? (soLive as any).title,
+      description: (snapshot.serviceOrder as any)?.description ?? (soLive as any).description ?? null,
+      serviceOrderType: (snapshot.serviceOrder as any)?.serviceOrderType ?? (soLive as any).serviceOrderType ?? null,
+      formData:
+        (snapshot.serviceOrder as any)?.formData && typeof (snapshot.serviceOrder as any).formData === 'object'
+          ? (snapshot.serviceOrder as any).formData
+          : ((soLive as any).formData ?? {}),
+      technicianSignature: (snapshot.serviceOrder as any)?.technicianSignature ?? (soLive as any).technicianSignature ?? null,
+      receiverSignature: (snapshot.serviceOrder as any)?.receiverSignature ?? (soLive as any).receiverSignature ?? null,
+      assetCode: (snapshot.serviceOrder as any)?.assetCode ?? (soLive as any).assetCode ?? null,
+    };
+
+    if (!snapshot.asset && assetLive) snapshot.asset = assetLive;
+    if (!snapshot.tenant || typeof snapshot.tenant !== 'object') snapshot.tenant = {};
+
+    if (!Array.isArray(snapshot.workLogs) || snapshot.workLogs.length === 0) {
+      const rawLogs = (((soLive as any).workLogs ?? []) as any[]);
+      const logUserIds = Array.from(new Set(rawLogs.map((w: any) => w.userId).filter(Boolean)));
+      const logUsers = logUserIds.length
+        ? await this.prisma.user.findMany({
+            where: { tenantId, id: { in: logUserIds } },
+            select: { id: true, name: true, email: true, role: true },
+          })
+        : [];
+      const userById = new Map(logUsers.map((u) => [u.id, u]));
+      snapshot.workLogs = rawLogs.map((w: any) => ({
+        id: w.id,
+        userId: w.userId,
+        startedAt: w.startedAt,
+        endedAt: w.endedAt ?? null,
+        note: w.note ?? null,
+        source: w.source ?? null,
+        user: userById.get(w.userId) ?? null,
+      }));
+    }
+
+    const parts = snapshot.parts ?? {};
+    const hasRequired = Array.isArray(parts?.required) && parts.required.length > 0;
+    const hasReplaced = Array.isArray(parts?.replaced) && parts.replaced.length > 0;
+    if (!hasRequired && !hasReplaced) {
+      const liveParts = ((soLive as any).serviceOrderParts ?? []) as any[];
+      snapshot.parts = {
+        required: liveParts
+          .filter((p) => String(p.stage || 'REQUIRED') === 'REQUIRED')
+          .map((p) => ({
+            id: p.id,
+            qty: p.qty,
+            notes: p.notes ?? null,
+            freeText: p.freeText ?? null,
+            inventoryItem: p.inventoryItem ? { id: p.inventoryItem.id, sku: p.inventoryItem.sku, name: p.inventoryItem.name, model: p.inventoryItem.model ?? null } : null,
+          })),
+        replaced: liveParts
+          .filter((p) => String(p.stage || 'REQUIRED') === 'REPLACED')
+          .map((p) => ({
+            id: p.id,
+            qty: p.qty,
+            notes: p.notes ?? null,
+            freeText: p.freeText ?? null,
+            replacedAt: p.replacedAt ?? null,
+            replacedByUser: p.replacedByUser ? { id: p.replacedByUser.id, name: p.replacedByUser.name, email: p.replacedByUser.email, role: p.replacedByUser.role } : null,
+            inventoryItem: p.inventoryItem ? { id: p.inventoryItem.id, sku: p.inventoryItem.sku, name: p.inventoryItem.name, model: p.inventoryItem.model ?? null } : null,
+          })),
+      };
+    }
+
+    const hm = snapshot.hourmeter ?? {};
+    const hasHmLatest = hm?.latest?.reading != null;
+    const hasHmByOrder = Array.isArray(hm?.byOrder) && hm.byOrder.length > 0;
+    if (!hasHmLatest && !hasHmByOrder) {
+      const hmLive = await this.getHourmeter(serviceOrderId, 5).catch(() => null);
+      snapshot.hourmeter = {
+        latest: hmLive?.latest ?? null,
+        byOrder: hmLive?.byOrder ?? [],
+      };
+    }
+
+    const snapImages = Array.isArray(snapshot.images) ? snapshot.images : [];
+    let imageNames = snapImages.map((v: any) => this.normalizeReportImageFilename(v)).filter((v: string | null): v is string => !!v);
+    if (imageNames.length === 0) {
+      const imagesResp = await this.listAttachments(serviceOrderId, 'IMAGE');
+      imageNames = Array.isArray((imagesResp as any)?.items) ? ((imagesResp as any).items as any[]).map((v) => this.normalizeReportImageFilename(v)).filter((v): v is string => !!v) : [];
+      snapshot.images = imageNames;
+    }
+    imageNames = Array.from(new Set(imageNames));
+    const photos = await this.loadReportPhotoDataUris(serviceOrderId, imageNames);
+
+    const html = this.buildReportPdfHtml(rep, snapshot, photos);
+    const buffer = await this.renderReportPdfWithChromium(html);
+
+    const audience = String(rep.audience || 'CUSTOMER').toLowerCase();
+    const version = Number(rep.version || 1);
+    const safeSo = String(serviceOrderId || '').replace(/[^a-zA-Z0-9_-]/g, '');
+    const filename = `reporte-os-${safeSo}-v${version}-${audience}.pdf`;
+
+    return { buffer, filename };
+  }
+
   async createReport(serviceOrderId: string, dto: CreateServiceOrderReportDto) {
     const tenantId = this.getTenantId();
     const actorUserId = this.getUserId();
@@ -2941,9 +3070,7 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
       },
     };
 
-    if (audience === 'INTERNAL') {
-      payload.workLogs = enrichedLogs;
-    }
+    payload.workLogs = enrichedLogs;
 
     // Adjuntos: snapshot de fotos (filenames). El reporte las carga luego vía /attachments/IMAGE/:filename
     const imagesResp = await this.listAttachments(serviceOrderId, 'IMAGE');
@@ -2972,6 +3099,463 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
     });
 
     return created;
+  }
+
+  private reportFmtDateTime(iso?: string | null) {
+    if (!iso) return '-';
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return '-';
+    return d.toLocaleString('es-CO', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    });
+  }
+
+  private reportFmtDate(iso?: string | null) {
+    if (!iso) return '-';
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return '-';
+    return d.toLocaleDateString('es-CO');
+  }
+
+  private reportFmtMins(mins?: number | null) {
+    if (mins === null || mins === undefined || !isFinite(Number(mins))) return '-';
+    const value = Math.max(0, Math.round(Number(mins)));
+    if (value < 60) return `${value} min`;
+    const h = Math.floor(value / 60);
+    const m = value % 60;
+    return `${h} h ${m} min`;
+  }
+
+  private normalizeReportImageFilename(v: any): string | null {
+    if (typeof v === 'string') return v.trim() || null;
+    if (!v || typeof v !== 'object') return null;
+    const c = v.filename ?? v.name ?? v.file ?? v.path;
+    if (typeof c !== 'string') return null;
+    const safe = c.trim();
+    return safe || null;
+  }
+
+  private reportEscapeHtml(value: any): string {
+    return String(value ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  private reportEscapeHtmlWithBreaks(value: any): string {
+    return this.reportEscapeHtml(value).replace(/\r?\n/g, '<br/>');
+  }
+
+  private reportResolveChecklist(formData: any, soTypeKey: string) {
+    const byType = (formData?.checklists && typeof formData.checklists === 'object') ? formData.checklists : {};
+    let selected: any = null;
+    if (soTypeKey) {
+      selected =
+        (byType as any)[soTypeKey] ??
+        (byType as any)[soTypeKey.toLowerCase()] ??
+        Object.entries(byType as Record<string, any>).find(([k]) => String(k).toUpperCase() === soTypeKey)?.[1] ??
+        null;
+    }
+    if (!selected) {
+      const first = Object.values(byType as any)[0];
+      if (first) selected = first;
+    }
+    if (!selected && formData?.checklist) selected = formData.checklist;
+
+    let templateName = '';
+    let items: Array<{ label: string; done: boolean; notes: string }> = [];
+    if (selected && Array.isArray(selected.items)) {
+      templateName = String(selected?.templateName ?? '');
+      items = selected.items.map((it: any, idx: number) => ({
+        label: String(it?.label ?? it?.name ?? `Ítem ${idx + 1}`),
+        done: !!(it?.done ?? it?.checked),
+        notes: String(it?.notes ?? ''),
+      }));
+    } else if (Array.isArray(selected)) {
+      items = selected.map((it: any, idx: number) => ({
+        label: String(it?.label ?? it?.name ?? `Ítem ${idx + 1}`),
+        done: !!(it?.done ?? it?.checked),
+        notes: String(it?.notes ?? ''),
+      }));
+    } else if (formData?.checked && typeof formData.checked === 'object') {
+      items = Object.entries(formData.checked as Record<string, any>).map(([label, val]) => ({
+        label: String(label),
+        done: !!val,
+        notes: '',
+      }));
+    }
+    return { templateName, items };
+  }
+
+  private reportImageMime(filename: string) {
+    const ext = path.extname(String(filename || '')).toLowerCase();
+    if (ext === '.png') return 'image/png';
+    if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg';
+    if (ext === '.gif') return 'image/gif';
+    if (ext === '.webp') return 'image/webp';
+    if (ext === '.svg') return 'image/svg+xml';
+    return 'application/octet-stream';
+  }
+
+  private async loadReportPhotoDataUris(serviceOrderId: string, filenames: string[]) {
+    const out: Array<{ filename: string; dataUri: string }> = [];
+    for (const filename of filenames) {
+      try {
+        const fp = await this.getAttachmentPath(serviceOrderId, 'IMAGE', filename);
+        const buf = await fs.readFile(fp);
+        const mime = this.reportImageMime(filename);
+        out.push({ filename, dataUri: `data:${mime};base64,${buf.toString('base64')}` });
+      } catch {
+        // ignore broken files
+      }
+    }
+    return out;
+  }
+
+  private buildReportPdfHtml(rep: any, snap: any, photos: Array<{ filename: string; dataUri: string }>) {
+    const tenant = snap?.tenant ?? {};
+    const so = snap?.serviceOrder ?? {};
+    const asset = snap?.asset ?? {};
+    const op = snap?.operationalTimes ?? { segments: [] };
+    const parts = snap?.parts ?? { required: [], replaced: [] };
+    const hourmeter = snap?.hourmeter ?? { latest: null, byOrder: [] };
+    const audience = String(rep?.audience || 'CUSTOMER').toUpperCase() === 'INTERNAL' ? 'Interno' : 'Cliente';
+
+    const workLogs = Array.isArray(snap?.workLogs) ? snap.workLogs : [];
+    const participants = Array.from(
+      workLogs
+        .reduce((acc: Map<string, string>, wl: any) => {
+          const key = String(wl?.userId ?? '').trim();
+          if (!key) return acc;
+          const name = String(wl?.user?.name ?? key).trim();
+          acc.set(key, name || key);
+          return acc;
+        }, new Map<string, string>())
+        .values(),
+    );
+
+    const formData = (so?.formData && typeof so.formData === 'object') ? so.formData : {};
+    const notes = String(formData?.notes ?? '').trim();
+    const result = String(formData?.result ?? '').trim();
+    const soTypeKey = String(so?.serviceOrderType ?? '').toUpperCase();
+    const checklist = this.reportResolveChecklist(formData, soTypeKey);
+
+    const visibleSegments = (op?.segments ?? []).filter((s: any) => {
+      const label = String(s?.label ?? '').toLowerCase();
+      const key = String(s?.key ?? '').toLowerCase();
+      return !label.includes('desplazamiento') && key !== 'travel' && key !== 'desplazamiento';
+    });
+
+    const requiredParts = Array.isArray(parts?.required) ? parts.required : [];
+    const replacedParts = Array.isArray(parts?.replaced) ? parts.replaced : [];
+
+    const hourmeterReading =
+      ((hourmeter?.byOrder ?? [])[0]?.reading ?? null) ??
+      (hourmeter?.latest?.reading ?? null);
+
+    const checklistRows = checklist.items.length > 0
+      ? checklist.items
+          .map((it) => `
+            <tr>
+              <td>${this.reportEscapeHtml(it.label)}</td>
+              <td>${it.done ? 'OK' : 'Pendiente'}</td>
+              <td>${it.notes ? this.reportEscapeHtmlWithBreaks(it.notes) : '<span class="muted">—</span>'}</td>
+            </tr>`)
+          .join('')
+      : `<tr><td colspan="3" class="muted">Sin checklist registrado.</td></tr>`;
+
+    const segmentRows = visibleSegments.length > 0
+      ? visibleSegments
+          .map((s: any) => `
+            <tr>
+              <td>${this.reportEscapeHtml(String(s?.label ?? '').replace(/\s*\([^)]*\)\s*/g, '').trim())}</td>
+              <td>${this.reportEscapeHtml(this.reportFmtDateTime(s?.start ?? null))}</td>
+              <td>${this.reportEscapeHtml(this.reportFmtDateTime(s?.end ?? null))}</td>
+              <td class="right">${this.reportEscapeHtml(this.reportFmtMins(s?.durationMin))}</td>
+            </tr>`)
+          .join('')
+      : `<tr><td colspan="4" class="muted">Sin tramos registrados.</td></tr>`;
+
+    const techList = participants.length > 0
+      ? `<ul>${participants.map((name) => `<li>${this.reportEscapeHtml(name)}</li>`).join('')}</ul>`
+      : `<div class="muted">Sin participación registrada.</div>`;
+
+    const requiredPartsBlock = requiredParts.length > 0
+      ? `
+      <div class="subsection">
+        <div class="subtitle">Necesarios (diagnóstico)</div>
+        <ul>
+          ${requiredParts
+            .map((p: any) => `
+              <li>
+                ${this.reportEscapeHtml(p?.inventoryItem ? `${p.inventoryItem.sku} — ${p.inventoryItem.name}` : (p?.freeText ?? '-'))}
+                <span class="muted"> · Qty: ${this.reportEscapeHtml(p?.qty ?? '-')}</span>
+              </li>`)
+            .join('')}
+        </ul>
+      </div>`
+      : '';
+
+    const replacedPartsBlock = replacedParts.length > 0
+      ? `
+      <div class="subsection">
+        <div class="subtitle">Cambiados (historial)</div>
+        <ul>
+          ${replacedParts
+            .map((p: any) => `
+              <li>
+                ${this.reportEscapeHtml(p?.inventoryItem ? `${p.inventoryItem.sku} — ${p.inventoryItem.name}` : (p?.freeText ?? '-'))}
+                <span class="muted"> · Qty: ${this.reportEscapeHtml(p?.qty ?? '-')}</span>
+                ${p?.replacedAt ? `<span class="muted"> · ${this.reportEscapeHtml(this.reportFmtDate(p.replacedAt))}</span>` : ''}
+                ${p?.replacedByUser?.name ? `<span class="muted"> · Por: ${this.reportEscapeHtml(p.replacedByUser.name)}</span>` : ''}
+              </li>`)
+            .join('')}
+        </ul>
+      </div>`
+      : '';
+
+    const partsBlock = (requiredParts.length > 0 || replacedParts.length > 0)
+      ? `
+      <section class="card">
+        <div class="title">Repuestos</div>
+        ${requiredPartsBlock}
+        ${replacedPartsBlock}
+      </section>`
+      : '';
+
+    const photosBlock = photos.length > 0
+      ? `
+      <div class="photo-grid">
+        ${photos
+          .map((p) => `
+            <figure class="photo-card">
+              <img src="${p.dataUri}" alt="${this.reportEscapeHtml(p.filename)}" />
+              <figcaption>${this.reportEscapeHtml(p.filename)}</figcaption>
+            </figure>`)
+          .join('')}
+      </div>`
+      : `<div class="muted">Sin fotos.</div>`;
+
+    const notesResultBlock = (notes || result)
+      ? `
+      <div class="grid two">
+        ${notes ? `<div class="box"><div class="subtitle">Observaciones</div><div>${this.reportEscapeHtmlWithBreaks(notes)}</div></div>` : ''}
+        ${result ? `<div class="box"><div class="subtitle">Resultado</div><div>${this.reportEscapeHtmlWithBreaks(result)}</div></div>` : ''}
+      </div>`
+      : '';
+
+    return `<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <title>Reporte OS</title>
+  <style>
+    :root { --text: #111827; --muted: #6b7280; --line: #d1d5db; --bg: #f3f4f6; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: Arial, Helvetica, sans-serif; color: var(--text); font-size: 12px; line-height: 1.35; }
+    .page { padding: 20px; }
+    .header { display: flex; justify-content: space-between; gap: 16px; margin-bottom: 12px; }
+    .h-title { font-size: 22px; font-weight: 700; margin: 2px 0; }
+    .muted { color: var(--muted); }
+    .card { border: 1px solid var(--line); border-radius: 6px; padding: 12px; margin: 10px 0; }
+    .title { font-size: 16px; font-weight: 700; margin-bottom: 8px; }
+    .subtitle { font-weight: 700; margin-bottom: 4px; }
+    .grid { display: grid; gap: 10px; }
+    .grid.two { grid-template-columns: 1fr 1fr; }
+    .box { border: 1px solid var(--line); border-radius: 6px; padding: 8px; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { border: 1px solid var(--line); padding: 6px; vertical-align: top; }
+    th { background: var(--bg); text-align: left; }
+    .right { text-align: right; }
+    ul { margin: 0; padding-left: 18px; }
+    .subsection { margin-top: 8px; }
+    .photo-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+    .photo-card { border: 1px solid var(--line); border-radius: 6px; padding: 6px; margin: 0; }
+    .photo-card img { width: 100%; height: 160px; object-fit: cover; border-radius: 4px; display: block; }
+    .photo-card figcaption { margin-top: 4px; font-size: 10px; color: var(--muted); word-break: break-all; }
+    .brand { display: flex; gap: 12px; align-items: center; }
+    .brand img { max-height: 48px; max-width: 220px; object-fit: contain; }
+    @media print {
+      .page { padding: 0; }
+      .card { break-inside: avoid; }
+      .photo-card { break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div class="header">
+      <div>
+        <div class="muted">${this.reportEscapeHtml(audience)} · v${this.reportEscapeHtml(rep?.version ?? '-')}</div>
+        <div class="h-title">Resumen de Orden de Servicio</div>
+        <div class="muted">Generado: ${this.reportEscapeHtml(this.reportFmtDateTime(rep?.createdAt ?? null))}</div>
+      </div>
+    </div>
+
+    <section class="card">
+      <div class="brand">
+        ${tenant?.logoUrl ? `<img src="${this.reportEscapeHtml(tenant.logoUrl)}" alt="Logo" />` : ''}
+        <div>
+          <div class="subtitle">${this.reportEscapeHtml(tenant?.legalName ?? tenant?.name ?? 'Tenant')}</div>
+          <div class="muted">
+            ${tenant?.taxId ? `NIT: ${this.reportEscapeHtml(tenant.taxId)}` : ''}
+            ${tenant?.taxId && tenant?.phone ? ' · ' : ''}
+            ${tenant?.phone ? `Tel: ${this.reportEscapeHtml(tenant.phone)}` : ''}
+          </div>
+          <div class="muted">
+            ${tenant?.address ? this.reportEscapeHtml(tenant.address) : ''}
+            ${(tenant?.address && (tenant?.email || tenant?.website)) ? ' · ' : ''}
+            ${tenant?.email ? this.reportEscapeHtml(tenant.email) : ''}
+            ${(tenant?.email && tenant?.website) ? ' · ' : ''}
+            ${tenant?.website ? this.reportEscapeHtml(tenant.website) : ''}
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="title">Datos OS</div>
+      <div style="font-size: 17px; font-weight: 700;">${this.reportEscapeHtml(so?.title ?? '-')}</div>
+      ${so?.description ? `<div class="muted">${this.reportEscapeHtmlWithBreaks(so.description)}</div>` : ''}
+      <div class="grid two" style="margin-top: 8px;">
+        <div class="box">
+          <div class="subtitle">Activo</div>
+          <div><b>${this.reportEscapeHtml(asset?.code ?? so?.assetCode ?? '-')}</b> — ${this.reportEscapeHtml(asset?.name ?? '-')}</div>
+          <div class="muted">Cliente: ${this.reportEscapeHtml(asset?.customer ?? '-')}</div>
+          <div class="muted">${this.reportEscapeHtml(asset?.brand ?? '')} ${this.reportEscapeHtml(asset?.model ?? '')} ${asset?.serialNumber ? `· SN: ${this.reportEscapeHtml(asset.serialNumber)}` : ''}</div>
+        </div>
+        <div class="box">
+          <div class="subtitle">Tecnico</div>
+          ${techList}
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="title">Tiempos</div>
+      <table>
+        <thead>
+          <tr>
+            <th>Tramo</th>
+            <th>Inicio</th>
+            <th>Fin</th>
+            <th class="right">Duración</th>
+          </tr>
+        </thead>
+        <tbody>${segmentRows}</tbody>
+      </table>
+    </section>
+
+    <section class="card">
+      <div class="title">Checklist, resultado y observaciones</div>
+      ${notesResultBlock}
+      <div style="margin-top: 8px;">
+        <div class="subtitle">Checklist</div>
+        ${checklist?.templateName ? `<div class="muted" style="margin-bottom:4px;">${this.reportEscapeHtml(checklist.templateName)}</div>` : ''}
+        <table>
+          <thead>
+            <tr>
+              <th>Ítem</th>
+              <th>Estado</th>
+              <th>Nota</th>
+            </tr>
+          </thead>
+          <tbody>${checklistRows}</tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="title">Horómetro</div>
+      <div>${hourmeterReading != null ? `<b>${this.reportEscapeHtml(hourmeterReading)} h</b>` : '<span class="muted">Sin lectura registrada.</span>'}</div>
+    </section>
+
+    ${partsBlock}
+
+    <section class="card">
+      <div class="title">Fotos</div>
+      ${photosBlock}
+    </section>
+
+    <section class="card">
+      <div class="title">Firmas</div>
+      <div class="grid two">
+        <div class="box">
+          <div class="subtitle">Firma técnico</div>
+          ${so?.technicianSignature ? `<img src="${this.reportEscapeHtml(so.technicianSignature)}" alt="Firma técnico" style="width:100%;height:130px;object-fit:contain;border:1px solid var(--line);border-radius:4px;" />` : '<div class="muted">—</div>'}
+        </div>
+        <div class="box">
+          <div class="subtitle">Firma quien recibe</div>
+          ${so?.receiverSignature ? `<img src="${this.reportEscapeHtml(so.receiverSignature)}" alt="Firma quien recibe" style="width:100%;height:130px;object-fit:contain;border:1px solid var(--line);border-radius:4px;" />` : '<div class="muted">—</div>'}
+        </div>
+      </div>
+    </section>
+  </div>
+</body>
+</html>`;
+  }
+
+  private async runBinary(bin: string, args: string[]) {
+    await new Promise<void>((resolve, reject) => {
+      const cp = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+      let stderr = '';
+      cp.stderr.on('data', (d) => { stderr += String(d ?? ''); });
+      cp.on('error', (err) => reject(err));
+      cp.on('close', (code) => {
+        if (code === 0) return resolve();
+        reject(new Error(stderr || `${bin} exited with code ${code}`));
+      });
+    });
+  }
+
+  private async renderReportPdfWithChromium(html: string): Promise<Buffer> {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cmms-report-'));
+    const htmlPath = path.join(tempDir, 'report.html');
+    const pdfPath = path.join(tempDir, 'report.pdf');
+    await fs.writeFile(htmlPath, html, 'utf8');
+
+    const fileUrl = pathToFileURL(htmlPath).toString();
+    const bins = Array.from(new Set([
+      String(process.env.CHROMIUM_BIN || '').trim(),
+      'chromium',
+      'chromium-browser',
+      'google-chrome',
+      'google-chrome-stable',
+    ].filter(Boolean)));
+    const argVariants = [
+      ['--headless=new', '--disable-gpu', '--no-sandbox', '--disable-dev-shm-usage', '--allow-file-access-from-files'],
+      ['--headless', '--disable-gpu', '--no-sandbox', '--disable-dev-shm-usage', '--allow-file-access-from-files'],
+    ];
+
+    let lastError = '';
+    try {
+      for (const bin of bins) {
+        for (const baseArgs of argVariants) {
+          const args = [...baseArgs, `--print-to-pdf=${pdfPath}`, fileUrl];
+          try {
+            await this.runBinary(bin, args);
+            const out = await fs.readFile(pdfPath);
+            if (out.length > 0) return out;
+            lastError = 'PDF vacío';
+          } catch (e: any) {
+            lastError = e?.message ?? String(e ?? '');
+          }
+        }
+      }
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+    }
+
+    throw new BadRequestException(
+      `No se pudo generar el PDF maquetado. Instala Chromium en el contenedor/API y define CHROMIUM_BIN si aplica. Detalle: ${lastError || 'Chromium no disponible'}`,
+    );
   }
 
   // ---------------------------
