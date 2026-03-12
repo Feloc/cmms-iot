@@ -16,6 +16,16 @@ function excelSerialToISO(v: any): string | undefined {
   return d.toISOString().slice(0, 10);
 }
 
+function importedGuaranteeToISO(row: any): string | undefined {
+  const raw = row?.guarantee ?? row?.garantia ?? row?.Garantia ?? row?.GARANTIA;
+  return raw ? excelSerialToISO(raw) : raw;
+}
+
+function normalizeOptionalString(v: any): string | null {
+  const s = String(v ?? '').trim();
+  return s ? s : null;
+}
+
 @Injectable()
 export class AssetsImportService {
   private readonly logger = new Logger(AssetsImportService.name);
@@ -73,6 +83,8 @@ export class AssetsImportService {
           if (!r.code || !r.name) {
             failed++; issues.push({ code: r.code, error: 'code/name required' }); continue;
           }
+          const guaranteeIso = importedGuaranteeToISO(r);
+          const serialNumber = normalizeOptionalString(r.serialNumber);
           const data: any = {
             tenantId,
             code: String(r.code).trim(),
@@ -80,7 +92,8 @@ export class AssetsImportService {
             customer: (r as any).customer ?? (r as any).cliente ?? (r as any).Cliente ?? (r as any).CLIENTE ?? null,
             brand: r.brand ?? null,
             model: r.model ?? null,
-            serialNumber: r.serialNumber ?? null,
+            serialNumber,
+            guarantee: guaranteeIso ? new Date(guaranteeIso) : null,
             status: (r.status as any) || 'ACTIVE',
             criticality: (r.criticality as any) || 'MEDIUM',
             nominalPower: r.nominalPower ? Number(r.nominalPower) : null,
@@ -89,7 +102,25 @@ export class AssetsImportService {
             ingestKey: r.ingestKey ?? null,
           };
 
-          const existing = await tx.asset.findFirst({ where: { tenantId, code: data.code }, select: { id: true } });
+          const existing = await tx.asset.findFirst({
+            where: { tenantId, code: data.code },
+            select: { id: true, code: true, serialNumber: true },
+          });
+          if (serialNumber) {
+            const duplicateSerial = await tx.asset.findFirst({
+              where: {
+                tenantId,
+                serialNumber,
+                ...(existing?.id ? { id: { not: existing.id } } : {}),
+              },
+              select: { id: true, code: true },
+            });
+            if (duplicateSerial) {
+              failed++;
+              issues.push({ code: data.code, error: `serialNumber "${serialNumber}" already exists in asset ${duplicateSerial.code}` });
+              continue;
+            }
+          }
           if (existing) {
             await tx.asset.update({ where: { id: existing.id }, data });
             updated++;
@@ -120,6 +151,7 @@ export class AssetsImportService {
       ...r,
       _row: i + 1,
       acquiredOn: r?.acquiredOn ? excelSerialToISO(r.acquiredOn) : r?.acquiredOn,
+      guarantee: importedGuaranteeToISO(r),
     }));
     return { totalRows, rows: sliced };
   }
@@ -132,6 +164,7 @@ export class AssetsImportService {
     return (json as any[]).map((r) => ({
       ...r,
       acquiredOn: r?.acquiredOn ? excelSerialToISO(r.acquiredOn) : r?.acquiredOn,
+      guarantee: importedGuaranteeToISO(r),
     }));
   }
 }

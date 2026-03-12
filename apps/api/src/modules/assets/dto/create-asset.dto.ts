@@ -29,4 +29,5 @@ export class CreateAssetDto {
   @IsOptional() @IsString() customer?: string;
 
   @IsOptional() @IsDateString() acquiredOn?: string;
+  @IsOptional() @IsDateString() guarantee?: string;
 }

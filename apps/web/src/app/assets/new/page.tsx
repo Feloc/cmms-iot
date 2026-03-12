@@ -15,6 +15,7 @@ type PreviewRow = {
   brand?: string;
   model?: string;
   customer?: string;
+  guarantee?: string;
   serialNumber?: string;
   category?: string;
   location?: string;
@@ -41,6 +42,7 @@ type CreateAssetDto = {
   name: string;
   brand?: string;
   model?: string;
+  customer?: string;
   serialNumber?: string;
   nominalPower?: number;
   nominalPowerUnit?: string;
@@ -49,6 +51,7 @@ type CreateAssetDto = {
   status?: 'ACTIVE' | 'INACTIVE' | 'DECOMMISSIONED';
   criticality?: 'LOW' | 'MEDIUM' | 'HIGH';
   acquiredOn?: string; // YYYY-MM-DD
+  guarantee?: string; // YYYY-MM-DD
 };
 
 /** =========================
@@ -311,7 +314,15 @@ export default function AssetNewPage() {
         throw new Error(message);
       }
       setCreateMsg('Activo creado correctamente');
-      setForm({ code: '', name: '', customer: '', acquiredOn: undefined, status: 'ACTIVE', criticality: 'MEDIUM' } as any);
+      setForm({
+        code: '',
+        name: '',
+        customer: '',
+        guarantee: undefined,
+        acquiredOn: undefined,
+        status: 'ACTIVE',
+        criticality: 'MEDIUM',
+      } as any);
     } catch (e: any) {
       setCreateMsg(e?.message || 'Error creando el activo');
     } finally {
@@ -387,6 +398,16 @@ export default function AssetNewPage() {
     placeholder="Nombre del cliente"
   />
 </label>
+
+              <label className="text-sm">
+                <span className="block text-gray-600">Fecha garantía</span>
+                <input
+                  type="date"
+                  className="mt-1 w-full border rounded px-2 py-1"
+                  value={form.guarantee || ''}
+                  onChange={(e) => setField('guarantee', e.target.value)}
+                />
+              </label>
 
 
               <label className="text-sm">
@@ -565,6 +586,7 @@ export default function AssetNewPage() {
                       <th className="px-2 py-1 text-left">model</th>
                       <th className="px-2 py-1 text-left">serial</th>
                       <th className="px-2 py-1 text-left">cliente</th>
+                      <th className="px-2 py-1 text-left">guarantee</th>
                       <th className="px-2 py-1 text-left">category</th>
                       <th className="px-2 py-1 text-left">location</th>
                       <th className="px-2 py-1 text-left">supplier</th>
@@ -588,6 +610,7 @@ export default function AssetNewPage() {
                         <td className="px-2 py-1 border-b">{r?.model ?? ''}</td>
                         <td className="px-2 py-1 border-b">{r?.serialNumber ?? ''}</td>
                         <td className="px-2 py-1 border-b">{(r as any)?.customer ?? (r as any)?.cliente ?? (r as any)?.Cliente ?? ''}</td>
+                        <td className="px-2 py-1 border-b">{(r as any)?.guarantee ?? (r as any)?.garantia ?? (r as any)?.Garantia ?? ''}</td>
                         <td className="px-2 py-1 border-b">{r?.category ?? ''}</td>
                         <td className="px-2 py-1 border-b">{r?.location ?? ''}</td>
                         <td className="px-2 py-1 border-b">{r?.supplier ?? ''}</td>

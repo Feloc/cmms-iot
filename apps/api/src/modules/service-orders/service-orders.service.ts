@@ -1308,13 +1308,28 @@ private async assertTechCanMutateServiceOrder(
     } else if (issueStatuses.length > 1) {
       (where as any).serviceOrderIssue = { is: { status: { in: issueStatuses } } };
     }
-// Búsqueda por título/assetCode (para serie/cliente, el frontend usa /assets?search=)
     if (q.q) {
       const s = String(q.q).trim();
       if (s) {
+        const matchingCustomerAssets = await this.prisma.asset.findMany({
+          where: {
+            tenantId,
+            customer: { contains: s, mode: 'insensitive' },
+          },
+          select: { code: true },
+        });
+        const customerAssetCodes = Array.from(
+          new Set(
+            matchingCustomerAssets
+              .map((asset) => String(asset.code || '').trim())
+              .filter(Boolean),
+          ),
+        );
+
         where.OR = [
           { title: { contains: s, mode: 'insensitive' } },
           { assetCode: { contains: s, mode: 'insensitive' } },
+          ...(customerAssetCodes.length ? [{ assetCode: { in: customerAssetCodes } }] : []),
         ];
       }
     }

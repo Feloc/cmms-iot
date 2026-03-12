@@ -253,7 +253,7 @@ export default function ServiceOrdersPage() {
               {f.field === 'q' ? (
                 <input
                   className="border rounded px-3 py-2 text-sm w-[280px]"
-                  placeholder="Buscar (título, assetCode...)"
+                  placeholder="Buscar (título, código, cliente...)"
                   value={f.value}
                   onChange={(e) => setFilterValue(f.id, e.target.value)}
                 />

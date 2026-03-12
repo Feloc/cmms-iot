@@ -60,7 +60,7 @@ services:
       - /app/node_modules
       - ./storage/attachments:/app/storage/attachments
       - ./data/uploads:/app/uploads
-    command: sh -c "npx prisma generate && npx prisma db push && npm run start:dev"
+    command: sh -c "npx prisma generate && npx prisma db push --accept-data-loss && npm run start:dev"
 
   web:
     build: ./apps/web

@@ -1,2 +1,2 @@
-code,name,brand,model,serialNumber,cliente,nominalPower,nominalPowerUnit,category,location,supplier,criticality,status,acquiredOn,ingestKey
-EQ-001,Compresor 10HP,Atlas Copco,GA11,GA11-12345,Cliente Demo,7.5,kW,Planta 1,Bodega A,Proveedor X,MEDIUM,ACTIVE,2025-01-10,
+code,name,brand,model,serialNumber,cliente,guarantee,nominalPower,nominalPowerUnit,category,location,supplier,criticality,status,acquiredOn,ingestKey
+EQ-001,Compresor 10HP,Atlas Copco,GA11,GA11-12345,Cliente Demo,2026-01-10,7.5,kW,Planta 1,Bodega A,Proveedor X,MEDIUM,ACTIVE,2025-01-10,

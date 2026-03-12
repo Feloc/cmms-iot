@@ -28,6 +28,18 @@ type HourmeterBucket = 'day' | 'week' | 'month';
 export class AssetsService {
   constructor(private readonly prisma: PrismaService) {}
 
+  private normalizeOptionalString(v: any): string | null {
+    const s = String(v ?? '').trim();
+    return s ? s : null;
+  }
+
+  private assetUniqueConflictMessage(e: any, fallback: string): string {
+    const targets = Array.isArray(e?.meta?.target) ? e.meta.target.map((t: any) => String(t)) : [];
+    if (targets.includes('serialNumber')) return 'Another asset with this serial number already exists';
+    if (targets.includes('code')) return fallback;
+    return fallback;
+  }
+
   private getTenantId(): string {
     const ctx = tenantStorage.getStore();
     const tenantId = ctx?.tenantId;
@@ -41,6 +53,26 @@ export class AssetsService {
       await tx.$executeRaw`SELECT set_config('app.tenant_id', ${tenantId}, true)`;
       return fn(tx);
     });
+  }
+
+  private async assertSerialNumberAvailable(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    serialNumber: string | null,
+    excludeAssetId?: string,
+  ): Promise<void> {
+    if (!serialNumber) return;
+    const existing = await tx.asset.findFirst({
+      where: {
+        tenantId,
+        serialNumber,
+        ...(excludeAssetId ? { id: { not: excludeAssetId } } : {}),
+      },
+      select: { id: true, code: true },
+    });
+    if (existing) {
+      throw new ConflictException(`Another asset with serial number "${serialNumber}" already exists (${existing.code})`);
+    }
   }
 
   private assertUnit(v: any, field: string): Unit {
@@ -489,6 +521,7 @@ if (q.customer) where.customer = { contains: q.customer.trim(), mode: 'insensiti
 
   async create(dto: CreateAssetDto) {
     const tenantId = this.getTenantId();
+    const serialNumber = this.normalizeOptionalString(dto.serialNumber);
 
     const data: Prisma.AssetCreateInput = {
       tenant: { connect: { id: tenantId } },
@@ -497,21 +530,25 @@ if (q.customer) where.customer = { contains: q.customer.trim(), mode: 'insensiti
       customer: dto.customer?.trim() ? dto.customer.trim() : null,
       brand: dto.brand ?? null,
       model: dto.model ?? null,
-      serialNumber: dto.serialNumber ?? null,
+      serialNumber,
       nominalPower: dto.nominalPower ?? null,
       nominalPowerUnit: dto.nominalPowerUnit ?? null,
       status: (dto.status as AssetStatus) ?? AssetStatus.ACTIVE,
       criticality: (dto.criticality as AssetCriticality) ?? AssetCriticality.MEDIUM,
       acquiredOn: dto.acquiredOn ? new Date(dto.acquiredOn as any) : null,
+      guarantee: dto.guarantee ? new Date(dto.guarantee as any) : null,
       ingestKey: dto.ingestKey ?? null,
       assetTopicPrefix: dto.assetTopicPrefix ?? null,
     } as any;
 
     try {
-      return await this.withTenantRLS(async (tx) => tx.asset.create({ data }));
+      return await this.withTenantRLS(async (tx) => {
+        await this.assertSerialNumberAvailable(tx, tenantId, serialNumber);
+        return tx.asset.create({ data });
+      });
     } catch (e: any) {
       if (e?.code === 'P2002') {
-        throw new ConflictException('Asset code already exists for this tenant');
+        throw new ConflictException(this.assetUniqueConflictMessage(e, 'Asset code already exists for this tenant'));
       }
       throw e;
     }
@@ -519,6 +556,8 @@ if (q.customer) where.customer = { contains: q.customer.trim(), mode: 'insensiti
 
   async update(id: string, dto: UpdateAssetDto) {
     if (!id) throw new BadRequestException('id is required');
+    const tenantId = this.getTenantId();
+    const normalizedSerialNumber = dto.serialNumber === undefined ? undefined : this.normalizeOptionalString(dto.serialNumber);
 
     const data: Prisma.AssetUpdateInput = {
       code: dto.code?.trim(),
@@ -526,12 +565,13 @@ if (q.customer) where.customer = { contains: q.customer.trim(), mode: 'insensiti
       customer: dto.customer === undefined ? undefined : (dto.customer?.trim() ? dto.customer.trim() : null),
       brand: dto.brand,
       model: dto.model,
-      serialNumber: dto.serialNumber,
+      serialNumber: normalizedSerialNumber,
       nominalPower: dto.nominalPower,
       nominalPowerUnit: dto.nominalPowerUnit,
       status: dto.status as any,
       criticality: dto.criticality as any,
       acquiredOn: dto.acquiredOn ? new Date(dto.acquiredOn as any) : undefined,
+      guarantee: dto.guarantee === undefined ? undefined : (dto.guarantee ? new Date(dto.guarantee as any) : null),
       ingestKey: dto.ingestKey,
       assetTopicPrefix: dto.assetTopicPrefix,
     } as any;
@@ -540,11 +580,17 @@ if (q.customer) where.customer = { contains: q.customer.trim(), mode: 'insensiti
       return await this.withTenantRLS(async (tx) => {
         const existing = await tx.asset.findFirst({ where: { id } });
         if (!existing) throw new NotFoundException('Asset not found');
+        await this.assertSerialNumberAvailable(
+          tx,
+          tenantId,
+          normalizedSerialNumber === undefined ? this.normalizeOptionalString(existing.serialNumber) : normalizedSerialNumber,
+          existing.id,
+        );
         return tx.asset.update({ where: { id }, data });
       });
     } catch (e: any) {
       if (e?.code === 'P2002') {
-        throw new ConflictException('Another asset with this code already exists');
+        throw new ConflictException(this.assetUniqueConflictMessage(e, 'Another asset with this code already exists'));
       }
       throw e;
     }
