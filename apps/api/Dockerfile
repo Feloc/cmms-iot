@@ -1,23 +1,26 @@
 # ===== deps =====
-FROM node:20-alpine AS deps
+FROM node:20-bookworm-slim AS deps
 WORKDIR /app
 
-# El build context ES ./apps/api → rutas relativas
+# Prisma resuelve mejor los engines en Debian/glibc que en Alpine/musl.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates openssl \
+  && rm -rf /var/lib/apt/lists/*
+
+# El build context ES ./apps/api -> rutas relativas
 COPY package*.json ./
-# ⚠️ Para dev: usa npm install (no requiere package-lock en sync)
-RUN npm install
+RUN npm ci
 
 # ===== dev/runtime =====
-FROM node:20-alpine AS dev
+FROM node:20-bookworm-slim AS dev
 WORKDIR /app
-ENV CHROMIUM_BIN=/usr/bin/chromium-browser
-RUN apk add --no-cache chromium nss freetype harfbuzz ca-certificates ttf-freefont
+ENV CHROMIUM_BIN=/usr/bin/chromium
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends chromium fonts-liberation ca-certificates openssl \
+  && rm -rf /var/lib/apt/lists/*
 
 COPY --from=deps /app/node_modules ./node_modules
 COPY . ./
-
-# Prisma client (requiere ./prisma/schema.prisma)
-RUN npx prisma generate
 
 EXPOSE 3001
 CMD ["npm","run","start:dev"]

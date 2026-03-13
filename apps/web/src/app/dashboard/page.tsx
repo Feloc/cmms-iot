@@ -62,6 +62,8 @@ type Summary = {
 
   assets: {
     total: number;
+    inWarranty: number;
+    inWarrantyByName: Array<{ name: string; inWarranty: number }>;
     byStatus: Record<string, number>;
     byCriticality: Record<string, number>;
     criticalHigh: number;
@@ -486,8 +488,14 @@ export default function Dashboard() {
         </TabsList>
 
         <TabsContent value="assets" className="space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
             <StatCard title="Activos totales" value={isLoading ? '—' : data?.assets.total ?? 0} href="/assets" />
+            <StatCard
+              title="Activos en garantía"
+              value={isLoading ? '—' : data?.assets.inWarranty ?? 0}
+              hint="Usa guarantee o, si falta, 1 año desde adquisición"
+              href="/assets"
+            />
             <StatCard
               title="Activos críticos (HIGH)"
               value={isLoading ? '—' : data?.assets.criticalHigh ?? 0}
@@ -508,7 +516,7 @@ export default function Dashboard() {
             />
           </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
             <Card>
               <CardHeader className="flex flex-row items-center justify-between">
                 <CardTitle className="text-base">Top activos con OS abiertas</CardTitle>
@@ -566,6 +574,39 @@ export default function Dashboard() {
                           <TableCell className="font-mono">{r.assetCode}</TableCell>
                           <TableCell className="text-right">
                             <Badge variant="secondary">{r.openAlerts}</Badge>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between">
+                <CardTitle className="text-base">Equipos en garantía por name</CardTitle>
+                <Button asChild variant="secondary" size="sm">
+                  <Link href="/assets">Ver activos</Link>
+                </Button>
+              </CardHeader>
+              <CardContent>
+                {!data?.assets.inWarrantyByName?.length ? (
+                  <div className="text-sm text-neutral-500">Sin datos</div>
+                ) : (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Name</TableHead>
+                        <TableHead className="text-right">En garantía</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {data.assets.inWarrantyByName.map((r) => (
+                        <TableRow key={r.name}>
+                          <TableCell>{r.name}</TableCell>
+                          <TableCell className="text-right">
+                            <Badge variant="secondary">{r.inWarranty}</Badge>
                           </TableCell>
                         </TableRow>
                       ))}

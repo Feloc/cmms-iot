@@ -76,10 +76,48 @@ export class DashboardService {
     const { from, to, days } = parseRange(args);
 
     // --- Assets ---
-    const [assetsTotal, assetsByStatusRows, assetsByCritRows] = await Promise.all([
+    const [
+      assetsTotal,
+      assetsByStatusRows,
+      assetsByCritRows,
+      [{ count: assetsInWarranty } = { count: 0 }],
+      assetsInWarrantyByNameRows,
+    ] = await Promise.all([
       this.prisma.asset.count({ where: { tenantId } }),
       this.prisma.asset.groupBy({ by: ['status'], where: { tenantId }, _count: { id: true } }),
       this.prisma.asset.groupBy({ by: ['criticality'], where: { tenantId }, _count: { id: true } }),
+      this.prisma.$queryRaw<{ count: number }[]>(
+        Prisma.sql`
+          SELECT COUNT(*)::int AS count
+          FROM "Asset"
+          WHERE "tenantId" = ${tenantId}
+            AND COALESCE(
+              "guarantee"::date,
+              CASE
+                WHEN "acquiredOn" IS NOT NULL THEN ("acquiredOn" + INTERVAL '1 year')::date
+                ELSE NULL
+              END
+            ) >= CURRENT_DATE;
+        `
+      ),
+      this.prisma.$queryRaw<{ name: string; inWarranty: number }[]>(
+        Prisma.sql`
+          SELECT
+            COALESCE(NULLIF(BTRIM("name"), ''), '(sin nombre)') AS name,
+            COUNT(*)::int AS "inWarranty"
+          FROM "Asset"
+          WHERE "tenantId" = ${tenantId}
+            AND COALESCE(
+              "guarantee"::date,
+              CASE
+                WHEN "acquiredOn" IS NOT NULL THEN ("acquiredOn" + INTERVAL '1 year')::date
+                ELSE NULL
+              END
+            ) >= CURRENT_DATE
+          GROUP BY 1
+          ORDER BY COUNT(*) DESC, 1 ASC;
+        `
+      ),
     ]);
 
     const assetsByStatus: Record<string, number> = {};
@@ -1324,6 +1362,8 @@ const workTimeByServiceOrderType = typeEffPauseRows.map(r => {
 
       assets: {
         total: assetsTotal,
+        inWarranty: assetsInWarranty,
+        inWarrantyByName: assetsInWarrantyByNameRows,
         byStatus: assetsByStatus,
         byCriticality: assetsByCriticality,
         criticalHigh,
