@@ -12,7 +12,7 @@ if [ -d "./prisma/migrations" ] && [ "$(ls -A ./prisma/migrations 2>/dev/null)" 
   npx prisma migrate deploy
 else
   echo "[api] prisma db push (no migrations found)"
-  npx prisma db push
+  npx prisma db push --accept-data-loss
 fi
 
 echo "[api] Starting NestJS"

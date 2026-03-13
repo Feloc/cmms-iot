@@ -47,5 +47,5 @@ COPY --from=build /app/apps/api/package.json /app/apps/api/package.json
 EXPOSE 3001
 
 # 1) Aplica migraciones si existen; 2) si NO existen, usa db push (fallback para tu estado actual)
-#    Luego arranca el API.
-CMD ["sh","-lc","if [ -d apps/api/prisma/migrations ] && [ \"$(ls -A apps/api/prisma/migrations 2>/dev/null)\" ]; then echo '[startup] prisma migrate deploy'; npx prisma migrate deploy --schema apps/api/prisma/schema.prisma; else echo '[startup] WARNING: no prisma migrations found -> prisma db push (dev fallback)'; npx prisma db push --schema apps/api/prisma/schema.prisma; fi; node apps/api/dist/main.js"]
+#    Luego arranca el API solo si Prisma terminó bien.
+CMD ["sh","-lc","if [ -d apps/api/prisma/migrations ] && [ \"$(ls -A apps/api/prisma/migrations 2>/dev/null)\" ]; then echo '[startup] prisma migrate deploy'; npx prisma migrate deploy --schema apps/api/prisma/schema.prisma; else echo '[startup] WARNING: no prisma migrations found -> prisma db push (dev fallback)'; npx prisma db push --accept-data-loss --schema apps/api/prisma/schema.prisma; fi && node apps/api/dist/main.js"]

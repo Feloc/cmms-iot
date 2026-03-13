@@ -1,11 +1,20 @@
-import { IsEnum, IsOptional, IsString, IsISO8601, IsArray, IsInt, Min, MaxLength } from 'class-validator';
-import { NoticeSource, NoticeCategory, NoticeStatus, Severity } from '@prisma/client';
+import { IsOptional, IsString, IsISO8601, IsArray, IsInt, Min, MaxLength, IsIn } from 'class-validator';
 import { PartialType } from '@nestjs/mapped-types';
+
+const NOTICE_SOURCES = ['RULE', 'MANUAL', 'IMPORT'] as const;
+const NOTICE_CATEGORIES = ['INCIDENT', 'MAINT_LOG', 'CONSUMABLE_CHANGE', 'INSPECTION', 'OTHER'] as const;
+const NOTICE_STATUSES = ['OPEN', 'IN_PROGRESS', 'RESOLVED', 'CLOSED'] as const;
+const SEVERITIES = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'] as const;
+
+type NoticeSourceValue = (typeof NOTICE_SOURCES)[number];
+type NoticeCategoryValue = (typeof NOTICE_CATEGORIES)[number];
+type NoticeStatusValue = (typeof NOTICE_STATUSES)[number];
+type SeverityValue = (typeof SEVERITIES)[number];
 
 export class CreateNoticeDto {
 
-  @IsEnum(NoticeSource)
-  source!: NoticeSource;
+  @IsIn(NOTICE_SOURCES)
+  source!: NoticeSourceValue;
 
   @IsOptional()
   @IsString()
@@ -21,16 +30,16 @@ export class CreateNoticeDto {
   @IsString()
   body?: string;
 
-  @IsEnum(NoticeCategory)
-  category!: NoticeCategory;
+  @IsIn(NOTICE_CATEGORIES)
+  category!: NoticeCategoryValue;
 
   @IsOptional()
-  @IsEnum(Severity)
-  severity?: Severity;
+  @IsIn(SEVERITIES)
+  severity?: SeverityValue;
 
   @IsOptional()
-  @IsEnum(NoticeStatus)
-  status?: NoticeStatus; // default OPEN
+  @IsIn(NOTICE_STATUSES)
+  status?: NoticeStatusValue; // default OPEN
 
   @IsOptional()
   @IsString()
