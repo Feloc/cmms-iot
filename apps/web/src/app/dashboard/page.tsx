@@ -17,6 +17,7 @@ import {
   Legend,
   Bar,
   Line,
+  LabelList,
 } from 'recharts';
 
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -57,6 +58,27 @@ type OperationalTimesComparisons = {
   byLocation: OpComparisonGroup[];
 };
 
+type ScheduledNegotiationMonthRow = {
+  month: string;
+  scheduled: number;
+  pendingQuote: number;
+  pendingApproval: number;
+  approved: number;
+  confirmed: number;
+  undefinedStatus: number;
+};
+
+type ScheduledNegotiationChartRow = {
+  monthKey: string;
+  month: string;
+  scheduled: number;
+  pc: number;
+  pa: number;
+  ap: number;
+  cf: number;
+  undefinedStatus: number;
+};
+
 type Summary = {
   range: { from: string; to: string; days: number };
 
@@ -69,25 +91,6 @@ type Summary = {
     criticalHigh: number;
     withOpenServiceOrders: number;
     topAssetsByOpenSO: Array<{ assetCode: string; openSO: number }>;
-    topAssetsByOpenAlerts: Array<{ assetCode: string; openAlerts: number }>;
-  };
-
-  alerts: {
-    open: number;
-    recent: Array<{
-      id: string;
-      kind: string;
-      assetCode: string;
-      severity: string;
-      status: string;
-      createdAt: string;
-      // Campos opcionales (el backend puede variar):
-      sensor?: string | null;
-      metric?: string | null;
-      deviceId?: string | null;
-      message?: string | null;
-      title?: string | null;
-    }>;
   };
 
   service: {
@@ -100,6 +103,7 @@ type Summary = {
     mttrHours: number | null;
     trendCreated: Array<{ day: string; count: number }>;
     trendClosed: Array<{ day: string; count: number }>;
+    scheduledNegotiationByMonth: ScheduledNegotiationMonthRow[];
 
     technicianWorkload: Array<{ userId: string; name: string; openAssigned: number }>;
 
@@ -171,6 +175,78 @@ function serviceTypeLabel(v?: string | null) {
   return t;
 }
 
+function monthKeyFromValue(value: string | null | undefined) {
+  const raw = String(value ?? '').trim();
+  const directMatch = raw.match(/^(\d{4})-(\d{2})/);
+  if (directMatch) return `${directMatch[1]}-${directMatch[2]}`;
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return null;
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+
+function pctOfScheduled(value: number, scheduled: number) {
+  if (!scheduled || !Number.isFinite(value) || !Number.isFinite(scheduled)) return 0;
+  return Math.round((value / scheduled) * 100);
+}
+
+function NegotiationPercentLabel(props: any) {
+  const { x, y, width, height, value, payload } = props;
+  const numericValue = Number(value ?? 0);
+  const scheduled = Number(payload?.scheduled ?? 0);
+  if (!numericValue || !scheduled || width == null || height == null || Number(height) < 22) return null;
+  const pct = pctOfScheduled(numericValue, scheduled);
+  if (!pct) return null;
+  return (
+    <text
+      x={Number(x) + Number(width) / 2}
+      y={Number(y) + Number(height) / 2}
+      fill="#0f172a"
+      fontSize={11}
+      textAnchor="middle"
+      dominantBaseline="middle"
+    >
+      {pct}%
+    </text>
+  );
+}
+
+function NegotiationTooltip(props: any) {
+  const { active, payload, label } = props;
+  if (!active || !payload?.length) return null;
+  const row = payload[0]?.payload as ScheduledNegotiationChartRow | undefined;
+  if (!row) return null;
+  const items = [
+    { key: 'scheduled', label: 'SCHEDULED total', color: '#0f172a', value: row.scheduled, showPct: false },
+    { key: 'pc', label: 'PC', color: '#f97316', value: row.pc, showPct: true },
+    { key: 'pa', label: 'PA', color: '#f59e0b', value: row.pa, showPct: true },
+    { key: 'ap', label: 'AP', color: '#0ea5e9', value: row.ap, showPct: true },
+    { key: 'cf', label: 'CF', color: '#22c55e', value: row.cf, showPct: true },
+    { key: 'undefinedStatus', label: 'Sin definir', color: '#94a3b8', value: row.undefinedStatus, showPct: true },
+  ];
+  return (
+    <div className="rounded-md border bg-white p-3 text-sm shadow-sm">
+      <div className="mb-2 font-medium">{label}</div>
+      <div className="space-y-1">
+        {items.map((item) => {
+          const pct = item.showPct ? pctOfScheduled(item.value, row.scheduled) : null;
+          return (
+            <div key={item.key} className="flex items-center justify-between gap-3">
+              <span className="flex items-center gap-2">
+                <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ backgroundColor: item.color }} />
+                <span>{item.label}</span>
+              </span>
+              <span className="font-medium">
+                {item.value}
+                {pct != null ? ` (${pct}%)` : ''}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 type RangePreset = '1' | '7' | '30' | '90' | 'custom';
 
 function toIsoLocalDayStart(v: string) {
@@ -225,11 +301,13 @@ export default function Dashboard() {
   const [customFrom, setCustomFrom] = useState('');
   const [customTo, setCustomTo] = useState('');
   const [selectedTechId, setSelectedTechId] = useState<string>('');
+  const [selectedNegotiationMonth, setSelectedNegotiationMonth] = useState<string>('all');
   const [opDim, setOpDim] = useState<'TECHNICIAN' | 'TYPE' | 'CUSTOMER' | 'LOCATION'>('TECHNICIAN');
   const [opMetric, setOpMetric] = useState<'avg' | 'p50' | 'p90'>('p90');
   const [opSegment, setOpSegment] = useState<'travel' | 'intake' | 'handover' | 'onsite' | 'wrapup' | 'total'>('total');
 
   type DashboardKey = readonly [string, string, string];
+  type NegotiationMonthsKey = readonly [string, string, string];
 
   const dashboardQuery = useMemo(() => {
     const qs = new URLSearchParams();
@@ -254,9 +332,30 @@ export default function Dashboard() {
     return apiFetch<Summary>(url, { token: t, tenantSlug: slug });
   };
 
+  const negotiationMonthsKey: NegotiationMonthsKey | null =
+    token && tenantSlug
+      ? (['/dashboard/scheduled-negotiation-months', String(token), String(tenantSlug)] as const)
+      : null;
+
+  const fetchNegotiationMonths = (key: NegotiationMonthsKey | null) => {
+    if (!key) throw new Error('Missing negotiationMonthsKey');
+    const [url, t, slug] = key;
+    return apiFetch<ScheduledNegotiationMonthRow[]>(url, { token: t, tenantSlug: slug });
+  };
+
   const { data, error, isLoading } = useSWR<Summary, any, DashboardKey | null>(
     dashboardKey,
     fetchSummary,
+    { refreshInterval: 15000 }
+  );
+
+  const {
+    data: negotiationMonths,
+    error: negotiationMonthsError,
+    isLoading: isNegotiationMonthsLoading,
+  } = useSWR<ScheduledNegotiationMonthRow[], any, NegotiationMonthsKey | null>(
+    negotiationMonthsKey,
+    fetchNegotiationMonths,
     { refreshInterval: 15000 }
   );
 
@@ -295,8 +394,6 @@ export default function Dashboard() {
 
     return { topThroughputId, bottomThroughputId, topUtilId, bottomUtilId };
   }, [data?.service.technicianPerformance]);
-
-  const recentAlerts = data?.alerts?.recent ?? [];
 
   const customRangeError = useMemo(() => {
     if (rangePreset !== 'custom') return '';
@@ -417,6 +514,71 @@ export default function Dashboard() {
     }, {});
   }, [closedStackKeys]);
 
+  const scheduledNegotiationChart = useMemo(
+    () => {
+      const rows = negotiationMonths ?? [];
+      const result: ScheduledNegotiationChartRow[] = [];
+
+      for (const row of rows) {
+        const monthKey = monthKeyFromValue(row.month);
+        if (!monthKey) continue;
+        const scheduled = Number(row?.scheduled ?? 0);
+        const pc = Number(row?.pendingQuote ?? 0);
+        const pa = Number(row?.pendingApproval ?? 0);
+        const ap = Number(row?.approved ?? 0);
+        const cf = Number(row?.confirmed ?? 0);
+        const undefinedStatus = Math.max(0, scheduled - pc - pa - ap - cf);
+        const [year, month] = monthKey.split('-').map(Number);
+        result.push({
+          monthKey,
+          month: new Date(year, (month || 1) - 1, 1).toLocaleDateString(undefined, { month: 'short', year: '2-digit' }),
+          scheduled,
+          pc,
+          pa,
+          ap,
+          cf,
+          undefinedStatus,
+        });
+      }
+
+      return result.sort((a, b) => a.monthKey.localeCompare(b.monthKey));
+    },
+    [negotiationMonths]
+  );
+
+  const scheduledNegotiationMonthOptions = useMemo(
+    () => scheduledNegotiationChart.map((row) => ({ value: row.monthKey, label: row.month })),
+    [scheduledNegotiationChart]
+  );
+
+  useEffect(() => {
+    if (selectedNegotiationMonth === 'all') return;
+    const exists = scheduledNegotiationMonthOptions.some((option) => option.value === selectedNegotiationMonth);
+    if (!exists) setSelectedNegotiationMonth('all');
+  }, [selectedNegotiationMonth, scheduledNegotiationMonthOptions]);
+
+  const visibleScheduledNegotiationChart = useMemo(() => {
+    if (selectedNegotiationMonth === 'all') return scheduledNegotiationChart;
+    return scheduledNegotiationChart.filter((row) => row.monthKey === selectedNegotiationMonth);
+  }, [scheduledNegotiationChart, selectedNegotiationMonth]);
+
+  const scheduledNegotiationTotals = useMemo(
+    () =>
+      visibleScheduledNegotiationChart.reduce(
+        (acc, row) => {
+          acc.scheduled += row.scheduled;
+          acc.pc += row.pc;
+          acc.pa += row.pa;
+          acc.ap += row.ap;
+          acc.cf += row.cf;
+          acc.undefinedStatus += row.undefinedStatus;
+          return acc;
+        },
+        { scheduled: 0, pc: 0, pa: 0, ap: 0, cf: 0, undefinedStatus: 0 }
+      ),
+    [visibleScheduledNegotiationChart]
+  );
+
   return (
     <div className="p-6 space-y-6">
       <div className="flex items-start justify-between gap-4">
@@ -488,7 +650,7 @@ export default function Dashboard() {
         </TabsList>
 
         <TabsContent value="assets" className="space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
             <StatCard title="Activos totales" value={isLoading ? '—' : data?.assets.total ?? 0} href="/assets" />
             <StatCard
               title="Activos en garantía"
@@ -503,12 +665,6 @@ export default function Dashboard() {
               href="/assets"
             />
             <StatCard
-              title="Alertas abiertas"
-              value={isLoading ? '—' : data?.alerts.open ?? 0}
-              hint="IoT / reglas / umbrales"
-              href="/alerts"
-            />
-            <StatCard
               title="Activos con OS abiertas"
               value={isLoading ? '—' : data?.assets.withOpenServiceOrders ?? 0}
               hint="Activos con backlog"
@@ -516,7 +672,7 @@ export default function Dashboard() {
             />
           </div>
 
-          <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
             <Card>
               <CardHeader className="flex flex-row items-center justify-between">
                 <CardTitle className="text-base">Top activos con OS abiertas</CardTitle>
@@ -541,39 +697,6 @@ export default function Dashboard() {
                           <TableCell className="font-mono">{r.assetCode}</TableCell>
                           <TableCell className="text-right">
                             <Badge variant="secondary">{r.openSO}</Badge>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                )}
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between">
-                <CardTitle className="text-base">Top activos con alertas abiertas</CardTitle>
-                <Button asChild variant="secondary" size="sm">
-                  <Link href="/alerts">Ver alertas</Link>
-                </Button>
-              </CardHeader>
-              <CardContent>
-                {!data?.assets.topAssetsByOpenAlerts?.length ? (
-                  <div className="text-sm text-neutral-500">Sin datos</div>
-                ) : (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Activo</TableHead>
-                        <TableHead className="text-right">Alertas</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {data.assets.topAssetsByOpenAlerts.map(r => (
-                        <TableRow key={r.assetCode}>
-                          <TableCell className="font-mono">{r.assetCode}</TableCell>
-                          <TableCell className="text-right">
-                            <Badge variant="secondary">{r.openAlerts}</Badge>
                           </TableCell>
                         </TableRow>
                       ))}
@@ -616,6 +739,103 @@ export default function Dashboard() {
               </CardContent>
             </Card>
           </div>
+
+          <Card>
+            <CardHeader className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <CardTitle className="text-base flex items-center">
+                Negociación de OS programadas por mes
+                <HelpTip text='Cuenta todas las órdenes en estado SCHEDULED con fecha programada y las desglosa por estado comercial, sin depender del rango principal del dashboard.' />
+              </CardTitle>
+              <Select value={selectedNegotiationMonth} onValueChange={setSelectedNegotiationMonth}>
+                <SelectTrigger className="w-full md:w-[220px]">
+                  <SelectValue placeholder="Mes a visualizar" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Todos los meses</SelectItem>
+                  {scheduledNegotiationMonthOptions.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {negotiationMonthsError ? (
+                <div className="text-sm text-red-600">
+                  Error cargando negociación por mes: {String((negotiationMonthsError as any)?.message ?? negotiationMonthsError)}
+                </div>
+              ) : !visibleScheduledNegotiationChart.length ? (
+                isNegotiationMonthsLoading ? (
+                  <div className="text-sm text-neutral-500">Cargando meses con OS programadas...</div>
+                ) : (
+                  <div className="text-sm text-neutral-500">Sin meses con OS programadas</div>
+                )
+              ) : (
+                <>
+                  <div className="h-[320px]">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <ComposedChart data={visibleScheduledNegotiationChart} margin={{ top: 10, right: 18, left: 0, bottom: 0 }}>
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis dataKey="month" />
+                        <YAxis allowDecimals={false} />
+                        <Tooltip content={<NegotiationTooltip />} />
+                        <Legend />
+                        <Bar dataKey="pc" stackId="negotiation" name="PC" fill="#f97316" radius={[0, 0, 0, 0]}>
+                          <LabelList dataKey="pc" content={<NegotiationPercentLabel />} />
+                        </Bar>
+                        <Bar dataKey="pa" stackId="negotiation" name="PA" fill="#f59e0b" radius={[0, 0, 0, 0]}>
+                          <LabelList dataKey="pa" content={<NegotiationPercentLabel />} />
+                        </Bar>
+                        <Bar dataKey="ap" stackId="negotiation" name="AP" fill="#0ea5e9" radius={[0, 0, 0, 0]}>
+                          <LabelList dataKey="ap" content={<NegotiationPercentLabel />} />
+                        </Bar>
+                        <Bar dataKey="cf" stackId="negotiation" name="CF" fill="#22c55e" radius={[0, 0, 0, 0]}>
+                          <LabelList dataKey="cf" content={<NegotiationPercentLabel />} />
+                        </Bar>
+                        <Bar dataKey="undefinedStatus" stackId="negotiation" name="Sin definir" fill="#cbd5e1" radius={[4, 4, 0, 0]}>
+                          <LabelList dataKey="undefinedStatus" content={<NegotiationPercentLabel />} />
+                        </Bar>
+                        <Line type="monotone" dataKey="scheduled" name="SCHEDULED total" stroke="#0f172a" strokeWidth={2} />
+                      </ComposedChart>
+                    </ResponsiveContainer>
+                  </div>
+
+                  <div className="grid grid-cols-2 md:grid-cols-6 gap-3 text-sm">
+                    <div className="rounded-md border p-3">
+                      <div className="text-neutral-500">SCHEDULED</div>
+                      <div className="text-lg font-semibold">{scheduledNegotiationTotals.scheduled}</div>
+                    </div>
+                    <div className="rounded-md border p-3">
+                      <div className="text-neutral-500">PC</div>
+                      <div className="text-lg font-semibold">{scheduledNegotiationTotals.pc}</div>
+                      <div className="text-xs text-neutral-500">{pctOfScheduled(scheduledNegotiationTotals.pc, scheduledNegotiationTotals.scheduled)}%</div>
+                    </div>
+                    <div className="rounded-md border p-3">
+                      <div className="text-neutral-500">PA</div>
+                      <div className="text-lg font-semibold">{scheduledNegotiationTotals.pa}</div>
+                      <div className="text-xs text-neutral-500">{pctOfScheduled(scheduledNegotiationTotals.pa, scheduledNegotiationTotals.scheduled)}%</div>
+                    </div>
+                    <div className="rounded-md border p-3">
+                      <div className="text-neutral-500">AP</div>
+                      <div className="text-lg font-semibold">{scheduledNegotiationTotals.ap}</div>
+                      <div className="text-xs text-neutral-500">{pctOfScheduled(scheduledNegotiationTotals.ap, scheduledNegotiationTotals.scheduled)}%</div>
+                    </div>
+                    <div className="rounded-md border p-3">
+                      <div className="text-neutral-500">CF</div>
+                      <div className="text-lg font-semibold">{scheduledNegotiationTotals.cf}</div>
+                      <div className="text-xs text-neutral-500">{pctOfScheduled(scheduledNegotiationTotals.cf, scheduledNegotiationTotals.scheduled)}%</div>
+                    </div>
+                    <div className="rounded-md border p-3">
+                      <div className="text-neutral-500">Sin definir</div>
+                      <div className="text-lg font-semibold">{scheduledNegotiationTotals.undefinedStatus}</div>
+                      <div className="text-xs text-neutral-500">{pctOfScheduled(scheduledNegotiationTotals.undefinedStatus, scheduledNegotiationTotals.scheduled)}%</div>
+                    </div>
+                  </div>
+                </>
+              )}
+            </CardContent>
+          </Card>
         </TabsContent>
 
         <TabsContent value="service" className="space-y-4">
@@ -1249,37 +1469,6 @@ export default function Dashboard() {
         </TabsContent>
       </Tabs>
 
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between">
-          <CardTitle className="text-base">Alertas recientes</CardTitle>
-          <Button asChild variant="secondary" size="sm">
-            <Link href="/alerts">Ver todo</Link>
-          </Button>
-        </CardHeader>
-        <CardContent>
-          {recentAlerts.length === 0 ? (
-            <div className="text-sm text-neutral-500">Sin alertas</div>
-          ) : (
-            <ul className="space-y-2">
-              {recentAlerts.map((a) => {
-                const sensorLabel = a.sensor ?? a.metric ?? a.deviceId ?? '';
-                const sourceLabel = sensorLabel ? `${a.assetCode}/${sensorLabel}` : a.assetCode;
-                const msg = a.message ?? a.title ?? '—';
-
-                return (
-                  <li key={a.id} className="p-3 rounded border">
-                    <div className="text-sm">
-                      <span className="font-mono">[{a.kind}]</span>{' '}
-                      <span className="font-semibold">{sourceLabel}</span> – {msg}
-                    </div>
-                    <div className="text-xs text-neutral-500">{new Date(a.createdAt).toLocaleString()}</div>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </CardContent>
-      </Card>
     </div>
   );
 }

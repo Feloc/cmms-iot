@@ -2,6 +2,7 @@ export type ListServiceOrdersQuery = {
   q?: string;
   status?: string | string[];
   type?: string | string[];
+  commercialStatus?: string | string[];
   technicianId?: string | string[];
   hasIssue?: string | number;
   issueStatus?: string | string[];

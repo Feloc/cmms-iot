@@ -6,6 +6,13 @@ import { getTenant } from '../../common/tenant-context';
 export class DashboardController {
   constructor(private readonly svc: DashboardService) {}
 
+  @Get('scheduled-negotiation-months')
+  async scheduledNegotiationMonths() {
+    const tenantId = getTenant();
+    if (!tenantId) return [];
+    return this.svc.scheduledNegotiationMonths({ tenantId });
+  }
+
   @Get('summary')
   async summary(
     @Query('days') days?: string,

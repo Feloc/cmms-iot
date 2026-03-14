@@ -71,6 +71,48 @@ function parseRange(args: SummaryArgs) {
 export class DashboardService {
   constructor(private prisma: PrismaService) {}
 
+  async scheduledNegotiationMonths(args: { tenantId: string; from?: Date; to?: Date }) {
+    const { tenantId, from, to } = args;
+    const rangeFilter =
+      from && to
+        ? Prisma.sql`
+            AND "dueDate" >= ${from}
+            AND "dueDate" < ${to}
+          `
+        : Prisma.empty;
+
+    return this.prisma.$queryRaw<
+      Array<{
+        month: string;
+        scheduled: number;
+        pendingQuote: number;
+        pendingApproval: number;
+        approved: number;
+        confirmed: number;
+        undefinedStatus: number;
+      }>
+    >(
+      Prisma.sql`
+        SELECT
+          date_trunc('month', "dueDate")::date AS month,
+          COUNT(*)::int AS scheduled,
+          COUNT(*) FILTER (WHERE "commercialStatus" = 'PENDING_QUOTE')::int AS "pendingQuote",
+          COUNT(*) FILTER (WHERE "commercialStatus" = 'PENDING_APPROVAL')::int AS "pendingApproval",
+          COUNT(*) FILTER (WHERE "commercialStatus" = 'APPROVED')::int AS approved,
+          COUNT(*) FILTER (WHERE "commercialStatus" = 'CONFIRMED')::int AS confirmed,
+          COUNT(*) FILTER (WHERE "commercialStatus" IS NULL)::int AS "undefinedStatus"
+        FROM "WorkOrder"
+        WHERE "tenantId" = ${tenantId}
+          AND "kind" = 'SERVICE_ORDER'
+          AND "status" = 'SCHEDULED'
+          AND "dueDate" IS NOT NULL
+          ${rangeFilter}
+        GROUP BY 1
+        ORDER BY 1 ASC;
+      `
+    );
+  }
+
   async summary(args: SummaryArgs) {
     const { tenantId } = args;
     const { from, to, days } = parseRange(args);
@@ -261,6 +303,8 @@ export class DashboardService {
       `
     );
     const mttrHours = avgSeconds == null ? null : Math.round((avgSeconds / 3600) * 10) / 10;
+
+    const scheduledNegotiationByMonth = await this.scheduledNegotiationMonths({ tenantId, from, to });
 
     // Workload por técnico (asignaciones activas en backlog)
     const assignments = await this.prisma.wOAssignment.groupBy({
@@ -1387,6 +1431,7 @@ const workTimeByServiceOrderType = typeEffPauseRows.map(r => {
         mttrHours,
         trendCreated,
         trendClosed,
+        scheduledNegotiationByMonth,
         technicianWorkload,
         technicianPerformance,
         technicianWeeklyProductivity,

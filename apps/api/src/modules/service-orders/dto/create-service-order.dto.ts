@@ -15,6 +15,9 @@ export class CreateServiceOrderDto {
   /** Duración planificada en minutos (para calendario). Default recomendado: 60 */
   durationMin?: number;
 
+  /** Estado comercial / de negociación con el cliente */
+  commercialStatus?: 'PENDING_QUOTE' | 'PENDING_APPROVAL' | 'APPROVED' | 'CONFIRMED' | 'PC' | 'PA' | 'AP' | 'CF' | null;
+
   /** Solo para PREVENTIVO */
   pmPlanId?: string;
 }

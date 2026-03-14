@@ -127,6 +127,7 @@ type QuoteSummary = {
 type QuotesResponse = {
   items: QuoteSummary[];
 };
+type CommercialStatus = 'PENDING_QUOTE' | 'PENDING_APPROVAL' | 'APPROVED' | 'CONFIRMED';
 
 type ServiceOrder = {
   id: string;
@@ -134,6 +135,7 @@ type ServiceOrder = {
   description?: string | null;
   status: string;
   serviceOrderType?: string | null;
+  commercialStatus?: CommercialStatus | null;
   dueDate?: string | null;
   hasIssue: boolean;
   assetCode: string;
@@ -223,6 +225,21 @@ function statusPillClass(status: string) {
     case 'OPEN':
     default:
       return 'bg-blue-100 text-blue-900 border-blue-200';
+  }
+}
+
+function commercialStatusMeta(status?: string | null) {
+  switch (String(status || '').toUpperCase()) {
+    case 'PENDING_QUOTE':
+      return { code: 'PC', label: 'Pendiente cotizar', className: 'bg-orange-100 text-orange-900 border-orange-200' };
+    case 'PENDING_APPROVAL':
+      return { code: 'PA', label: 'Pendiente aprobación', className: 'bg-amber-100 text-amber-900 border-amber-200' };
+    case 'APPROVED':
+      return { code: 'AP', label: 'Aprobado', className: 'bg-sky-100 text-sky-900 border-sky-200' };
+    case 'CONFIRMED':
+      return { code: 'CF', label: 'Confirmado', className: 'bg-emerald-100 text-emerald-900 border-emerald-200' };
+    default:
+      return null;
   }
 }
 
@@ -323,6 +340,7 @@ export default function ServiceOrderDetailPage() {
   const [editTitle, setEditTitle] = useState('');
   const [editDescription, setEditDescription] = useState('');
   const [editStatus, setEditStatus] = useState('OPEN');
+  const [editCommercialStatus, setEditCommercialStatus] = useState('');
   const [editType, setEditType] = useState<string>('');
   const [editAssetCode, setEditAssetCode] = useState('');
   const [editPmPlanId, setEditPmPlanId] = useState('');
@@ -624,6 +642,7 @@ useEffect(() => {
   setEditTitle(data.title || '');
   setEditDescription(data.description ?? '');
   setEditStatus(String(data.status || 'OPEN'));
+  setEditCommercialStatus(String(data.commercialStatus || ''));
   setEditType(String(data.serviceOrderType || ''));
   setEditAssetCode(String(data.assetCode || ''));
   setEditPmPlanId(String(data.pmPlan?.id || ''));
@@ -656,6 +675,8 @@ const invPath = useMemo(() => {
 const myUserId = (session as any)?.user?.id as string | undefined;
 const isAssignedTech = !!myUserId && (data.assignments ?? []).some((a) => a.role === 'TECHNICIAN' && a.state === 'ACTIVE' && a.userId === myUserId);
 const canChangeStatus = isAdmin || (role === 'TECH' && isAssignedTech);
+  const commercialMeta = commercialStatusMeta(data.commercialStatus);
+  const canEditCommercialStatus = isAdmin && !['OPEN', 'CANCELED'].includes(String(data.status || '').toUpperCase());
 
   const canGenerateReport = ['COMPLETED', 'CLOSED'].includes(String(data.status || '').toUpperCase());
   const reports = (reportsData?.items ?? []) as WorkOrderReportRow[];
@@ -1159,6 +1180,11 @@ async function setTimestamp(key: TsKey, localValue: string) {
               </button>
             ) : null}
             <span className={`px-2 py-1 text-xs border rounded ${statusPillClass(data.status)}`}>{data.status}</span>
+            {commercialMeta ? (
+              <span className={`px-2 py-1 text-xs border rounded ${commercialMeta.className}`} title={commercialMeta.label}>
+                {commercialMeta.code}
+              </span>
+            ) : null}
           </div>
         </div>
         <div className="text-sm text-gray-700">
@@ -1207,6 +1233,22 @@ async function setTimestamp(key: TsKey, localValue: string) {
               <option value="CLOSED">CLOSED</option>
               <option value="CANCELED">CANCELED</option>
             </select>
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-sm font-medium">Estado negociación</label>
+            <select
+              className="border rounded px-3 py-2 w-full"
+              value={editCommercialStatus}
+              onChange={(e) => setEditCommercialStatus(e.target.value)}
+            >
+              <option value="">(sin definir)</option>
+              <option value="PENDING_QUOTE">PC · Pendiente cotizar</option>
+              <option value="PENDING_APPROVAL">PA · Pendiente aprobación</option>
+              <option value="APPROVED">AP · Aprobado</option>
+              <option value="CONFIRMED">CF · Confirmado</option>
+            </select>
+            <p className="text-xs text-gray-500">Seguimiento comercial de la OS con el cliente.</p>
           </div>
 
           <div className="space-y-1">
@@ -1282,6 +1324,7 @@ async function setTimestamp(key: TsKey, localValue: string) {
                     title: editTitle || undefined,
                     description: editDescription,
                     status: editStatus || undefined,
+                    commercialStatus: editCommercialStatus || null,
                     serviceOrderType: editType || undefined,
                     pmPlanId: editType === 'PREVENTIVO' ? (editPmPlanId || null) : null,
 },
@@ -1307,6 +1350,7 @@ async function setTimestamp(key: TsKey, localValue: string) {
               setEditTitle(data.title || '');
               setEditDescription(data.description ?? '');
               setEditStatus(String(data.status || 'OPEN'));
+              setEditCommercialStatus(String(data.commercialStatus || ''));
               setEditType(String(data.serviceOrderType || ''));
               setEditAssetCode(String(data.assetCode || ''));
               setEditPmPlanId(String(data.pmPlan?.id || ''));
@@ -1326,7 +1370,7 @@ async function setTimestamp(key: TsKey, localValue: string) {
       {/* Programación */}
       <section className="border rounded p-4 space-y-3">
         <h2 className="font-semibold">Programación</h2>
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-2">
           <div>
             <label className="text-sm font-medium">Tipo</label>
             <div className="text-sm">{data.serviceOrderType ?? '-'}</div>
@@ -1347,6 +1391,38 @@ async function setTimestamp(key: TsKey, localValue: string) {
               <option value="CANCELED">CANCELED</option>
             </select>
             <p className="text-xs text-gray-500">El calendario colorea eventos por estado.</p>
+          </div>
+          <div>
+            <label className="text-sm font-medium">Estado negociación</label>
+            {isAdmin ? (
+              <>
+                <select
+                  className="border rounded px-3 py-2 w-full"
+                  value={data.commercialStatus ?? ''}
+                  disabled={busy || !canEditCommercialStatus}
+                  onChange={(e) => patch(`/service-orders/${id}`, { commercialStatus: e.target.value || null })}
+                >
+                  <option value="">(sin definir)</option>
+                  <option value="PENDING_QUOTE">PC · Pendiente cotizar</option>
+                  <option value="PENDING_APPROVAL">PA · Pendiente aprobación</option>
+                  <option value="APPROVED">AP · Aprobado</option>
+                  <option value="CONFIRMED">CF · Confirmado</option>
+                </select>
+                <p className="text-xs text-gray-500">
+                  {!canEditCommercialStatus ? 'Disponible cuando la OS está programada o en ejecución.' : 'Seguimiento comercial con el cliente.'}
+                </p>
+              </>
+            ) : (
+              <div className="pt-2">
+                {commercialMeta ? (
+                  <span className={`px-2 py-1 text-xs border rounded ${commercialMeta.className}`} title={commercialMeta.label}>
+                    {commercialMeta.code} · {commercialMeta.label}
+                  </span>
+                ) : (
+                  <span className="text-sm text-gray-500">—</span>
+                )}
+              </div>
+            )}
           </div>
 
           <div>

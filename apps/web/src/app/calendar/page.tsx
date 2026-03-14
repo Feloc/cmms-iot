@@ -26,6 +26,7 @@ import {
 import { es } from 'date-fns/locale';
 
 type User = { id: string; name: string; email: string; role: string };
+type CommercialStatus = 'PENDING_QUOTE' | 'PENDING_APPROVAL' | 'APPROVED' | 'CONFIRMED';
 
 type ServiceOrder = {
   id: string;
@@ -34,6 +35,7 @@ type ServiceOrder = {
   assetCode: string;
   status: string;
   serviceOrderType?: string | null;
+  commercialStatus?: CommercialStatus | null;
   pmPlan?: {
     intervalHours?: number | null;
   } | null;
@@ -182,13 +184,6 @@ function getPreventiveIntervalHours(so: ServiceOrder): number | null {
   return Math.round(interval);
 }
 
-function intervalHoursStyle(intervalHours: number): CSSProperties {
-  if (intervalHours === 200) return { fontWeight: 700, color: '#1d4ed8' };
-  if (intervalHours === 600) return { fontWeight: 700, color: '#c2410c' };
-  if (intervalHours === 1200) return { fontWeight: 700, color: '#b91c1c' };
-  return { fontWeight: 700, color: '#111827' };
-}
-
 function buildOrderedEventText(so: ServiceOrder) {
   const customer = so.asset?.customer?.trim() ? so.asset.customer.trim() : '';
   const serviceType = so.serviceOrderType?.trim() ? so.serviceOrderType.trim() : '';
@@ -196,9 +191,14 @@ function buildOrderedEventText(so: ServiceOrder) {
   const serviceTypeWithInterval = serviceType
     ? `${serviceType}${intervalHours != null ? ` ${intervalHours}h` : ''}`
     : '';
-  const assetName = so.asset?.name?.trim() ? so.asset.name.trim() : (so.assetCode?.trim() || '');
+  const assetCode = so.assetCode?.trim() ? so.assetCode.trim() : '';
+  const assetName = so.asset?.name?.trim() ? so.asset.name.trim() : assetCode;
   const assetModel = so.asset?.model?.trim() ? so.asset.model.trim() : '';
-  const serial = so.asset?.serialNumber?.trim() ? so.asset.serialNumber.trim() : '';
+  const rawSerial = so.asset?.serialNumber?.trim() ? so.asset.serialNumber.trim() : '';
+  const serial =
+    isSameDisplayValue(rawSerial, assetCode) || isSameDisplayValue(rawSerial, assetName)
+      ? ''
+      : rawSerial;
   const description = so.description?.trim() ? so.description.trim() : '';
 
   return [customer, serviceTypeWithInterval, assetName, assetModel, serial, description].filter(Boolean).join(' · ');
@@ -208,6 +208,77 @@ function clampText(s: string, max: number) {
   const t = (s || '').trim();
   if (t.length <= max) return t;
   return t.slice(0, max - 1) + '…';
+}
+
+function commercialStatusMeta(status?: string | null) {
+  switch (String(status || '').trim().toUpperCase()) {
+    case 'PENDING_QUOTE':
+      return { code: 'PC', label: 'Pendiente cotizar' };
+    case 'PENDING_APPROVAL':
+      return { code: 'PA', label: 'Pendiente aprobacion' };
+    case 'APPROVED':
+      return { code: 'AP', label: 'Aprobado' };
+    case 'CONFIRMED':
+      return { code: 'CF', label: 'Confirmado' };
+    default:
+      return null;
+  }
+}
+
+function normalizeComparableText(value?: string | null) {
+  return String(value ?? '')
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '');
+}
+
+function isSameDisplayValue(a?: string | null, b?: string | null) {
+  const left = normalizeComparableText(a);
+  const right = normalizeComparableText(b);
+  return !!left && !!right && left === right;
+}
+
+function buildEventContent(so: ServiceOrder) {
+  const commercial = commercialStatusMeta(so.commercialStatus);
+  const customer = so.asset?.customer?.trim() ? so.asset.customer.trim() : '';
+  const serviceType = so.serviceOrderType?.trim() ? so.serviceOrderType.trim() : '';
+  const intervalHours = getPreventiveIntervalHours(so);
+  const serviceLabel = serviceType
+    ? `${serviceType}${intervalHours != null ? ` ${intervalHours}h` : ''}`
+    : '';
+  const assetCode = so.assetCode?.trim() ? so.assetCode.trim() : '';
+  const assetName = so.asset?.name?.trim() ? so.asset.name.trim() : '';
+  const assetLabel =
+    assetCode && assetName && assetCode.toUpperCase() !== assetName.toUpperCase()
+      ? `${assetCode} · ${assetName}`
+      : assetCode || assetName;
+  const assetModel = so.asset?.model?.trim() ? so.asset.model.trim() : '';
+  const rawSerial = so.asset?.serialNumber?.trim() ? so.asset.serialNumber.trim() : '';
+  const serial =
+    isSameDisplayValue(rawSerial, assetCode) || isSameDisplayValue(rawSerial, assetName)
+      ? ''
+      : rawSerial;
+  const metaLabel = [assetModel, serial ? `S/N ${serial}` : ''].filter(Boolean).join(' · ');
+  const description = so.description?.trim() ? so.description.trim() : '';
+  const fullLabel = [
+    commercial ? `${commercial.code} ${commercial.label}` : '',
+    customer,
+    serviceLabel,
+    assetLabel,
+    metaLabel,
+    description,
+  ].filter(Boolean).join(' · ');
+
+  return { commercial, customer, serviceLabel, assetLabel, metaLabel, description, fullLabel };
+}
+
+function lineClampStyle(lines: number): CSSProperties {
+  return {
+    display: '-webkit-box',
+    WebkitBoxOrient: 'vertical',
+    WebkitLineClamp: lines,
+    overflow: 'hidden',
+  };
 }
 
 function normalizeResourceId(r: any): string {
@@ -369,12 +440,8 @@ export default function CalendarPage() {
               ? activeAssignments.map((a) => ({ assignmentId: a.assignmentId, resourceId: a.technicianId }))
               : [{ assignmentId: null, resourceId: UNASSIGNED }];
           const byTechSlots = onlyTechId ? allSlots.filter((s) => s.resourceId === onlyTechId) : allSlots;
-          const slots =
-            view === Views.DAY && !onlyTechId
-              ? byTechSlots.filter((s) => dayVisibleResourceIds.includes(s.resourceId))
-              : byTechSlots;
 
-          return slots.map((slot) => ({
+          return byTechSlots.map((slot) => ({
             id: slot.assignmentId ? `${so.id}:${slot.assignmentId}` : `${so.id}:UNASSIGNED`,
             soId: so.id,
             assignmentId: slot.assignmentId,
@@ -434,7 +501,7 @@ export default function CalendarPage() {
     if (!auth.token || !auth.tenantSlug) return;
     loadEvents();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [auth.token, auth.tenantSlug, view, date, onlyTechId, dayVisibleResourceIds]);
+  }, [auth.token, auth.tenantSlug, view, date, onlyTechId]);
 
   useEffect(() => {
     if (!auth.token || !auth.tenantSlug) return;
@@ -1023,99 +1090,41 @@ function CalendarToolbar({
 
 function EventBox({ event, view, onUnschedule }: { event: CalEvent; view: View; onUnschedule: () => void }) {
   const so = event.so;
-  const orderedText = buildOrderedEventText(so) || event.title;
-  const customer = so.asset?.customer?.trim() ? so.asset.customer.trim() : '';
-  const serviceType = so.serviceOrderType?.trim() ? so.serviceOrderType.trim() : '';
-  const intervalHours = getPreventiveIntervalHours(so);
-  const assetName = so.asset?.name?.trim() ? so.asset.name.trim() : (so.assetCode?.trim() || '');
-  const assetModel = so.asset?.model?.trim() ? so.asset.model.trim() : '';
-  const serial = so.asset?.serialNumber?.trim() ? so.asset.serialNumber.trim() : '';
-  const description = so.description?.trim() ? so.description.trim() : '';
+  const content = useMemo(() => buildEventContent(so), [so]);
+  const fallbackText = buildOrderedEventText(so) || event.title;
+  const durationMin = Math.max(15, Math.round((event.end.getTime() - event.start.getTime()) / 60000));
+  const isMonth = view === Views.MONTH;
+  const isDay = view === Views.DAY;
+  const isShort = durationMin <= (isDay ? 45 : 60);
+  const isMedium = durationMin > (isDay ? 45 : 60) && durationMin <= (isDay ? 105 : 120);
+  const showDetails = durationMin > (isDay ? 105 : 120);
+  const showAction = !isMonth && durationMin >= 45;
 
-  const orderedParts = useMemo(() => {
-    const pieces: Array<JSX.Element | string> = [];
-    const pushPiece = (key: string, node: JSX.Element | string) => {
-      if (pieces.length > 0) {
-        pieces.push(<span key={`sep-${key}`} className="opacity-80">{' · '}</span>);
-      }
-      pieces.push(<span key={key}>{node}</span>);
-    };
+  const primaryLine =
+    [content.customer, content.serviceLabel].filter(Boolean).join(' · ') ||
+    content.assetLabel ||
+    content.fullLabel ||
+    fallbackText;
 
-    if (customer) {
-      pushPiece('customer', <span style={{ fontWeight: 700 }}>{customer}</span>);
-    }
-    if (serviceType) {
-      pushPiece(
-        'serviceType',
-        <span>
-          {serviceType}
-          {intervalHours != null ? (
-            <span style={intervalHoursStyle(intervalHours)}>{` ${intervalHours}h`}</span>
-          ) : null}
-        </span>,
-      );
-    }
-    if (assetName) pushPiece('assetName', assetName);
-    if (assetModel) pushPiece('assetModel', assetModel);
-    if (serial) pushPiece('serial', serial);
-    if (description) pushPiece('description', description);
+  const secondaryLine =
+    [content.assetLabel, content.metaLabel].filter(Boolean).join(' · ') ||
+    content.description ||
+    content.fullLabel ||
+    fallbackText;
 
-    return pieces;
-  }, [customer, serviceType, intervalHours, assetName, assetModel, serial, description]);
-
-  const outerRef = useRef<HTMLDivElement | null>(null);
-  const innerRef = useRef<HTMLDivElement | null>(null);
-  const [scale, setScale] = useState(1);
-
-  useEffect(() => {
-    const outer = outerRef.current;
-    const inner = innerRef.current;
-    if (!outer || !inner) return;
-
-    let raf = 0;
-    const recompute = () => {
-      cancelAnimationFrame(raf);
-      raf = requestAnimationFrame(() => {
-        const h = outer.clientHeight;
-        const w = outer.clientWidth;
-        if (!h || !w) {
-          setScale(1);
-          return;
-        }
-
-        const contentH = inner.scrollHeight;
-        const contentW = inner.scrollWidth;
-
-        let next = 1;
-        if (contentH > 0) next = Math.min(next, h / contentH);
-        if (contentW > 0) next = Math.min(next, w / contentW);
-        next = Math.min(1, next);
-        if (!Number.isFinite(next) || next <= 0) next = 1;
-
-        setScale((prev) => (Math.abs(prev - next) < 0.02 ? prev : next));
-      });
-    };
-
-    recompute();
-
-    if (typeof ResizeObserver === 'undefined') {
-      return () => cancelAnimationFrame(raf);
-    }
-
-    const ro = new ResizeObserver(recompute);
-    ro.observe(outer);
-    ro.observe(inner);
-
-    return () => {
-      cancelAnimationFrame(raf);
-      ro.disconnect();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view, event.id, event.title, orderedText]);
+  const tertiaryLine = content.description || '';
+  const commercialBadge = content.commercial ? (
+    <span
+      className="inline-flex shrink-0 rounded border border-current/35 px-1 py-0 text-[9px] font-bold leading-none opacity-90"
+      title={content.commercial.label}
+    >
+      {content.commercial.code}
+    </span>
+  ) : null;
 
   const Button = (
     <button
-      className="text-xs opacity-80 hover:opacity-100"
+      className="shrink-0 rounded px-1 text-[10px] opacity-70 hover:opacity-100"
       title='Devolver a "Sin programación"'
       onClick={(e) => {
         e.preventDefault();
@@ -1129,9 +1138,15 @@ function EventBox({ event, view, onUnschedule }: { event: CalEvent; view: View; 
 
   if (view === Views.MONTH) {
     return (
-      <div className="min-w-0">
-        <div className="truncate text-[10px] leading-none whitespace-nowrap">
-          {orderedParts.length ? orderedParts : clampText(orderedText, 36)}
+      <div className="min-w-0" title={content.fullLabel || fallbackText}>
+        <div className="truncate text-[10px] leading-none whitespace-nowrap font-medium">
+          {clampText(
+            [
+              content.commercial?.code,
+              [content.customer, content.serviceLabel, content.assetLabel].filter(Boolean).join(' · ') || fallbackText,
+            ].filter(Boolean).join(' · '),
+            52,
+          )}
         </div>
       </div>
     );
@@ -1139,43 +1154,52 @@ function EventBox({ event, view, onUnschedule }: { event: CalEvent; view: View; 
 
   if (view !== Views.DAY) {
     return (
-      <div ref={outerRef} className="h-full overflow-hidden">
-        <div
-          ref={innerRef}
-          style={{
-            transform: `scale(${scale})`,
-            transformOrigin: 'top left',
-            width: scale < 1 ? `${100 / scale}%` : '100%',
-          }}
-          className="h-full"
-        >
-          <div className="flex items-start justify-between gap-2">
-            <div className="min-w-0">
-              <div className="leading-tight whitespace-normal break-words">{orderedParts.length ? orderedParts : orderedText}</div>
+      <div className="h-full overflow-hidden" title={content.fullLabel || fallbackText}>
+        <div className="flex h-full items-start justify-between gap-2">
+          <div className="min-w-0 flex-1 overflow-hidden">
+            <div className="flex items-center gap-1 min-w-0">
+              {commercialBadge}
+              <div className="truncate text-[11px] font-semibold leading-tight min-w-0">{primaryLine}</div>
             </div>
-            {Button}
+            {!isShort ? (
+              <div className="mt-0.5 text-[10px] leading-tight opacity-90" style={lineClampStyle(isMedium ? 1 : 2)}>
+                {secondaryLine}
+              </div>
+            ) : null}
+            {showDetails && tertiaryLine ? (
+              <div className="mt-0.5 text-[10px] leading-tight opacity-80" style={lineClampStyle(1)}>
+                {tertiaryLine}
+              </div>
+            ) : null}
           </div>
+          {showAction ? Button : null}
         </div>
       </div>
     );
   }
 
   return (
-    <div ref={outerRef} className="h-full overflow-hidden">
-      <div
-        ref={innerRef}
-        style={{
-          transform: `scale(${scale})`,
-          transformOrigin: 'top left',
-          width: scale < 1 ? `${100 / scale}%` : '100%',
-          whiteSpace: 'normal',
-        }}
-        className="h-full"
-      >
-        <div className="flex items-start justify-between gap-2">
-          <div className="whitespace-normal break-words">{orderedParts.length ? orderedParts : orderedText}</div>
-          {Button}
+    <div className="h-full overflow-hidden" title={content.fullLabel || fallbackText}>
+      <div className="flex h-full items-start justify-between gap-2">
+        <div className="min-w-0 flex-1 overflow-hidden">
+          <div className="flex items-center gap-1 min-w-0">
+            {commercialBadge}
+            <div className="text-[11px] font-semibold leading-tight min-w-0" style={lineClampStyle(isShort ? 1 : 2)}>
+              {primaryLine}
+            </div>
+          </div>
+          {!isShort ? (
+            <div className="mt-0.5 text-[10px] leading-tight opacity-90" style={lineClampStyle(isMedium ? 1 : 2)}>
+              {secondaryLine}
+            </div>
+          ) : null}
+          {showDetails && tertiaryLine ? (
+            <div className="mt-0.5 text-[10px] leading-tight opacity-80" style={lineClampStyle(2)}>
+              {tertiaryLine}
+            </div>
+          ) : null}
         </div>
+        {showAction ? Button : null}
       </div>
     </div>
   );

@@ -295,6 +295,15 @@ export class ServiceOrdersService {
     return s === '1' || s === 'true' || s === 'yes';
   }
 
+  private normalizeCommercialStatus(v: any): 'PENDING_QUOTE' | 'PENDING_APPROVAL' | 'APPROVED' | 'CONFIRMED' {
+    const s = String(v ?? '').trim().toUpperCase();
+    if (s === 'PENDING_QUOTE' || s === 'PC') return 'PENDING_QUOTE';
+    if (s === 'PENDING_APPROVAL' || s === 'PA') return 'PENDING_APPROVAL';
+    if (s === 'APPROVED' || s === 'AP') return 'APPROVED';
+    if (s === 'CONFIRMED' || s === 'CF') return 'CONFIRMED';
+    throw new BadRequestException('Invalid commercial status');
+  }
+
   private normalizeIssueStatus(v: any): 'OPEN' | 'IN_PROGRESS' | 'WAITING_PARTS' | 'RESOLVED' | 'VERIFIED' | 'CANCELED' {
     const s = String(v ?? '').trim().toUpperCase();
     if (s === 'OPEN' || s === 'IN_PROGRESS' || s === 'WAITING_PARTS' || s === 'RESOLVED' || s === 'VERIFIED' || s === 'CANCELED') return s;
@@ -1288,6 +1297,10 @@ private async assertTechCanMutateServiceOrder(
     if (types.length === 1) where.serviceOrderType = types[0] as any;
     else if (types.length > 1) where.serviceOrderType = { in: types } as any;
 
+    const commercialStatuses = normalizeQueryArray((q as any).commercialStatus).map((s) => this.normalizeCommercialStatus(s));
+    if (commercialStatuses.length === 1) (where as any).commercialStatus = commercialStatuses[0] as any;
+    else if (commercialStatuses.length > 1) (where as any).commercialStatus = { in: commercialStatuses } as any;
+
     const hasIssueRaw = (q as any).hasIssue;
     if (hasIssueRaw !== undefined && String(hasIssueRaw).trim() !== '') {
       where.hasIssue = this.truthy(hasIssueRaw);
@@ -1540,12 +1553,16 @@ return { ...(so as any), workLogs: enrichedLogs, formData, asset: asset ?? null,
         tenantId,
         kind: 'SERVICE_ORDER',
         serviceOrderType: dto.serviceOrderType as any,
+        commercialStatus:
+          (dto as any).commercialStatus === undefined || (dto as any).commercialStatus === null || String((dto as any).commercialStatus).trim() === ''
+            ? undefined
+            : this.normalizeCommercialStatus((dto as any).commercialStatus),
         pmPlanId: dto.pmPlanId ?? undefined,
         assetCode: asset.code,
         title,
         description: dto.description,
         dueDate: dto.dueDate ? this.coerceDate(dto.dueDate) : undefined,
-      },
+      } as any,
     });
   }
 
@@ -1554,7 +1571,7 @@ return { ...(so as any), workLogs: enrichedLogs, formData, asset: asset ?? null,
   const actorUserId = this.getUserId();
 
   // Campos administrativos: solo ADMIN
-  const adminOnlyKeys = ['assetCode', 'title', 'description', 'serviceOrderType', 'pmPlanId', 'durationMin'] as const;
+  const adminOnlyKeys = ['assetCode', 'title', 'description', 'serviceOrderType', 'commercialStatus', 'pmPlanId', 'durationMin'] as const;
   const wantsAdminChange = adminOnlyKeys.some((k) => (dto as any)[k] !== undefined);
   if (wantsAdminChange) await this.assertAdmin();
 
@@ -1569,11 +1586,12 @@ return { ...(so as any), workLogs: enrichedLogs, formData, asset: asset ?? null,
         title: true,
         description: true,
         serviceOrderType: true,
+        commercialStatus: true,
         pmPlanId: true,
         hasIssue: true,
         durationMin: true,
       },
-    });
+    } as any);
     if (!current) throw new NotFoundException('Service order not found');
 
     const role = await this.getCurrentUserRole(tx, tenantId, actorUserId);
@@ -1627,6 +1645,17 @@ return { ...(so as any), workLogs: enrichedLogs, formData, asset: asset ?? null,
     }
 
     const applyStatus = (dto as any).status !== undefined && !skipStatusChange;
+    const normalizedCommercialStatus =
+      (dto as any).commercialStatus === undefined
+        ? undefined
+        : ((dto as any).commercialStatus === null || String((dto as any).commercialStatus).trim() === '')
+          ? null
+          : this.normalizeCommercialStatus((dto as any).commercialStatus);
+
+    const effectiveStatus = String((applyStatus ? (dto as any).status : current.status) || 'OPEN').toUpperCase();
+    if (normalizedCommercialStatus && ['OPEN', 'CANCELED'].includes(effectiveStatus)) {
+      throw new BadRequestException('Commercial status requires the service order to be scheduled or in execution');
+    }
 
     const data: any = {
       ...(dto.assetCode !== undefined ? { assetCode: String(dto.assetCode).trim() } : {}),
@@ -1634,6 +1663,7 @@ return { ...(so as any), workLogs: enrichedLogs, formData, asset: asset ?? null,
       ...(dto.description !== undefined ? { description: dto.description } : {}),
       ...(applyStatus ? { status: dto.status as any } : {}),
       ...(dto.serviceOrderType !== undefined ? { serviceOrderType: dto.serviceOrderType as any } : {}),
+      ...(normalizedCommercialStatus !== undefined ? { commercialStatus: normalizedCommercialStatus as any } : {}),
       ...(dto.pmPlanId !== undefined ? { pmPlanId: dto.pmPlanId } : {}),
       ...(dto.hasIssue !== undefined ? { hasIssue: dto.hasIssue } : {}),
       ...(dto.durationMin !== undefined ? { durationMin: dto.durationMin } : {}),
@@ -1734,6 +1764,7 @@ return { ...(so as any), workLogs: enrichedLogs, formData, asset: asset ?? null,
       ['title', (current as any).title, (dto as any).title],
       ['description', (current as any).description, (dto as any).description],
       ['serviceOrderType', (current as any).serviceOrderType, (dto as any).serviceOrderType],
+      ['commercialStatus', (current as any).commercialStatus, normalizedCommercialStatus],
       ['pmPlanId', (current as any).pmPlanId, (dto as any).pmPlanId],
       ['hasIssue', (current as any).hasIssue, (dto as any).hasIssue],
       ['durationMin', (current as any).durationMin, (dto as any).durationMin],

@@ -304,6 +304,7 @@ model WorkOrder {
   title       String
   description String?
   status      WorkOrderStatus  @default(OPEN)
+  commercialStatus ServiceOrderCommercialStatus?
   priority    WorkOrderPriority?
 
 
@@ -345,6 +346,7 @@ model WorkOrder {
   workNotes          WorkNote[]
 
   @@index([tenantId, status])
+  @@index([tenantId, commercialStatus])
   @@index([tenantId, assetCode, status])
 }
 
@@ -356,6 +358,13 @@ enum WorkOrderStatus {
   COMPLETED
   CLOSED
   CANCELED
+}
+
+enum ServiceOrderCommercialStatus {
+  PENDING_QUOTE
+  PENDING_APPROVAL
+  APPROVED
+  CONFIRMED
 }
 
 enum WorkOrderPriority {

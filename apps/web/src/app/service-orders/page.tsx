@@ -14,6 +14,7 @@ type ServiceOrder = {
   description?: string | null;
   status: string;
   serviceOrderType?: string | null;
+  commercialStatus?: CommercialStatus | null;
   hasIssue?: boolean;
   dueDate?: string | null;
   durationMin?: number | null;
@@ -30,13 +31,15 @@ type ServiceOrder = {
 };
 
 type Paginated<T> = { items: T[]; total: number; page: number; size: number };
+type CommercialStatus = 'PENDING_QUOTE' | 'PENDING_APPROVAL' | 'APPROVED' | 'CONFIRMED';
 
 type Filter =
   | { id: string; field: 'q'; value: string }
   | { id: string; field: 'status'; value: string }
   | { id: string; field: 'type'; value: string }
+  | { id: string; field: 'month'; value: string }
+  | { id: string; field: 'commercialStatus'; value: string }
   | { id: string; field: 'technicianId'; value: string }
-  | { id: string; field: 'hasIssue'; value: string }
   | { id: string; field: 'issueStatus'; value: string };
 
 type EditRow = { dueLocal: string; technicianId: string };
@@ -46,12 +49,49 @@ const EMPTY_ITEMS: ServiceOrder[] = [];
 const STATUS_TABS = ['ALL', 'OPEN', 'SCHEDULED', 'IN_PROGRESS', 'ON_HOLD', 'COMPLETED', 'CLOSED', 'CANCELED'] as const;
 type StatusTab = (typeof STATUS_TABS)[number];
 
+const LIST_TABS = [
+  { id: 'ALL', label: 'Todas las OS' },
+  { id: 'ISSUES', label: 'Equipos con novedad' },
+] as const;
+type ListTab = (typeof LIST_TABS)[number]['id'];
+
 function fmt(dt?: string | null) {
   if (!dt) return '';
   try {
     return new Date(dt).toLocaleString();
   } catch {
     return String(dt);
+  }
+}
+
+function monthToRange(value: string) {
+  const raw = String(value || '').trim();
+  if (!/^\d{4}-\d{2}$/.test(raw)) return null;
+
+  const [yearStr, monthStr] = raw.split('-');
+  const year = Number(yearStr);
+  const monthIndex = Number(monthStr) - 1;
+  if (!Number.isInteger(year) || !Number.isInteger(monthIndex) || monthIndex < 0 || monthIndex > 11) return null;
+
+  const start = new Date(year, monthIndex, 1, 0, 0, 0, 0);
+  const end = new Date(year, monthIndex + 1, 1, 0, 0, 0, 0);
+  end.setMilliseconds(end.getMilliseconds() - 1);
+
+  return { start: start.toISOString(), end: end.toISOString() };
+}
+
+function commercialStatusMeta(status?: string | null) {
+  switch (String(status || '').toUpperCase()) {
+    case 'PENDING_QUOTE':
+      return { code: 'PC', label: 'Pendiente cotizar', className: 'bg-orange-50 text-orange-800 border-orange-200' };
+    case 'PENDING_APPROVAL':
+      return { code: 'PA', label: 'Pendiente aprobación', className: 'bg-amber-50 text-amber-800 border-amber-200' };
+    case 'APPROVED':
+      return { code: 'AP', label: 'Aprobado', className: 'bg-sky-50 text-sky-800 border-sky-200' };
+    case 'CONFIRMED':
+      return { code: 'CF', label: 'Confirmado', className: 'bg-emerald-50 text-emerald-800 border-emerald-200' };
+    default:
+      return null;
   }
 }
 
@@ -63,6 +103,7 @@ export default function ServiceOrdersPage() {
 
   const [filters, setFilters] = useState<Filter[]>([{ id: 'f-q', field: 'q', value: '' }]);
   const [edits, setEdits] = useState<Record<string, EditRow>>({});
+  const [listTab, setListTab] = useState<ListTab>('ALL');
   const [statusTab, setStatusTab] = useState<StatusTab>('ALL');
 
   const [data, setData] = useState<Paginated<ServiceOrder> | null>(null);
@@ -78,13 +119,21 @@ export default function ServiceOrdersPage() {
     for (const f of filters) {
       const v = (f.value || '').trim();
       if (!v) continue;
+      if (f.field === 'month') {
+        const range = monthToRange(v);
+        if (!range) continue;
+        qs.set('start', range.start);
+        qs.set('end', range.end);
+        continue;
+      }
       qs.append(f.field, v);
     }
+    if (listTab === 'ISSUES') qs.set('hasIssue', 'true');
     qs.set('page', '1');
     qs.set('size', '50');
 
     return `/service-orders?${qs.toString()}`;
-  }, [auth.token, auth.tenantSlug, filters]);
+  }, [auth.token, auth.tenantSlug, filters, listTab]);
 
   const items = data?.items ?? EMPTY_ITEMS;
 
@@ -168,6 +217,7 @@ export default function ServiceOrdersPage() {
 
   function addFilter(field: Filter['field']) {
     setFilters((s) => {
+      if (field === 'month' && s.some((f) => f.field === 'month')) return s;
       const id = `${field}-${Math.random().toString(16).slice(2)}`;
       return [...s, { id, field, value: '' } as any];
     });
@@ -214,6 +264,29 @@ export default function ServiceOrdersPage() {
         <div className="p-3 border rounded bg-red-50 text-red-700 text-sm whitespace-pre-wrap">{err}</div>
       ) : null}
 
+      <div className="border rounded p-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          {LIST_TABS.map((tab) => {
+            const active = tab.id === listTab;
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setListTab(tab.id)}
+                className={`px-3 py-1.5 border rounded text-sm ${
+                  active ? 'bg-black text-white border-black' : 'bg-white text-gray-700 hover:bg-gray-50'
+                }`}
+              >
+                {tab.label}
+              </button>
+            );
+          })}
+          <div className="text-xs text-gray-500 ml-auto">
+            {listTab === 'ISSUES' ? 'Mostrando equipos/OS con novedad.' : 'Mostrando todas las órdenes de servicio.'}
+          </div>
+        </div>
+      </div>
+
       {/* Filters builder */}
       <div className="border rounded p-3 space-y-2">
         <div className="flex items-center justify-between gap-2 flex-wrap">
@@ -225,11 +298,14 @@ export default function ServiceOrdersPage() {
             <button className="px-2 py-1 border rounded text-sm" onClick={() => addFilter('type')} type="button">
               + Tipo
             </button>
+            <button className="px-2 py-1 border rounded text-sm" onClick={() => addFilter('month')} type="button">
+              + Mes
+            </button>
+            <button className="px-2 py-1 border rounded text-sm" onClick={() => addFilter('commercialStatus')} type="button">
+              + Negociación
+            </button>
             <button className="px-2 py-1 border rounded text-sm" onClick={() => addFilter('technicianId')} type="button">
               + Técnico
-            </button>
-            <button className="px-2 py-1 border rounded text-sm" onClick={() => addFilter('hasIssue')} type="button">
-              + Novedad
             </button>
           </div>
         </div>
@@ -245,8 +321,9 @@ export default function ServiceOrdersPage() {
                 <option value="q">Texto</option>
                 <option value="status">Status</option>
                 <option value="type">Tipo</option>
+                <option value="month">Mes</option>
+                <option value="commercialStatus">Negociación</option>
                 <option value="technicianId">Técnico</option>
-                <option value="hasIssue">Novedad</option>
                 <option value="issueStatus">Estado novedad</option>
               </select>
 
@@ -284,6 +361,25 @@ export default function ServiceOrdersPage() {
                 </select>
               ) : null}
 
+              {f.field === 'month' ? (
+                <input
+                  type="month"
+                  className="border rounded px-3 py-2 text-sm"
+                  value={f.value}
+                  onChange={(e) => setFilterValue(f.id, e.target.value)}
+                />
+              ) : null}
+
+              {f.field === 'commercialStatus' ? (
+                <select className="border rounded px-2 py-2 text-sm" value={f.value} onChange={(e) => setFilterValue(f.id, e.target.value)}>
+                  <option value="">(cualquiera)</option>
+                  <option value="PENDING_QUOTE">PC · Pendiente cotizar</option>
+                  <option value="PENDING_APPROVAL">PA · Pendiente aprobación</option>
+                  <option value="APPROVED">AP · Aprobado</option>
+                  <option value="CONFIRMED">CF · Confirmado</option>
+                </select>
+              ) : null}
+
               {f.field === 'technicianId' ? (
                 <select className="border rounded px-2 py-2 text-sm" value={f.value} onChange={(e) => setFilterValue(f.id, e.target.value)}>
                   <option value="">(cualquiera)</option>
@@ -292,14 +388,6 @@ export default function ServiceOrdersPage() {
                       {t.name}
                     </option>
                   ))}
-                </select>
-              ) : null}
-
-              {f.field === 'hasIssue' ? (
-                <select className="border rounded px-2 py-2 text-sm" value={f.value} onChange={(e) => setFilterValue(f.id, e.target.value)}>
-                  <option value="">(cualquiera)</option>
-                  <option value="true">Con novedad</option>
-                  <option value="false">Sin novedad</option>
                 </select>
               ) : null}
 
@@ -324,7 +412,9 @@ export default function ServiceOrdersPage() {
           ))}
         </div>
 
-        <div className="text-xs text-gray-500">Tip: puedes agregar varios filtros.</div>
+        <div className="text-xs text-gray-500">
+          Tip: puedes agregar varios filtros. El filtro "Mes" usa la fecha programada. Las novedades se consultan desde la pestaña "Equipos con novedad".
+        </div>
       </div>
 
       <div className="border rounded p-2">
@@ -353,13 +443,14 @@ export default function ServiceOrdersPage() {
       </div>
 
       <div className="border rounded overflow-auto">
-        <table className="min-w-[1100px] w-full text-sm">
+        <table className="min-w-[1220px] w-full text-sm">
           <thead className="bg-gray-50">
             <tr>
               <th className="text-left p-2 border-b">Creada</th>
               <th className="text-left p-2 border-b">OS</th>
               <th className="text-left p-2 border-b">Cliente / Serie</th>
               <th className="text-left p-2 border-b">Status</th>
+              <th className="text-left p-2 border-b">Negociación</th>
               <th className="text-left p-2 border-b">Tipo</th>
               <th className="text-left p-2 border-b">Novedad</th>
               <th className="text-left p-2 border-b">Programación</th>
@@ -370,6 +461,7 @@ export default function ServiceOrdersPage() {
           <tbody>
             {visibleItems.map((so) => {
               const row = edits[so.id] || { dueLocal: '', technicianId: '' };
+              const commercial = commercialStatusMeta(so.commercialStatus);
               return (
                 <tr key={so.id} className="hover:bg-gray-50">
                   <td className="p-2 border-b whitespace-nowrap">{fmt(so.createdAt)}</td>
@@ -384,6 +476,15 @@ export default function ServiceOrdersPage() {
                     <div className="text-xs text-gray-600">{so.asset?.serialNumber || '-'}</div>
                   </td>
                   <td className="p-2 border-b whitespace-nowrap">{so.status}</td>
+                  <td className="p-2 border-b whitespace-nowrap">
+                    {commercial ? (
+                      <span className={`px-2 py-0.5 border rounded text-xs ${commercial.className}`} title={commercial.label}>
+                        {commercial.code}
+                      </span>
+                    ) : (
+                      <span className="text-gray-500">—</span>
+                    )}
+                  </td>
                   <td className="p-2 border-b whitespace-nowrap">{so.serviceOrderType || '-'}</td>
                   <td className="p-2 border-b whitespace-nowrap">
                     {so.hasIssue ? (
@@ -435,7 +536,7 @@ export default function ServiceOrdersPage() {
             })}
             {visibleItems.length === 0 ? (
               <tr>
-                <td className="p-4 text-gray-600" colSpan={9}>
+                <td className="p-4 text-gray-600" colSpan={10}>
                   Sin resultados.
                 </td>
               </tr>
