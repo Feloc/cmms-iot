@@ -1431,7 +1431,11 @@ private async assertTechCanMutateServiceOrder(
     }));
 
     const statusCounts = statusCountRows.reduce<Record<string, number>>((acc, row) => {
-      acc[row.status] = row._count.id;
+      const count =
+        row._count && typeof row._count === 'object' && 'id' in row._count && typeof row._count.id === 'number'
+          ? row._count.id
+          : 0;
+      acc[row.status] = count;
       return acc;
     }, {});
 
