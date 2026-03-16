@@ -1290,8 +1290,6 @@ private async assertTechCanMutateServiceOrder(
     };
 
     const statuses = normalizeQueryArray((q as any).status);
-    if (statuses.length === 1) where.status = statuses[0] as any;
-    else if (statuses.length > 1) where.status = { in: statuses } as any;
 
     const types = normalizeQueryArray((q as any).type);
     if (types.length === 1) where.serviceOrderType = types[0] as any;
@@ -1314,7 +1312,7 @@ private async assertTechCanMutateServiceOrder(
         : [...this.ISSUE_OPEN_STATUSES];
     }
     if (issueStatusesRaw.length > 0 && issueStatuses.length === 0) {
-      return { items: [], total: 0, page, size };
+      return { items: [], total: 0, page, size, statusCounts: {} };
     }
     if (issueStatuses.length === 1) {
       (where as any).serviceOrderIssue = { is: { status: issueStatuses[0] } };
@@ -1367,35 +1365,39 @@ private async assertTechCanMutateServiceOrder(
     }
 
     // Filtro por técnico: buscamos assignments ACTIVAS de rol TECHNICIAN
-const techIds = normalizeQueryArray((q as any).technicianId);
-if (techIds.length === 1 && String(techIds[0]).toUpperCase() === 'UNASSIGNED') {
-  where.assignments = {
-    none: {
-      tenantId,
-      state: 'ACTIVE',
-      role: 'TECHNICIAN',
-    },
-  };
-} else if (techIds.length === 1) {
-  where.assignments = {
-    some: {
-      tenantId,
-      state: 'ACTIVE',
-      role: 'TECHNICIAN',
-      userId: techIds[0],
-    },
-  };
-} else if (techIds.length > 1) {
-  where.assignments = {
-    some: {
-      tenantId,
-      state: 'ACTIVE',
-      role: 'TECHNICIAN',
-      userId: { in: techIds },
-    },
-  };
-}
-const [items, total] = await this.prisma.$transaction([
+    const techIds = normalizeQueryArray((q as any).technicianId);
+    if (techIds.length === 1 && String(techIds[0]).toUpperCase() === 'UNASSIGNED') {
+      where.assignments = {
+        none: {
+          tenantId,
+          state: 'ACTIVE',
+          role: 'TECHNICIAN',
+        },
+      };
+    } else if (techIds.length === 1) {
+      where.assignments = {
+        some: {
+          tenantId,
+          state: 'ACTIVE',
+          role: 'TECHNICIAN',
+          userId: techIds[0],
+        },
+      };
+    } else if (techIds.length > 1) {
+      where.assignments = {
+        some: {
+          tenantId,
+          state: 'ACTIVE',
+          role: 'TECHNICIAN',
+          userId: { in: techIds },
+        },
+      };
+    }
+    const statusCountWhere: Prisma.WorkOrderWhereInput = { ...where };
+    if (statuses.length === 1) where.status = statuses[0] as any;
+    else if (statuses.length > 1) where.status = { in: statuses } as any;
+
+    const [items, total, statusCountRows] = await this.prisma.$transaction([
       this.prisma.workOrder.findMany({
         where,
         orderBy: [{ dueDate: 'asc' }, { createdAt: 'desc' }],
@@ -1408,6 +1410,11 @@ const [items, total] = await this.prisma.$transaction([
         take: size,
       } as any),
       this.prisma.workOrder.count({ where }),
+      this.prisma.workOrder.groupBy({
+        by: ['status'],
+        where: statusCountWhere,
+        _count: { id: true },
+      }),
     ]);
 
     // Enriquecemos con datos del asset (cliente, marca, modelo, serie)
@@ -1423,7 +1430,12 @@ const [items, total] = await this.prisma.$transaction([
       asset: assetByCode.get(it.assetCode) ?? null,
     }));
 
-    return { items: enriched, total, page, size };
+    const statusCounts = statusCountRows.reduce<Record<string, number>>((acc, row) => {
+      acc[row.status] = row._count.id;
+      return acc;
+    }, {});
+
+    return { items: enriched, total, page, size, statusCounts };
   }
 
   async calendar(q: ServiceOrdersCalendarQuery) {

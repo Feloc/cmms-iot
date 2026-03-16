@@ -30,7 +30,7 @@ type ServiceOrder = {
   }> | null;
 };
 
-type Paginated<T> = { items: T[]; total: number; page: number; size: number };
+type Paginated<T> = { items: T[]; total: number; page: number; size: number; statusCounts?: Record<string, number> };
 type CommercialStatus = 'PENDING_QUOTE' | 'PENDING_APPROVAL' | 'APPROVED' | 'CONFIRMED';
 
 type Filter =
@@ -45,6 +45,7 @@ type Filter =
 type EditRow = { dueLocal: string; technicianId: string };
 
 const EMPTY_ITEMS: ServiceOrder[] = [];
+const PAGE_SIZE = 50;
 
 const STATUS_TABS = ['ALL', 'OPEN', 'SCHEDULED', 'IN_PROGRESS', 'ON_HOLD', 'COMPLETED', 'CLOSED', 'CANCELED'] as const;
 type StatusTab = (typeof STATUS_TABS)[number];
@@ -105,6 +106,7 @@ export default function ServiceOrdersPage() {
   const [edits, setEdits] = useState<Record<string, EditRow>>({});
   const [listTab, setListTab] = useState<ListTab>('ALL');
   const [statusTab, setStatusTab] = useState<StatusTab>('ALL');
+  const [page, setPage] = useState(1);
 
   const [data, setData] = useState<Paginated<ServiceOrder> | null>(null);
   const [loading, setLoading] = useState(false);
@@ -119,6 +121,7 @@ export default function ServiceOrdersPage() {
     for (const f of filters) {
       const v = (f.value || '').trim();
       if (!v) continue;
+      if (statusTab !== 'ALL' && f.field === 'status') continue;
       if (f.field === 'month') {
         const range = monthToRange(v);
         if (!range) continue;
@@ -129,24 +132,29 @@ export default function ServiceOrdersPage() {
       qs.append(f.field, v);
     }
     if (listTab === 'ISSUES') qs.set('hasIssue', 'true');
-    qs.set('page', '1');
-    qs.set('size', '50');
+    if (statusTab !== 'ALL') qs.append('status', statusTab);
+    qs.set('page', String(page));
+    qs.set('size', String(PAGE_SIZE));
 
     return `/service-orders?${qs.toString()}`;
-  }, [auth.token, auth.tenantSlug, filters, listTab]);
+  }, [auth.token, auth.tenantSlug, filters, listTab, statusTab, page]);
 
   const items = data?.items ?? EMPTY_ITEMS;
+  const statusCounts = data?.statusCounts ?? {};
+  const allStatusCount = useMemo(
+    () => Object.values(statusCounts).reduce((acc, count) => acc + Number(count ?? 0), 0),
+    [statusCounts]
+  );
+  const totalPages = useMemo(() => {
+    const total = data?.total ?? 0;
+    const size = data?.size ?? PAGE_SIZE;
+    return Math.max(1, Math.ceil(total / size));
+  }, [data?.size, data?.total]);
+  const currentPage = data?.page ?? page;
 
-  const statusCounts = useMemo(() => {
-    const counts: Record<string, number> = {};
-    for (const so of items) counts[so.status] = (counts[so.status] ?? 0) + 1;
-    return counts;
-  }, [items]);
-
-  const visibleItems = useMemo(() => {
-    if (statusTab === 'ALL') return items;
-    return items.filter((so) => so.status === statusTab);
-  }, [items, statusTab]);
+  useEffect(() => {
+    setPage(1);
+  }, [filters, listTab, statusTab]);
 
   // Cargar técnicos una vez (y refrescar si cambia auth)
   useEffect(() => {
@@ -173,6 +181,13 @@ export default function ServiceOrdersPage() {
 
     return () => clearTimeout(t);
   }, [auth.token, auth.tenantSlug, listPath]);
+
+  useEffect(() => {
+    if (!data) return;
+    if (data.total > 0 && currentPage > totalPages) {
+      setPage(totalPages);
+    }
+  }, [currentPage, data, totalPages]);
 
   // Inicializa state de edición cuando llegan items nuevos
   useEffect(() => {
@@ -245,7 +260,7 @@ export default function ServiceOrdersPage() {
           <div className="text-sm text-gray-600">Filtra y programa rápidamente (asignar técnico + fecha/hora).</div>
           <div className="text-xs text-gray-500 mt-1">
             {loading ? 'Cargando…' : null}
-            {!loading && data ? `Total: ${data.total}` : null}
+            {!loading && data ? `Total: ${data.total} · Página ${currentPage} de ${totalPages}` : null}
             {!loading && !data ? 'Sin datos aún' : null}
           </div>
         </div>
@@ -421,7 +436,7 @@ export default function ServiceOrdersPage() {
         <div className="flex items-center gap-2 flex-wrap">
           {STATUS_TABS.map((t) => {
             const active = t === statusTab;
-            const n = t === 'ALL' ? items.length : statusCounts[t] ?? 0;
+            const count = t === 'ALL' ? allStatusCount : Number(statusCounts[t] ?? 0);
             return (
               <button
                 key={t}
@@ -432,12 +447,16 @@ export default function ServiceOrdersPage() {
                 }`}
               >
                 <span>{t}</span>
-                <span className={`text-[11px] px-1.5 py-0.5 rounded ${active ? 'bg-white/20' : 'bg-gray-100 text-gray-700'}`}>{n}</span>
+                {data ? (
+                  <span className={`text-[11px] px-1.5 py-0.5 rounded ${active ? 'bg-white/20' : 'bg-gray-100 text-gray-700'}`}>
+                    {count}
+                  </span>
+                ) : null}
               </button>
             );
           })}
           <div className="text-xs text-gray-500 ml-auto">
-            Mostrando {visibleItems.length} / {items.length}
+            Mostrando {items.length} resultados en esta página
           </div>
         </div>
       </div>
@@ -459,7 +478,7 @@ export default function ServiceOrdersPage() {
             </tr>
           </thead>
           <tbody>
-            {visibleItems.map((so) => {
+            {items.map((so) => {
               const row = edits[so.id] || { dueLocal: '', technicianId: '' };
               const commercial = commercialStatusMeta(so.commercialStatus);
               return (
@@ -534,7 +553,7 @@ export default function ServiceOrdersPage() {
                 </tr>
               );
             })}
-            {visibleItems.length === 0 ? (
+            {items.length === 0 ? (
               <tr>
                 <td className="p-4 text-gray-600" colSpan={10}>
                   Sin resultados.
@@ -543,6 +562,53 @@ export default function ServiceOrdersPage() {
             ) : null}
           </tbody>
         </table>
+      </div>
+
+      <div className="flex items-center justify-between gap-3 flex-wrap border rounded p-3">
+        <div className="text-sm text-gray-600">
+          Página {currentPage} de {totalPages}
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            className="px-3 py-1.5 border rounded text-sm disabled:opacity-50"
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            disabled={currentPage <= 1 || loading}
+          >
+            Anterior
+          </button>
+          <div className="flex items-center gap-1">
+            {Array.from({ length: Math.min(5, totalPages) }, (_, idx) => {
+              let pageNumber = idx + 1;
+              if (totalPages > 5) {
+                const start = Math.min(Math.max(1, currentPage - 2), totalPages - 4);
+                pageNumber = start + idx;
+              }
+              const active = pageNumber === currentPage;
+              return (
+                <button
+                  key={pageNumber}
+                  type="button"
+                  className={`min-w-9 px-2 py-1.5 border rounded text-sm ${
+                    active ? 'bg-black text-white border-black' : 'bg-white text-gray-700'
+                  }`}
+                  onClick={() => setPage(pageNumber)}
+                  disabled={loading}
+                >
+                  {pageNumber}
+                </button>
+              );
+            })}
+          </div>
+          <button
+            type="button"
+            className="px-3 py-1.5 border rounded text-sm disabled:opacity-50"
+            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+            disabled={currentPage >= totalPages || loading}
+          >
+            Siguiente
+          </button>
+        </div>
       </div>
     </div>
   );
