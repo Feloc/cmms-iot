@@ -85,6 +85,9 @@ type Summary = {
   assets: {
     total: number;
     inWarranty: number;
+    inWarrantyExcludingManual: number;
+    forkliftsTotal: number;
+    forkliftsInWarranty: number;
     inWarrantyByName: Array<{ name: string; inWarranty: number }>;
     byStatus: Record<string, number>;
     byCriticality: Record<string, number>;
@@ -131,6 +134,22 @@ type Summary = {
       workHours: number;
       availableHours: number;
       utilizationPct: number | null;
+    }>;
+
+    technicianTypeAverages: Array<{
+      userId: string;
+      name: string;
+      preventiveCount: number;
+      correctiveCount: number;
+      diagnosticCount: number;
+      dailyPreventive: number;
+      dailyCorrective: number;
+      dailyDiagnostic: number;
+      weeklyPreventive: number;
+      weeklyCorrective: number;
+      weeklyDiagnostic: number;
+      dailyTotal: number;
+      weeklyTotal: number;
     }>;
 
     closedOrdersSummary?: {
@@ -465,6 +484,28 @@ export default function Dashboard() {
     return { closed, hours, available, hrsPerClosed, utilizationPct };
   }, [data?.service.technicianWeeklyProductivity, selectedTechId]);
 
+  const technicianTypeAverageChart = useMemo(
+    () =>
+      (data?.service.technicianTypeAverages ?? []).map((row) => ({
+        userId: row.userId,
+        name: row.name,
+        dailyPreventive: row.dailyPreventive,
+        dailyCorrective: row.dailyCorrective,
+        dailyDiagnostic: row.dailyDiagnostic,
+        weeklyPreventive: row.weeklyPreventive,
+        weeklyCorrective: row.weeklyCorrective,
+        weeklyDiagnostic: row.weeklyDiagnostic,
+        dailyTotal: row.dailyTotal,
+        weeklyTotal: row.weeklyTotal,
+      })),
+    [data?.service.technicianTypeAverages]
+  );
+
+  const technicianTypeAverageChartHeight = useMemo(
+    () => Math.max(300, technicianTypeAverageChart.length * 52),
+    [technicianTypeAverageChart.length]
+  );
+
   const closedSummary = data?.service.closedOrdersSummary;
 
   const closedByTechnicianChart = useMemo(
@@ -655,7 +696,11 @@ export default function Dashboard() {
             <StatCard
               title="Activos en garantía"
               value={isLoading ? '—' : data?.assets.inWarranty ?? 0}
-              hint="Usa guarantee o, si falta, 1 año desde adquisición"
+              href="/assets"
+            />
+            <StatCard
+              title="Garantía sin manuales"
+              value={isLoading ? '—' : data?.assets.inWarrantyExcludingManual ?? 0}
               href="/assets"
             />
             <StatCard
@@ -669,6 +714,17 @@ export default function Dashboard() {
               value={isLoading ? '—' : data?.assets.withOpenServiceOrders ?? 0}
               hint="Activos con backlog"
               href="/service-orders"
+            />
+            <StatCard
+              title="Total montacargas"
+              value={isLoading ? '—' : data?.assets.forkliftsTotal ?? 0}
+              href="/assets"
+            />
+            <StatCard
+              title="Montacargas en garantía"
+              value={isLoading ? '—' : data?.assets.forkliftsInWarranty ?? 0}
+              hint='Montacargas con garantía vigente'
+              href="/assets"
             />
           </div>
 
@@ -1019,6 +1075,66 @@ export default function Dashboard() {
                     </div>
                   </div>
                 </>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base flex items-center">
+                Promedio diario y semanal por técnico
+                <HelpTip text="Calculado sobre OS cerradas en el rango. Las barras separan PREVENTIVO, CORRECTIVO y DIAGNOSTICO, divididos por la duración real del rango seleccionado." />
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {!technicianTypeAverageChart.length ? (
+                <div className="text-sm text-neutral-500">Sin datos</div>
+              ) : (
+                <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                  <div className="rounded-md border p-3">
+                    <div className="text-sm font-medium mb-2">Promedio diario por técnico</div>
+                    <div style={{ height: technicianTypeAverageChartHeight }}>
+                      <ResponsiveContainer width="100%" height="100%">
+                        <ComposedChart
+                          data={technicianTypeAverageChart}
+                          layout="vertical"
+                          margin={{ top: 6, right: 16, left: 16, bottom: 6 }}
+                        >
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis type="number" tickLine={false} axisLine={false} />
+                          <YAxis type="category" dataKey="name" width={150} interval={0} tickLine={false} axisLine={false} />
+                          <Tooltip formatter={(value: any, name: any) => [fmtFixed(value, 2), name]} />
+                          <Legend />
+                          <Bar dataKey="dailyPreventive" stackId="daily" name="Preventivos" fill="#16a34a" radius={[0, 0, 0, 0]} />
+                          <Bar dataKey="dailyCorrective" stackId="daily" name="Correctivos" fill="#ea580c" radius={[0, 0, 0, 0]} />
+                          <Bar dataKey="dailyDiagnostic" stackId="daily" name="Diagnósticos" fill="#2563eb" radius={[0, 4, 4, 0]} />
+                        </ComposedChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+
+                  <div className="rounded-md border p-3">
+                    <div className="text-sm font-medium mb-2">Promedio semanal por técnico</div>
+                    <div style={{ height: technicianTypeAverageChartHeight }}>
+                      <ResponsiveContainer width="100%" height="100%">
+                        <ComposedChart
+                          data={technicianTypeAverageChart}
+                          layout="vertical"
+                          margin={{ top: 6, right: 16, left: 16, bottom: 6 }}
+                        >
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis type="number" tickLine={false} axisLine={false} />
+                          <YAxis type="category" dataKey="name" width={150} interval={0} tickLine={false} axisLine={false} />
+                          <Tooltip formatter={(value: any, name: any) => [fmtFixed(value, 2), name]} />
+                          <Legend />
+                          <Bar dataKey="weeklyPreventive" stackId="weekly" name="Preventivos" fill="#16a34a" radius={[0, 0, 0, 0]} />
+                          <Bar dataKey="weeklyCorrective" stackId="weekly" name="Correctivos" fill="#ea580c" radius={[0, 0, 0, 0]} />
+                          <Bar dataKey="weeklyDiagnostic" stackId="weekly" name="Diagnósticos" fill="#2563eb" radius={[0, 4, 4, 0]} />
+                        </ComposedChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+                </div>
               )}
             </CardContent>
           </Card>

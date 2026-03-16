@@ -123,6 +123,9 @@ export class DashboardService {
       assetsByStatusRows,
       assetsByCritRows,
       [{ count: assetsInWarranty } = { count: 0 }],
+      [{ count: assetsInWarrantyExcludingManual } = { count: 0 }],
+      [{ count: forkliftsTotal } = { count: 0 }],
+      [{ count: forkliftsInWarranty } = { count: 0 }],
       assetsInWarrantyByNameRows,
     ] = await Promise.all([
       this.prisma.asset.count({ where: { tenantId } }),
@@ -133,6 +136,44 @@ export class DashboardService {
           SELECT COUNT(*)::int AS count
           FROM "Asset"
           WHERE "tenantId" = ${tenantId}
+            AND COALESCE(
+              "guarantee"::date,
+              CASE
+                WHEN "acquiredOn" IS NOT NULL THEN ("acquiredOn" + INTERVAL '1 year')::date
+                ELSE NULL
+              END
+            ) >= CURRENT_DATE;
+        `
+      ),
+      this.prisma.$queryRaw<{ count: number }[]>(
+        Prisma.sql`
+          SELECT COUNT(*)::int AS count
+          FROM "Asset"
+          WHERE "tenantId" = ${tenantId}
+            AND COALESCE(
+              "guarantee"::date,
+              CASE
+                WHEN "acquiredOn" IS NOT NULL THEN ("acquiredOn" + INTERVAL '1 year')::date
+                ELSE NULL
+              END
+            ) >= CURRENT_DATE
+            AND COALESCE("name", '') NOT ILIKE '%manual%';
+        `
+      ),
+      this.prisma.$queryRaw<{ count: number }[]>(
+        Prisma.sql`
+          SELECT COUNT(*)::int AS count
+          FROM "Asset"
+          WHERE "tenantId" = ${tenantId}
+            AND COALESCE("name", '') ILIKE '%montacarga%';
+        `
+      ),
+      this.prisma.$queryRaw<{ count: number }[]>(
+        Prisma.sql`
+          SELECT COUNT(*)::int AS count
+          FROM "Asset"
+          WHERE "tenantId" = ${tenantId}
+            AND COALESCE("name", '') ILIKE '%montacarga%'
             AND COALESCE(
               "guarantee"::date,
               CASE
@@ -545,6 +586,65 @@ export class DashboardService {
       if (b.closedCount !== a.closedCount) return b.closedCount - a.closedCount;
       return a.name.localeCompare(b.name);
     });
+
+    const rangeCalendarDays = Math.max(1, (to.getTime() - from.getTime()) / (24 * 60 * 60 * 1000));
+    const rangeCalendarWeeks = Math.max(rangeCalendarDays / 7, 1 / 7);
+    const technicianTypeAveragesMap = new Map<
+      string,
+      {
+        userId: string;
+        name: string;
+        preventiveCount: number;
+        correctiveCount: number;
+        diagnosticCount: number;
+      }
+    >();
+
+    for (const row of closedByTechTypeRows) {
+      if (!['PREVENTIVO', 'CORRECTIVO', 'DIAGNOSTICO'].includes(row.serviceType)) continue;
+      const current =
+        technicianTypeAveragesMap.get(row.userId) ??
+        {
+          userId: row.userId,
+          name: row.name,
+          preventiveCount: 0,
+          correctiveCount: 0,
+          diagnosticCount: 0,
+        };
+      if (row.serviceType === 'PREVENTIVO') current.preventiveCount += row.closedCount;
+      if (row.serviceType === 'CORRECTIVO') current.correctiveCount += row.closedCount;
+      if (row.serviceType === 'DIAGNOSTICO') current.diagnosticCount += row.closedCount;
+      technicianTypeAveragesMap.set(row.userId, current);
+    }
+
+    const technicianTypeAverages = Array.from(technicianTypeAveragesMap.values())
+      .map((row) => {
+        const dailyPreventive = round(row.preventiveCount / rangeCalendarDays, 2);
+        const dailyCorrective = round(row.correctiveCount / rangeCalendarDays, 2);
+        const dailyDiagnostic = round(row.diagnosticCount / rangeCalendarDays, 2);
+        const weeklyPreventive = round(row.preventiveCount / rangeCalendarWeeks, 2);
+        const weeklyCorrective = round(row.correctiveCount / rangeCalendarWeeks, 2);
+        const weeklyDiagnostic = round(row.diagnosticCount / rangeCalendarWeeks, 2);
+        return {
+          userId: row.userId,
+          name: row.name,
+          preventiveCount: row.preventiveCount,
+          correctiveCount: row.correctiveCount,
+          diagnosticCount: row.diagnosticCount,
+          dailyPreventive,
+          dailyCorrective,
+          dailyDiagnostic,
+          weeklyPreventive,
+          weeklyCorrective,
+          weeklyDiagnostic,
+          dailyTotal: round(dailyPreventive + dailyCorrective + dailyDiagnostic, 2),
+          weeklyTotal: round(weeklyPreventive + weeklyCorrective + weeklyDiagnostic, 2),
+        };
+      })
+      .sort((a, b) => {
+        if (b.weeklyTotal !== a.weeklyTotal) return b.weeklyTotal - a.weeklyTotal;
+        return a.name.localeCompare(b.name);
+      });
 
     // Productividad semanal por técnico (cerradas por semana + horas trabajadas por semana)
     type TechWeeklyRow = {
@@ -1407,6 +1507,9 @@ const workTimeByServiceOrderType = typeEffPauseRows.map(r => {
       assets: {
         total: assetsTotal,
         inWarranty: assetsInWarranty,
+        inWarrantyExcludingManual: assetsInWarrantyExcludingManual,
+        forkliftsTotal,
+        forkliftsInWarranty,
         inWarrantyByName: assetsInWarrantyByNameRows,
         byStatus: assetsByStatus,
         byCriticality: assetsByCriticality,
@@ -1435,6 +1538,7 @@ const workTimeByServiceOrderType = typeEffPauseRows.map(r => {
         technicianWorkload,
         technicianPerformance,
         technicianWeeklyProductivity,
+        technicianTypeAverages,
         technicianEffectiveVsPauses,
         workTimeByServiceOrderType,
         closedOrdersSummary: {
