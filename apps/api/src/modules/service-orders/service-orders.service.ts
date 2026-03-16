@@ -1413,6 +1413,7 @@ private async assertTechCanMutateServiceOrder(
       this.prisma.workOrder.groupBy({
         by: ['status'],
         where: statusCountWhere,
+        orderBy: { status: 'asc' },
         _count: { id: true },
       }),
     ]);
