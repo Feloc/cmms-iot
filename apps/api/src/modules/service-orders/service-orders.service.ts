@@ -25,6 +25,7 @@ import { randomUUID } from 'crypto';
 import * as os from 'os';
 import { spawn } from 'child_process';
 import { pathToFileURL } from 'url';
+import * as XLSX from 'xlsx';
 
 type Unit = 'DAY' | 'MONTH' | 'YEAR';
 
@@ -1441,6 +1442,336 @@ private async assertTechCanMutateServiceOrder(
     }, {});
 
     return { items: enriched, total, page, size, statusCounts };
+  }
+
+  async exportList(q: ListServiceOrdersQuery) {
+    const pageSize = 100;
+    let page = 1;
+    const allItems: any[] = [];
+
+    while (true) {
+      const result = await this.list({ ...q, page, size: pageSize });
+      allItems.push(...(result.items ?? []));
+      if (!result.items?.length || allItems.length >= (result.total ?? 0)) break;
+      page += 1;
+    }
+
+    const commercialStatusLabel = (status?: string | null) => {
+      switch (String(status || '').toUpperCase()) {
+        case 'PENDING_QUOTE':
+          return 'PC · Pendiente cotizar';
+        case 'PENDING_APPROVAL':
+          return 'PA · Pendiente aprobación';
+        case 'APPROVED':
+          return 'AP · Aprobado';
+        case 'CONFIRMED':
+          return 'CF · Confirmado';
+        default:
+          return '';
+      }
+    };
+
+    const rows = allItems.map((so: any) => {
+      const technicianNames = (so.assignments ?? [])
+        .filter((a: any) => a?.role === 'TECHNICIAN' && a?.state === 'ACTIVE')
+        .map((a: any) => a?.user?.name)
+        .filter(Boolean)
+        .join(', ');
+
+      return {
+        'Creada': so.createdAt ? new Date(so.createdAt).toISOString() : '',
+        'Activo': so.assetCode ?? '',
+        'Título': so.title ?? '',
+        'Descripción': so.description ?? '',
+        'Cliente': so.asset?.customer ?? '',
+        'Serie': so.asset?.serialNumber ?? '',
+        'Status': so.status ?? '',
+        'Negociación': commercialStatusLabel(so.commercialStatus),
+        'Tipo': so.serviceOrderType ?? '',
+        'Tiene novedad': so.hasIssue ? 'Sí' : 'No',
+        'Estado novedad': so.serviceOrderIssue?.status ?? '',
+        'Fecha programada': so.dueDate ? new Date(so.dueDate).toISOString() : '',
+        'Duración (min)': so.durationMin ?? '',
+        'Técnico': technicianNames,
+      };
+    });
+
+    const worksheet = XLSX.utils.json_to_sheet(rows);
+    worksheet['!cols'] = [
+      { wch: 22 },
+      { wch: 18 },
+      { wch: 30 },
+      { wch: 40 },
+      { wch: 24 },
+      { wch: 22 },
+      { wch: 16 },
+      { wch: 24 },
+      { wch: 16 },
+      { wch: 14 },
+      { wch: 18 },
+      { wch: 24 },
+      { wch: 14 },
+      { wch: 24 },
+    ];
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Service Orders');
+
+    return {
+      filename: `service-orders-${new Date().toISOString().slice(0, 10)}.xlsx`,
+      buffer: XLSX.write(workbook, { bookType: 'xlsx', type: 'buffer' }),
+    };
+  }
+
+  private describeListFilters(q: ListServiceOrdersQuery) {
+    const entries: Array<{ label: string; value: string }> = [];
+    const pushIfAny = (label: string, values?: string[]) => {
+      const clean = (values ?? []).map((v) => String(v || '').trim()).filter(Boolean);
+      if (clean.length) entries.push({ label, value: clean.join(', ') });
+    };
+
+    const text = String(q.q ?? '').trim();
+    if (text) entries.push({ label: 'Texto', value: text });
+    pushIfAny('Status', normalizeQueryArray((q as any).status));
+    pushIfAny('Tipo', normalizeQueryArray((q as any).type));
+    pushIfAny('Negociación', normalizeQueryArray((q as any).commercialStatus));
+    pushIfAny('Técnico', normalizeQueryArray((q as any).technicianId));
+    pushIfAny('Estado novedad', normalizeQueryArray((q as any).issueStatus));
+    if (this.truthy((q as any).hasIssue)) entries.push({ label: 'Novedad', value: 'Sí' });
+    if (this.truthy((q as any).scheduledOnly)) entries.push({ label: 'Programadas', value: 'Solo con fecha' });
+    if (this.truthy((q as any).unscheduledOnly)) entries.push({ label: 'Programadas', value: 'Solo sin fecha' });
+
+    const start = this.coerceDate(q.start ?? undefined);
+    const end = this.coerceDate(q.end ?? undefined);
+    if (start || end) {
+      entries.push({
+        label: 'Rango fecha programada',
+        value: `${start ? this.reportFmtDateTime(start.toISOString()) : '—'} a ${end ? this.reportFmtDateTime(end.toISOString()) : '—'}`,
+      });
+    }
+
+    return entries;
+  }
+
+  private buildServiceOrdersListReportHtml(args: {
+    tenant: any;
+    filters: Array<{ label: string; value: string }>;
+    items: any[];
+    total: number;
+    statusCounts: Record<string, number>;
+  }) {
+    const { tenant, filters, items, total, statusCounts } = args;
+    const filterRows = filters.length
+      ? filters
+          .map(
+            (entry) => `
+              <tr>
+                <td class="label">${this.reportEscapeHtml(entry.label)}</td>
+                <td>${this.reportEscapeHtml(entry.value)}</td>
+              </tr>`,
+          )
+          .join('')
+      : `<tr><td class="muted" colspan="2">Sin filtros adicionales.</td></tr>`;
+
+    const statusRows = Object.entries(statusCounts)
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(
+        ([status, count]) => `
+          <tr>
+            <td>${this.reportEscapeHtml(status)}</td>
+            <td class="right">${this.reportEscapeHtml(count)}</td>
+          </tr>`,
+      )
+      .join('');
+
+    const tableRows = items.length
+      ? items
+          .map((so) => {
+            const commercialStatus =
+              String(so?.commercialStatus || '').trim() === ''
+                ? 'Sin definir'
+                : String(so.commercialStatus).toUpperCase() === 'PENDING_QUOTE'
+                  ? 'Pendiente cotizar'
+                  : String(so.commercialStatus).toUpperCase() === 'PENDING_APPROVAL'
+                    ? 'Pendiente aprobación'
+                    : String(so.commercialStatus).toUpperCase() === 'APPROVED'
+                      ? 'Aprobado'
+                      : String(so.commercialStatus).toUpperCase() === 'CONFIRMED'
+                        ? 'Confirmado'
+                        : String(so.commercialStatus);
+            const technicianNames = (so?.assignments ?? [])
+              .filter((a: any) => a?.role === 'TECHNICIAN' && a?.state === 'ACTIVE')
+              .map((a: any) => String(a?.user?.name || '').trim())
+              .filter(Boolean)
+              .join(', ');
+
+            return `
+              <tr>
+                <td>${this.reportEscapeHtml(so?.assetCode ?? '-')}</td>
+                <td>${this.reportEscapeHtml(so?.asset?.model ?? '-')}</td>
+                <td>${this.reportEscapeHtml(so?.asset?.customer ?? '-')}</td>
+                <td>${this.reportEscapeHtml(commercialStatus)}</td>
+                <td>${this.reportEscapeHtml(so?.dueDate ? this.reportFmtDateTime(so.dueDate) : '—')}</td>
+              </tr>`;
+          })
+          .join('')
+      : `<tr><td colspan="5" class="muted">Sin resultados para exportar.</td></tr>`;
+
+    return `<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <title>Reporte listado OS</title>
+  <style>
+    :root { --text: #111827; --muted: #6b7280; --line: #d1d5db; --bg: #f3f4f6; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: Arial, Helvetica, sans-serif; color: var(--text); font-size: 12px; line-height: 1.35; }
+    .page { padding: 20px; }
+    .header { display: flex; justify-content: space-between; gap: 16px; margin-bottom: 12px; }
+    .title { font-size: 22px; font-weight: 700; margin: 0 0 4px; }
+    .subtitle { font-size: 14px; font-weight: 700; margin: 0 0 8px; }
+    .muted { color: var(--muted); }
+    .card { border: 1px solid var(--line); border-radius: 6px; padding: 12px; margin: 10px 0; }
+    .grid { display: grid; gap: 10px; }
+    .grid.two { grid-template-columns: 1.1fr 0.9fr; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { border: 1px solid var(--line); padding: 6px; vertical-align: top; }
+    th { background: var(--bg); text-align: left; }
+    .right { text-align: right; }
+    .label { width: 180px; background: #fafafa; font-weight: 700; }
+    .brand { display: flex; gap: 12px; align-items: center; }
+    .brand img { max-height: 48px; max-width: 220px; object-fit: contain; }
+    .summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+    .summary-box { border: 1px solid var(--line); border-radius: 6px; padding: 8px; }
+    .summary-box .k { font-size: 11px; color: var(--muted); }
+    .summary-box .v { font-size: 18px; font-weight: 700; margin-top: 4px; }
+    @media print {
+      .page { padding: 0; }
+      .card { break-inside: avoid; }
+      tr { break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div class="header">
+      <div>
+        <div class="title">Reporte de Ordenes de Servicio</div>
+        <div class="muted">Generado: ${this.reportEscapeHtml(this.reportFmtDateTime(new Date().toISOString()))}</div>
+      </div>
+    </div>
+
+    <section class="card">
+      <div class="brand">
+        ${tenant?.logoUrl ? `<img src="${this.reportEscapeHtml(tenant.logoUrl)}" alt="Logo" />` : ''}
+        <div>
+          <div class="subtitle">${this.reportEscapeHtml(tenant?.legalName ?? tenant?.name ?? 'Tenant')}</div>
+          <div class="muted">
+            ${tenant?.taxId ? `NIT: ${this.reportEscapeHtml(tenant.taxId)}` : ''}
+            ${tenant?.taxId && tenant?.phone ? ' · ' : ''}
+            ${tenant?.phone ? `Tel: ${this.reportEscapeHtml(tenant.phone)}` : ''}
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="summary">
+        <div class="summary-box">
+          <div class="k">Total resultados</div>
+          <div class="v">${this.reportEscapeHtml(total)}</div>
+        </div>
+        ${Object.entries(statusCounts)
+          .sort((a, b) => a[0].localeCompare(b[0]))
+          .slice(0, 3)
+          .map(
+            ([status, count]) => `
+              <div class="summary-box">
+                <div class="k">${this.reportEscapeHtml(status)}</div>
+                <div class="v">${this.reportEscapeHtml(count)}</div>
+              </div>`,
+          )
+          .join('')}
+      </div>
+    </section>
+
+    <div class="grid two">
+      <section class="card">
+        <div class="subtitle">Filtros aplicados</div>
+        <table>
+          <tbody>${filterRows}</tbody>
+        </table>
+      </section>
+
+      <section class="card">
+        <div class="subtitle">Distribución por estado</div>
+        <table>
+          <thead>
+            <tr>
+              <th>Status</th>
+              <th class="right">Cantidad</th>
+            </tr>
+          </thead>
+          <tbody>${statusRows || `<tr><td colspan="2" class="muted">Sin datos.</td></tr>`}</tbody>
+        </table>
+      </section>
+    </div>
+
+    <section class="card">
+      <div class="subtitle">Detalle</div>
+      <table>
+        <thead>
+          <tr>
+            <th>Activo</th>
+            <th>Modelo</th>
+            <th>Cliente</th>
+            <th>Estado</th>
+            <th>Programación</th>
+          </tr>
+        </thead>
+        <tbody>${tableRows}</tbody>
+      </table>
+    </section>
+  </div>
+</body>
+</html>`;
+  }
+
+  async exportListReport(q: ListServiceOrdersQuery) {
+    const pageSize = 100;
+    let page = 1;
+    const allItems: any[] = [];
+    let total = 0;
+    let statusCounts: Record<string, number> = {};
+
+    while (true) {
+      const result = await this.list({ ...q, page, size: pageSize });
+      if (page === 1) {
+        total = result.total ?? 0;
+        statusCounts = result.statusCounts ?? {};
+      }
+      allItems.push(...(result.items ?? []));
+      if (!result.items?.length || allItems.length >= total) break;
+      page += 1;
+    }
+
+    const tenantId = this.getTenantId();
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { name: true, legalName: true, taxId: true, phone: true, logoUrl: true },
+    });
+
+    const html = this.buildServiceOrdersListReportHtml({
+      tenant,
+      filters: this.describeListFilters(q),
+      items: allItems,
+      total,
+      statusCounts,
+    });
+
+    return {
+      filename: `reporte-service-orders-${new Date().toISOString().slice(0, 10)}.pdf`,
+      buffer: await this.renderReportPdfWithChromium(html),
+    };
   }
 
   async calendar(q: ServiceOrdersCalendarQuery) {

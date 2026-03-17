@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { useSession } from 'next-auth/react';
 import { getAuthFromSession } from '@/lib/auth';
-import { apiFetch } from '@/lib/api';
+import { apiBase, apiFetch } from '@/lib/api';
 
 type User = { id: string; name: string; email: string; role: string };
 
@@ -111,6 +111,9 @@ export default function ServiceOrdersPage() {
   const [data, setData] = useState<Paginated<ServiceOrder> | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string>('');
+  const [savingCommercialId, setSavingCommercialId] = useState<string>('');
+  const [exporting, setExporting] = useState(false);
+  const [exportingReport, setExportingReport] = useState(false);
 
   const [technicians, setTechnicians] = useState<User[]>([]);
 
@@ -138,6 +141,52 @@ export default function ServiceOrdersPage() {
 
     return `/service-orders?${qs.toString()}`;
   }, [auth.token, auth.tenantSlug, filters, listTab, statusTab, page]);
+
+  const exportPath = useMemo(() => {
+    if (!auth.token || !auth.tenantSlug) return null;
+
+    const qs = new URLSearchParams();
+    for (const f of filters) {
+      const v = (f.value || '').trim();
+      if (!v) continue;
+      if (statusTab !== 'ALL' && f.field === 'status') continue;
+      if (f.field === 'month') {
+        const range = monthToRange(v);
+        if (!range) continue;
+        qs.set('start', range.start);
+        qs.set('end', range.end);
+        continue;
+      }
+      qs.append(f.field, v);
+    }
+    if (listTab === 'ISSUES') qs.set('hasIssue', 'true');
+    if (statusTab !== 'ALL') qs.append('status', statusTab);
+
+    return `/service-orders/export?${qs.toString()}`;
+  }, [auth.token, auth.tenantSlug, filters, listTab, statusTab]);
+
+  const exportReportPath = useMemo(() => {
+    if (!auth.token || !auth.tenantSlug) return null;
+
+    const qs = new URLSearchParams();
+    for (const f of filters) {
+      const v = (f.value || '').trim();
+      if (!v) continue;
+      if (statusTab !== 'ALL' && f.field === 'status') continue;
+      if (f.field === 'month') {
+        const range = monthToRange(v);
+        if (!range) continue;
+        qs.set('start', range.start);
+        qs.set('end', range.end);
+        continue;
+      }
+      qs.append(f.field, v);
+    }
+    if (listTab === 'ISSUES') qs.set('hasIssue', 'true');
+    if (statusTab !== 'ALL') qs.append('status', statusTab);
+
+    return `/service-orders/export-report?${qs.toString()}`;
+  }, [auth.token, auth.tenantSlug, filters, listTab, statusTab]);
 
   const items = data?.items ?? EMPTY_ITEMS;
   const statusCounts = data?.statusCounts ?? {};
@@ -210,6 +259,12 @@ export default function ServiceOrdersPage() {
     });
   }, [items]);
 
+  async function refreshList() {
+    if (!listPath || !auth.token || !auth.tenantSlug) return;
+    const d = await apiFetch<Paginated<ServiceOrder>>(listPath, { token: auth.token, tenantSlug: auth.tenantSlug });
+    setData(d);
+  }
+
   async function saveSchedule(id: string) {
     if (!auth.token || !auth.tenantSlug) return;
 
@@ -223,10 +278,97 @@ export default function ServiceOrdersPage() {
       body: { dueDate, technicianId: row?.technicianId || null },
     });
 
-    // refrescar lista
-    if (listPath) {
-      const d = await apiFetch<Paginated<ServiceOrder>>(listPath, { token: auth.token, tenantSlug: auth.tenantSlug });
-      setData(d);
+    await refreshList();
+  }
+
+  async function saveCommercialStatus(id: string, commercialStatus: string) {
+    if (!auth.token || !auth.tenantSlug) return;
+    setSavingCommercialId(id);
+    setErr('');
+    try {
+      await apiFetch(`/service-orders/${id}`, {
+        method: 'PATCH',
+        token: auth.token,
+        tenantSlug: auth.tenantSlug,
+        body: { commercialStatus: commercialStatus || null },
+      });
+      await refreshList();
+    } catch (e: any) {
+      setErr(e?.message ?? 'Error actualizando estado de negociación');
+    } finally {
+      setSavingCommercialId('');
+    }
+  }
+
+  async function exportFilteredResults() {
+    if (!auth.token || !auth.tenantSlug || !exportPath) return;
+    setExporting(true);
+    setErr('');
+    try {
+      const res = await fetch(`${apiBase}${exportPath}`, {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${auth.token}`,
+          'x-tenant': auth.tenantSlug,
+        },
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        throw new Error(text || `Error exportando (${res.status})`);
+      }
+
+      const blob = await res.blob();
+      const disposition = res.headers.get('content-disposition') || '';
+      const match = disposition.match(/filename="?([^"]+)"?/i);
+      const filename = match?.[1] || 'service-orders.xlsx';
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (e: any) {
+      setErr(e?.message ?? 'Error exportando a Excel');
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  async function exportFilteredReport() {
+    if (!auth.token || !auth.tenantSlug || !exportReportPath) return;
+    setExportingReport(true);
+    setErr('');
+    try {
+      const res = await fetch(`${apiBase}${exportReportPath}`, {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${auth.token}`,
+          'x-tenant': auth.tenantSlug,
+        },
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        throw new Error(text || `Error exportando reporte (${res.status})`);
+      }
+
+      const blob = await res.blob();
+      const disposition = res.headers.get('content-disposition') || '';
+      const match = disposition.match(/filename="?([^"]+)"?/i);
+      const filename = match?.[1] || 'service-orders-report.pdf';
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (e: any) {
+      setErr(e?.message ?? 'Error exportando reporte');
+    } finally {
+      setExportingReport(false);
     }
   }
 
@@ -269,6 +411,22 @@ export default function ServiceOrdersPage() {
           <Link href="/service-orders/new" className="px-3 py-2 border rounded text-sm bg-black text-white">
             Nueva OS
           </Link>
+          <button
+            type="button"
+            className="px-3 py-2 border rounded text-sm"
+            onClick={exportFilteredResults}
+            disabled={exporting}
+          >
+            {exporting ? 'Exportando...' : 'Exportar Excel'}
+          </button>
+          <button
+            type="button"
+            className="px-3 py-2 border rounded text-sm"
+            onClick={exportFilteredReport}
+            disabled={exportingReport}
+          >
+            {exportingReport ? 'Generando...' : 'Exportar reporte'}
+          </button>
           <Link href="/calendar" className="px-3 py-2 border rounded text-sm">
             Calendario
           </Link>
@@ -481,6 +639,8 @@ export default function ServiceOrdersPage() {
             {items.map((so) => {
               const row = edits[so.id] || { dueLocal: '', technicianId: '' };
               const commercial = commercialStatusMeta(so.commercialStatus);
+              const canEditCommercialStatus = isAdmin && String(so.status || '').toUpperCase() === 'SCHEDULED';
+              const isSavingCommercial = savingCommercialId === so.id;
               return (
                 <tr key={so.id} className="hover:bg-gray-50">
                   <td className="p-2 border-b whitespace-nowrap">{fmt(so.createdAt)}</td>
@@ -496,12 +656,37 @@ export default function ServiceOrdersPage() {
                   </td>
                   <td className="p-2 border-b whitespace-nowrap">{so.status}</td>
                   <td className="p-2 border-b whitespace-nowrap">
-                    {commercial ? (
-                      <span className={`px-2 py-0.5 border rounded text-xs ${commercial.className}`} title={commercial.label}>
-                        {commercial.code}
-                      </span>
+                    {isAdmin ? (
+                      <div className="space-y-1">
+                        <select
+                          className="border rounded px-2 py-1 text-sm min-w-[170px]"
+                          value={so.commercialStatus ?? ''}
+                          disabled={isSavingCommercial || !canEditCommercialStatus}
+                          onChange={(e) => saveCommercialStatus(so.id, e.target.value)}
+                          title={!canEditCommercialStatus ? 'Disponible solo cuando la OS está en SCHEDULED.' : 'Seguimiento comercial con el cliente.'}
+                        >
+                          <option value="">(sin definir)</option>
+                          <option value="PENDING_QUOTE">PC · Pendiente cotizar</option>
+                          <option value="PENDING_APPROVAL">PA · Pendiente aprobación</option>
+                          <option value="APPROVED">AP · Aprobado</option>
+                          <option value="CONFIRMED">CF · Confirmado</option>
+                        </select>
+                        {commercial ? (
+                          <span className={`inline-flex px-2 py-0.5 border rounded text-xs ${commercial.className}`} title={commercial.label}>
+                            {commercial.code}
+                          </span>
+                        ) : (
+                          <span className="text-xs text-gray-500">Sin definir</span>
+                        )}
+                      </div>
                     ) : (
-                      <span className="text-gray-500">—</span>
+                      commercial ? (
+                        <span className={`px-2 py-0.5 border rounded text-xs ${commercial.className}`} title={commercial.label}>
+                          {commercial.code}
+                        </span>
+                      ) : (
+                        <span className="text-gray-500">—</span>
+                      )
                     )}
                   </td>
                   <td className="p-2 border-b whitespace-nowrap">{so.serviceOrderType || '-'}</td>

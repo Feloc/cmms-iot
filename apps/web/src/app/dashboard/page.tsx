@@ -208,26 +208,60 @@ function pctOfScheduled(value: number, scheduled: number) {
   return Math.round((value / scheduled) * 100);
 }
 
-function NegotiationPercentLabel(props: any) {
-  const { x, y, width, height, value, payload } = props;
-  const numericValue = Number(value ?? 0);
-  const scheduled = Number(payload?.scheduled ?? 0);
-  if (!numericValue || !scheduled || width == null || height == null || Number(height) < 22) return null;
-  const pct = pctOfScheduled(numericValue, scheduled);
-  if (!pct) return null;
-  return (
-    <text
-      x={Number(x) + Number(width) / 2}
-      y={Number(y) + Number(height) / 2}
-      fill="#0f172a"
-      fontSize={11}
-      textAnchor="middle"
-      dominantBaseline="middle"
-    >
-      {pct}%
-    </text>
-  );
+function formatBarValue(value: unknown, digits = 0) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n === 0) return '';
+  return digits === 0 ? String(Math.round(n)) : n.toFixed(digits);
 }
+
+function createBarValueLabel(props: { placement: 'top' | 'center' | 'end'; digits?: number; fill?: string }) {
+  return function BarValueLabel(labelProps: any) {
+    const { x, y, width, height, value } = labelProps;
+    const text = formatBarValue(value, props.digits ?? 0);
+    if (!text || x == null || y == null || width == null || height == null) return null;
+
+    const numericX = Number(x);
+    const numericY = Number(y);
+    const numericWidth = Number(width);
+    const numericHeight = Number(height);
+    if (!Number.isFinite(numericWidth) || !Number.isFinite(numericHeight)) return null;
+
+    if (props.placement === 'center' && (numericWidth < 24 || numericHeight < 16)) return null;
+
+    const base = {
+      fill: props.fill ?? '#0f172a',
+      fontSize: 11,
+      dominantBaseline: 'middle' as const,
+    };
+
+    if (props.placement === 'top') {
+      return (
+        <text x={numericX + numericWidth / 2} y={numericY - 6} textAnchor="middle" {...base}>
+          {text}
+        </text>
+      );
+    }
+
+    if (props.placement === 'end') {
+      return (
+        <text x={numericX + numericWidth + 6} y={numericY + numericHeight / 2} textAnchor="start" {...base}>
+          {text}
+        </text>
+      );
+    }
+
+    return (
+      <text x={numericX + numericWidth / 2} y={numericY + numericHeight / 2} textAnchor="middle" {...base}>
+        {text}
+      </text>
+    );
+  };
+}
+
+const TopIntegerBarLabel = createBarValueLabel({ placement: 'top', digits: 0 });
+const EndIntegerBarLabel = createBarValueLabel({ placement: 'end', digits: 0 });
+const CenterIntegerBarLabel = createBarValueLabel({ placement: 'center', digits: 0, fill: '#ffffff' });
+const CenterDecimalBarLabel = createBarValueLabel({ placement: 'center', digits: 2, fill: '#ffffff' });
 
 function NegotiationTooltip(props: any) {
   const { active, payload, label } = props;
@@ -838,19 +872,19 @@ export default function Dashboard() {
                         <Tooltip content={<NegotiationTooltip />} />
                         <Legend />
                         <Bar dataKey="pc" stackId="negotiation" name="PC" fill="#f97316" radius={[0, 0, 0, 0]}>
-                          <LabelList dataKey="pc" content={<NegotiationPercentLabel />} />
+                          <LabelList dataKey="pc" content={<CenterIntegerBarLabel />} />
                         </Bar>
                         <Bar dataKey="pa" stackId="negotiation" name="PA" fill="#f59e0b" radius={[0, 0, 0, 0]}>
-                          <LabelList dataKey="pa" content={<NegotiationPercentLabel />} />
+                          <LabelList dataKey="pa" content={<CenterIntegerBarLabel />} />
                         </Bar>
                         <Bar dataKey="ap" stackId="negotiation" name="AP" fill="#0ea5e9" radius={[0, 0, 0, 0]}>
-                          <LabelList dataKey="ap" content={<NegotiationPercentLabel />} />
+                          <LabelList dataKey="ap" content={<CenterIntegerBarLabel />} />
                         </Bar>
                         <Bar dataKey="cf" stackId="negotiation" name="CF" fill="#22c55e" radius={[0, 0, 0, 0]}>
-                          <LabelList dataKey="cf" content={<NegotiationPercentLabel />} />
+                          <LabelList dataKey="cf" content={<CenterIntegerBarLabel />} />
                         </Bar>
                         <Bar dataKey="undefinedStatus" stackId="negotiation" name="Sin definir" fill="#cbd5e1" radius={[4, 4, 0, 0]}>
-                          <LabelList dataKey="undefinedStatus" content={<NegotiationPercentLabel />} />
+                          <LabelList dataKey="undefinedStatus" content={<CenterIntegerBarLabel />} />
                         </Bar>
                         <Line type="monotone" dataKey="scheduled" name="SCHEDULED total" stroke="#0f172a" strokeWidth={2} />
                       </ComposedChart>
@@ -938,7 +972,9 @@ export default function Dashboard() {
                               <XAxis type="number" allowDecimals={false} />
                               <YAxis type="category" dataKey="name" width={130} interval={0} />
                               <Tooltip formatter={(v: any) => [v, 'Cerradas']} />
-                              <Bar dataKey="closed" name="Cerradas" fill="#2563eb" radius={[0, 4, 4, 0]} />
+                              <Bar dataKey="closed" name="Cerradas" fill="#2563eb" radius={[0, 4, 4, 0]}>
+                                <LabelList dataKey="closed" content={<EndIntegerBarLabel />} />
+                              </Bar>
                             </ComposedChart>
                           </ResponsiveContainer>
                         </div>
@@ -957,7 +993,9 @@ export default function Dashboard() {
                               <XAxis dataKey="serviceType" angle={-20} textAnchor="end" interval={0} height={55} />
                               <YAxis allowDecimals={false} />
                               <Tooltip formatter={(v: any) => [v, 'Cerradas']} />
-                              <Bar dataKey="closed" name="Cerradas" fill="#16a34a" radius={[4, 4, 0, 0]} />
+                              <Bar dataKey="closed" name="Cerradas" fill="#16a34a" radius={[4, 4, 0, 0]}>
+                                <LabelList dataKey="closed" content={<TopIntegerBarLabel />} />
+                              </Bar>
                             </ComposedChart>
                           </ResponsiveContainer>
                         </div>
@@ -979,7 +1017,9 @@ export default function Dashboard() {
                             <Tooltip />
                             <Legend />
                             {closedStackKeys.map((k) => (
-                              <Bar key={k} dataKey={k} stackId="closedByType" fill={closedStackColors[k]} name={k} />
+                              <Bar key={k} dataKey={k} stackId="closedByType" fill={closedStackColors[k]} name={k}>
+                                <LabelList dataKey={k} content={<CenterIntegerBarLabel />} />
+                              </Bar>
                             ))}
                           </ComposedChart>
                         </ResponsiveContainer>
@@ -1105,9 +1145,15 @@ export default function Dashboard() {
                           <YAxis type="category" dataKey="name" width={150} interval={0} tickLine={false} axisLine={false} />
                           <Tooltip formatter={(value: any, name: any) => [fmtFixed(value, 2), name]} />
                           <Legend />
-                          <Bar dataKey="dailyPreventive" stackId="daily" name="Preventivos" fill="#16a34a" radius={[0, 0, 0, 0]} />
-                          <Bar dataKey="dailyCorrective" stackId="daily" name="Correctivos" fill="#ea580c" radius={[0, 0, 0, 0]} />
-                          <Bar dataKey="dailyDiagnostic" stackId="daily" name="Diagnósticos" fill="#2563eb" radius={[0, 4, 4, 0]} />
+                          <Bar dataKey="dailyPreventive" stackId="daily" name="Preventivos" fill="#16a34a" radius={[0, 0, 0, 0]}>
+                            <LabelList dataKey="dailyPreventive" content={<CenterDecimalBarLabel />} />
+                          </Bar>
+                          <Bar dataKey="dailyCorrective" stackId="daily" name="Correctivos" fill="#ea580c" radius={[0, 0, 0, 0]}>
+                            <LabelList dataKey="dailyCorrective" content={<CenterDecimalBarLabel />} />
+                          </Bar>
+                          <Bar dataKey="dailyDiagnostic" stackId="daily" name="Diagnósticos" fill="#2563eb" radius={[0, 4, 4, 0]}>
+                            <LabelList dataKey="dailyDiagnostic" content={<CenterDecimalBarLabel />} />
+                          </Bar>
                         </ComposedChart>
                       </ResponsiveContainer>
                     </div>
@@ -1127,9 +1173,15 @@ export default function Dashboard() {
                           <YAxis type="category" dataKey="name" width={150} interval={0} tickLine={false} axisLine={false} />
                           <Tooltip formatter={(value: any, name: any) => [fmtFixed(value, 2), name]} />
                           <Legend />
-                          <Bar dataKey="weeklyPreventive" stackId="weekly" name="Preventivos" fill="#16a34a" radius={[0, 0, 0, 0]} />
-                          <Bar dataKey="weeklyCorrective" stackId="weekly" name="Correctivos" fill="#ea580c" radius={[0, 0, 0, 0]} />
-                          <Bar dataKey="weeklyDiagnostic" stackId="weekly" name="Diagnósticos" fill="#2563eb" radius={[0, 4, 4, 0]} />
+                          <Bar dataKey="weeklyPreventive" stackId="weekly" name="Preventivos" fill="#16a34a" radius={[0, 0, 0, 0]}>
+                            <LabelList dataKey="weeklyPreventive" content={<CenterDecimalBarLabel />} />
+                          </Bar>
+                          <Bar dataKey="weeklyCorrective" stackId="weekly" name="Correctivos" fill="#ea580c" radius={[0, 0, 0, 0]}>
+                            <LabelList dataKey="weeklyCorrective" content={<CenterDecimalBarLabel />} />
+                          </Bar>
+                          <Bar dataKey="weeklyDiagnostic" stackId="weekly" name="Diagnósticos" fill="#2563eb" radius={[0, 4, 4, 0]}>
+                            <LabelList dataKey="weeklyDiagnostic" content={<CenterDecimalBarLabel />} />
+                          </Bar>
                         </ComposedChart>
                       </ResponsiveContainer>
                     </div>
@@ -1547,7 +1599,9 @@ export default function Dashboard() {
                         <YAxis yAxisId="right" orientation="right" tickLine={false} axisLine={false} />
                         <YAxis yAxisId="pct" orientation="right" tickLine={false} axisLine={false} domain={[0, 100]} tickFormatter={(v) => `${v}%`} />
                         <Tooltip />
-                        <Bar yAxisId="left" dataKey="closed" name="OS cerradas" fill="#64748b" radius={[6, 6, 0, 0]} />
+                        <Bar yAxisId="left" dataKey="closed" name="OS cerradas" fill="#64748b" radius={[6, 6, 0, 0]}>
+                          <LabelList dataKey="closed" content={<TopIntegerBarLabel />} />
+                        </Bar>
                         <Line yAxisId="right" type="monotone" dataKey="hours" name="Horas" stroke="#0f172a" strokeWidth={2} />
                         <Line yAxisId="pct" type="monotone" dataKey="utilization" name="Utilización" stroke="#16a34a" strokeWidth={2} dot={false} />
                       </ComposedChart>

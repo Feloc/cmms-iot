@@ -39,6 +39,28 @@ export class ServiceOrdersController {
     return this.svc.list(q);
   }
 
+  @Get('export')
+  async exportList(
+    @Query() q: ListServiceOrdersQuery,
+    @Res() res: Response,
+  ) {
+    const file = await this.svc.exportList(q);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${file.filename}"`);
+    res.send(file.buffer);
+  }
+
+  @Get('export-report')
+  async exportListReport(
+    @Query() q: ListServiceOrdersQuery,
+    @Res() res: Response,
+  ) {
+    const file = await this.svc.exportListReport(q);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${file.filename}"`);
+    res.send(file.buffer);
+  }
+
   @Get('issues')
   listIssues(@Query() q: ListServiceOrderIssuesQuery) {
     return this.svc.listIssues(q);
