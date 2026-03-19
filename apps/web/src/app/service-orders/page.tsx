@@ -46,6 +46,7 @@ type EditRow = { dueLocal: string; technicianId: string };
 
 const EMPTY_ITEMS: ServiceOrder[] = [];
 const PAGE_SIZE = 50;
+const COMMERCIAL_STATUS_UNDEFINED_FILTER = '__UNDEFINED__';
 
 const STATUS_TABS = ['ALL', 'OPEN', 'SCHEDULED', 'IN_PROGRESS', 'ON_HOLD', 'COMPLETED', 'CLOSED', 'CANCELED'] as const;
 type StatusTab = (typeof STATUS_TABS)[number];
@@ -546,6 +547,7 @@ export default function ServiceOrdersPage() {
               {f.field === 'commercialStatus' ? (
                 <select className="border rounded px-2 py-2 text-sm" value={f.value} onChange={(e) => setFilterValue(f.id, e.target.value)}>
                   <option value="">(cualquiera)</option>
+                  <option value={COMMERCIAL_STATUS_UNDEFINED_FILTER}>Sin definir</option>
                   <option value="PENDING_QUOTE">PC · Pendiente cotizar</option>
                   <option value="PENDING_APPROVAL">PA · Pendiente aprobación</option>
                   <option value="APPROVED">AP · Aprobado</option>

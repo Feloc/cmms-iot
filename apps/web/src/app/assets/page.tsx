@@ -16,6 +16,9 @@ type Asset = {
   status: string;
   criticality: string;
   createdAt: string;
+  hasMaintenancePlan?: boolean;
+  maintenancePlanActive?: boolean;
+  maintenancePlanName?: string | null;
 };
 
 type AssetListResponse = {
@@ -134,12 +137,42 @@ export default function AssetsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filters.serial, filters.name, filters.model, filters.customer, tenantSlug]);
 
-  function fmtDate(d?: string | null) {
-    if (!d) return '-';
-    const dt = new Date(d);
-    if (Number.isNaN(dt.getTime())) return '-';
-    return dt.toLocaleDateString('es-CO');
+function fmtDate(d?: string | null) {
+  if (!d) return '-';
+  const dt = new Date(d);
+  if (Number.isNaN(dt.getTime())) return '-';
+  return dt.toLocaleDateString('es-CO');
+}
+
+function pmBadge(asset: Asset) {
+  if (!asset.hasMaintenancePlan) {
+    return (
+      <span className="inline-flex items-center rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 text-xs font-medium text-gray-600">
+        Sin plan
+      </span>
+    );
   }
+
+  if (asset.maintenancePlanActive === false) {
+    return (
+      <span
+        className="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700"
+        title={asset.maintenancePlanName || 'Plan PM inactivo'}
+      >
+        Inactivo
+      </span>
+    );
+  }
+
+  return (
+    <span
+      className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700"
+      title={asset.maintenancePlanName || 'Plan PM configurado'}
+    >
+      Configurado
+    </span>
+  );
+}
 
   return (
     <div className="p-6 space-y-4">
@@ -203,19 +236,20 @@ export default function AssetsPage() {
               <th className="px-3 py-2 text-left">Cliente</th>
               <th className="px-3 py-2 text-left">Adquisición</th>
               <th className="px-3 py-2 text-left">Estado</th>
+              <th className="px-3 py-2 text-left">Plan PM</th>
               <th className="px-3 py-2 text-left">Acciones</th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={8} className="px-3 py-6 text-center text-gray-500">
+                <td colSpan={9} className="px-3 py-6 text-center text-gray-500">
                   Cargando…
                 </td>
               </tr>
             ) : assets.length === 0 ? (
               <tr>
-                <td colSpan={8} className="px-3 py-6 text-center text-gray-500">
+                <td colSpan={9} className="px-3 py-6 text-center text-gray-500">
                   No hay resultados.
                 </td>
               </tr>
@@ -229,6 +263,7 @@ export default function AssetsPage() {
                   <td className="px-3 py-2">{a.customer || '-'}</td>
                   <td className="px-3 py-2">{fmtDate(a.acquiredOn)}</td>
                   <td className="px-3 py-2">{a.status}</td>
+                  <td className="px-3 py-2">{pmBadge(a)}</td>
                   <td className="px-3 py-2">
                     <div className="flex gap-2">
                       <Link className="underline" href={`/assets/${a.id}`}>

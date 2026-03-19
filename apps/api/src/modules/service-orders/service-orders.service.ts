@@ -296,6 +296,23 @@ export class ServiceOrdersService {
     return s === '1' || s === 'true' || s === 'yes';
   }
 
+  private isUndefinedCommercialStatusFilter(v: any): boolean {
+    const s = String(v ?? '').trim().toUpperCase();
+    return s === '__UNDEFINED__' || s === 'UNDEFINED' || s === 'NULL' || s === 'SIN_DEFINIR';
+  }
+
+  private commercialStatusLabel(status?: string | null, opts?: { withCode?: boolean }): string {
+    const normalized = String(status ?? '').trim().toUpperCase();
+    if (!normalized || this.isUndefinedCommercialStatusFilter(normalized)) return 'Sin definir';
+    const withCode = opts?.withCode !== false;
+
+    if (normalized === 'PENDING_QUOTE' || normalized === 'PC') return withCode ? 'PC · Pendiente cotizar' : 'Pendiente cotizar';
+    if (normalized === 'PENDING_APPROVAL' || normalized === 'PA') return withCode ? 'PA · Pendiente aprobación' : 'Pendiente aprobación';
+    if (normalized === 'APPROVED' || normalized === 'AP') return withCode ? 'AP · Aprobado' : 'Aprobado';
+    if (normalized === 'CONFIRMED' || normalized === 'CF') return withCode ? 'CF · Confirmado' : 'Confirmado';
+    return String(status);
+  }
+
   private normalizeCommercialStatus(v: any): 'PENDING_QUOTE' | 'PENDING_APPROVAL' | 'APPROVED' | 'CONFIRMED' {
     const s = String(v ?? '').trim().toUpperCase();
     if (s === 'PENDING_QUOTE' || s === 'PC') return 'PENDING_QUOTE';
@@ -1296,9 +1313,27 @@ private async assertTechCanMutateServiceOrder(
     if (types.length === 1) where.serviceOrderType = types[0] as any;
     else if (types.length > 1) where.serviceOrderType = { in: types } as any;
 
-    const commercialStatuses = normalizeQueryArray((q as any).commercialStatus).map((s) => this.normalizeCommercialStatus(s));
-    if (commercialStatuses.length === 1) (where as any).commercialStatus = commercialStatuses[0] as any;
-    else if (commercialStatuses.length > 1) (where as any).commercialStatus = { in: commercialStatuses } as any;
+    const commercialStatusFilters = normalizeQueryArray((q as any).commercialStatus);
+    const includeUndefinedCommercialStatus = commercialStatusFilters.some((value) => this.isUndefinedCommercialStatusFilter(value));
+    const commercialStatuses = commercialStatusFilters
+      .filter((value) => !this.isUndefinedCommercialStatusFilter(value))
+      .map((value) => this.normalizeCommercialStatus(value));
+    if (includeUndefinedCommercialStatus && commercialStatuses.length === 0) {
+      (where as any).commercialStatus = null;
+    } else if (includeUndefinedCommercialStatus) {
+      const matchDefinedStatuses =
+        commercialStatuses.length === 1
+          ? { commercialStatus: commercialStatuses[0] as any }
+          : { commercialStatus: { in: commercialStatuses } as any };
+      (where as any).AND = [
+        ...(((where as any).AND as any[]) ?? []),
+        { OR: [{ commercialStatus: null }, matchDefinedStatuses] },
+      ];
+    } else if (commercialStatuses.length === 1) {
+      (where as any).commercialStatus = commercialStatuses[0] as any;
+    } else if (commercialStatuses.length > 1) {
+      (where as any).commercialStatus = { in: commercialStatuses } as any;
+    }
 
     const hasIssueRaw = (q as any).hasIssue;
     if (hasIssueRaw !== undefined && String(hasIssueRaw).trim() !== '') {
@@ -1456,21 +1491,6 @@ private async assertTechCanMutateServiceOrder(
       page += 1;
     }
 
-    const commercialStatusLabel = (status?: string | null) => {
-      switch (String(status || '').toUpperCase()) {
-        case 'PENDING_QUOTE':
-          return 'PC · Pendiente cotizar';
-        case 'PENDING_APPROVAL':
-          return 'PA · Pendiente aprobación';
-        case 'APPROVED':
-          return 'AP · Aprobado';
-        case 'CONFIRMED':
-          return 'CF · Confirmado';
-        default:
-          return '';
-      }
-    };
-
     const rows = allItems.map((so: any) => {
       const technicianNames = (so.assignments ?? [])
         .filter((a: any) => a?.role === 'TECHNICIAN' && a?.state === 'ACTIVE')
@@ -1486,7 +1506,7 @@ private async assertTechCanMutateServiceOrder(
         'Cliente': so.asset?.customer ?? '',
         'Serie': so.asset?.serialNumber ?? '',
         'Status': so.status ?? '',
-        'Negociación': commercialStatusLabel(so.commercialStatus),
+        'Negociación': this.commercialStatusLabel(so.commercialStatus),
         'Tipo': so.serviceOrderType ?? '',
         'Tiene novedad': so.hasIssue ? 'Sí' : 'No',
         'Estado novedad': so.serviceOrderIssue?.status ?? '',
@@ -1533,7 +1553,7 @@ private async assertTechCanMutateServiceOrder(
     if (text) entries.push({ label: 'Texto', value: text });
     pushIfAny('Status', normalizeQueryArray((q as any).status));
     pushIfAny('Tipo', normalizeQueryArray((q as any).type));
-    pushIfAny('Negociación', normalizeQueryArray((q as any).commercialStatus));
+    pushIfAny('Negociación', normalizeQueryArray((q as any).commercialStatus).map((value) => this.commercialStatusLabel(value)));
     pushIfAny('Técnico', normalizeQueryArray((q as any).technicianId));
     pushIfAny('Estado novedad', normalizeQueryArray((q as any).issueStatus));
     if (this.truthy((q as any).hasIssue)) entries.push({ label: 'Novedad', value: 'Sí' });
@@ -1586,18 +1606,7 @@ private async assertTechCanMutateServiceOrder(
     const tableRows = items.length
       ? items
           .map((so) => {
-            const commercialStatus =
-              String(so?.commercialStatus || '').trim() === ''
-                ? 'Sin definir'
-                : String(so.commercialStatus).toUpperCase() === 'PENDING_QUOTE'
-                  ? 'Pendiente cotizar'
-                  : String(so.commercialStatus).toUpperCase() === 'PENDING_APPROVAL'
-                    ? 'Pendiente aprobación'
-                    : String(so.commercialStatus).toUpperCase() === 'APPROVED'
-                      ? 'Aprobado'
-                      : String(so.commercialStatus).toUpperCase() === 'CONFIRMED'
-                        ? 'Confirmado'
-                        : String(so.commercialStatus);
+            const commercialStatus = this.commercialStatusLabel(so?.commercialStatus, { withCode: false });
             const technicianNames = (so?.assignments ?? [])
               .filter((a: any) => a?.role === 'TECHNICIAN' && a?.state === 'ACTIVE')
               .map((a: any) => String(a?.user?.name || '').trim())

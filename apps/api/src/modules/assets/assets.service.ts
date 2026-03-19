@@ -494,10 +494,42 @@ if (q.customer) where.customer = { contains: q.customer.trim(), mode: 'insensiti
 
     return this.withTenantRLS(async (tx) => {
       const [items, total] = await Promise.all([
-        tx.asset.findMany({ where, orderBy, skip, take: size }),
+        tx.asset.findMany({
+          where,
+          orderBy,
+          skip,
+          take: size,
+          include: {
+            maintenancePlan: {
+              select: {
+                id: true,
+                pmPlanId: true,
+                active: true,
+                pmPlan: {
+                  select: { id: true, name: true },
+                },
+              },
+            },
+          },
+        }),
         tx.asset.count({ where }),
       ]);
-      return { items, page, size, total, pages: Math.ceil(total / size) };
+      return {
+        items: (items ?? []).map((item: any) => {
+          const plan = item?.maintenancePlan ?? null;
+          const hasMaintenancePlan = !!String(plan?.pmPlanId || '').trim();
+          return {
+            ...item,
+            hasMaintenancePlan,
+            maintenancePlanActive: hasMaintenancePlan ? plan?.active !== false : false,
+            maintenancePlanName: hasMaintenancePlan ? plan?.pmPlan?.name ?? null : null,
+          };
+        }),
+        page,
+        size,
+        total,
+        pages: Math.ceil(total / size),
+      };
     });
   }
 
