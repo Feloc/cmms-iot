@@ -7,14 +7,15 @@ APP_ROOT="/app"
 PRISMA_SCHEMA_PATH="$APP_ROOT/apps/api/prisma/schema.prisma"
 SQL_MIGRATIONS_DIR="$APP_ROOT/db/migrations"
 SQL_HISTORY_TABLE='public."SqlMigrationHistory"'
+PSQL_DATABASE_URL="$(printf '%s' "$DATABASE_URL" | sed -E 's/([?&])schema=[^&]*&/\1/g; s/[?&]schema=[^&]*$//g; s/\?&/\?/g; s/[?]$//g')"
 
 bootstrap_sql_history_if_needed() {
-  applied_count="$(psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atqc "SELECT COUNT(*) FROM ${SQL_HISTORY_TABLE}")"
+  applied_count="$(psql "$PSQL_DATABASE_URL" -v ON_ERROR_STOP=1 -Atqc "SELECT COUNT(*) FROM ${SQL_HISTORY_TABLE}")"
   if [ "${applied_count}" != "0" ]; then
     return 0
   fi
 
-  work_order_exists="$(psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atqc "SELECT CASE WHEN to_regclass('public.\"WorkOrder\"') IS NULL THEN 0 ELSE 1 END")"
+  work_order_exists="$(psql "$PSQL_DATABASE_URL" -v ON_ERROR_STOP=1 -Atqc "SELECT CASE WHEN to_regclass('public.\"WorkOrder\"') IS NULL THEN 0 ELSE 1 END")"
   if [ "${work_order_exists}" != "1" ]; then
     return 0
   fi
@@ -32,7 +33,7 @@ bootstrap_sql_history_if_needed() {
     16_asset_maintenance_plan_plan_start_at.sql \
     17_service_order_commercial_status.sql
   do
-    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "INSERT INTO ${SQL_HISTORY_TABLE} (name) VALUES ('${name}') ON CONFLICT (name) DO NOTHING" >/dev/null
+    psql "$PSQL_DATABASE_URL" -v ON_ERROR_STOP=1 -c "INSERT INTO ${SQL_HISTORY_TABLE} (name) VALUES ('${name}') ON CONFLICT (name) DO NOTHING" >/dev/null
   done
 }
 
@@ -43,7 +44,7 @@ run_sql_migrations() {
   fi
 
   echo "[api] Ensuring SQL migration history table"
-  psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+  psql "$PSQL_DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
 CREATE TABLE IF NOT EXISTS public."SqlMigrationHistory" (
   name text PRIMARY KEY,
   appliedAt timestamp(3) without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -54,15 +55,15 @@ SQL
 
   find "$SQL_MIGRATIONS_DIR" -maxdepth 1 -type f -name '*.sql' | sort | while read -r file; do
     name="$(basename "$file")"
-    already_applied="$(psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atqc "SELECT 1 FROM ${SQL_HISTORY_TABLE} WHERE name = '${name}' LIMIT 1")"
+    already_applied="$(psql "$PSQL_DATABASE_URL" -v ON_ERROR_STOP=1 -Atqc "SELECT 1 FROM ${SQL_HISTORY_TABLE} WHERE name = '${name}' LIMIT 1")"
     if [ "${already_applied}" = "1" ]; then
       echo "[api] SQL migration already applied: ${name}"
       continue
     fi
 
     echo "[api] Applying SQL migration: ${name}"
-    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$file"
-    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "INSERT INTO ${SQL_HISTORY_TABLE} (name) VALUES ('${name}')" >/dev/null
+    psql "$PSQL_DATABASE_URL" -v ON_ERROR_STOP=1 -f "$file"
+    psql "$PSQL_DATABASE_URL" -v ON_ERROR_STOP=1 -c "INSERT INTO ${SQL_HISTORY_TABLE} (name) VALUES ('${name}')" >/dev/null
   done
 }
 

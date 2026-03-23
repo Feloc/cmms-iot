@@ -18,9 +18,11 @@ import { DevicesModule } from './modules/devices/devices.module';
 import { TenantsModule } from './modules/tenants/tenants.module';
 import { AdminUsersModule } from './modules/admin-users/admin-users.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
+import { AppController } from './app.controller';
 
 
 @Module({
+  controllers: [AppController],
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
     AuthModule,

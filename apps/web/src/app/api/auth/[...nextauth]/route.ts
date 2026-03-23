@@ -1,9 +1,17 @@
 import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 
-const API =
-  (process.env.API_INTERNAL_URL || "").replace(/\/$/, "") ||
-  "http://api:3001";
+const baseFromEnv = (value?: string) => String(value || "").replace(/\/$/, "").trim() || "";
+
+const API_CANDIDATES = Array.from(
+  new Set(
+    [
+      baseFromEnv(process.env.API_INTERNAL_URL),
+      baseFromEnv(process.env.NEXT_PUBLIC_API_URL),
+      "http://api:3001",
+    ].filter(Boolean),
+  ),
+);
 
 const handler = NextAuth({
   providers: [
@@ -15,56 +23,68 @@ const handler = NextAuth({
         password: { label: "Password", type: "password" },
       },
       async authorize(credentials) {
+        let lastFailure: string | null = null;
         try {
           if (!credentials) {
             console.error("[authorize] no credentials");
             return null;
           }
 
-          const res = await fetch(`${API}/auth/login`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              tenant: credentials.tenant,
-              email: credentials.email,
-              password: credentials.password,
-            }),
-          });
+          for (const apiBase of API_CANDIDATES) {
+            try {
+              const res = await fetch(`${apiBase}/auth/login`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  tenant: credentials.tenant,
+                  email: credentials.email,
+                  password: credentials.password,
+                }),
+              });
 
-          if (!res.ok) {
-            const txt = await res.text().catch(() => "");
-            console.error(
-              `[authorize] login failed: status=${res.status} body=${txt}`
-            );
-            return null;
+              if (!res.ok) {
+                const txt = await res.text().catch(() => "");
+                lastFailure = `[authorize] login failed via ${apiBase}: status=${res.status} body=${txt}`;
+                console.error(lastFailure);
+                continue;
+              }
+
+              const data = await res.json().catch((e) => {
+                console.error(`[authorize] invalid JSON from API (${apiBase}):`, e);
+                return null;
+              });
+              // API esperado: { token, tenant: {id,slug}, user: {id,email,name,role} }
+              if (!data?.token || !data?.tenant?.id || !data?.tenant?.slug || !data?.user?.email) {
+                lastFailure = `[authorize] missing fields in API response via ${apiBase}`;
+                console.error(lastFailure, data);
+                continue;
+              }
+
+              const id =
+                (data.user.id && String(data.user.id)) ||
+                (data.user.email && String(data.user.email));
+              if (!id) {
+                lastFailure = `[authorize] could not derive user id via ${apiBase}`;
+                console.error(lastFailure, data);
+                continue;
+              }
+
+              return {
+                id,
+                email: data.user.email,
+                name: data.user.name || data.user.email,
+                role: data.user.role,
+                token: data.token,
+                tenant: { id: data.tenant.id, slug: data.tenant.slug }, // <- objeto completo
+              } as any;
+            } catch (apiErr) {
+              lastFailure = `[authorize] exception via ${apiBase}`;
+              console.error(lastFailure, apiErr);
+            }
           }
 
-          const data = await res.json().catch((e) => {
-            console.error("[authorize] invalid JSON from API:", e);
-            return null;
-          });
-          // API esperado: { token, tenant: {id,slug}, user: {id,email,name,role} }
-          if (!data?.token || !data?.tenant?.id || !data?.tenant?.slug || !data?.user?.email) {
-            console.error("[authorize] missing fields in API response:", data);
-            return null;
-          }
-
-          const id =
-            (data.user.id && String(data.user.id)) ||
-            (data.user.email && String(data.user.email));
-          if (!id) {
-            console.error("[authorize] could not derive user id from:", data);
-            return null;
-          }
-
-          return {
-            id,
-            email: data.user.email,
-            name: data.user.name || data.user.email,
-            role: data.user.role,
-            token: data.token,
-            tenant: { id: data.tenant.id, slug: data.tenant.slug }, // <- objeto completo
-          } as any;
+          if (lastFailure) console.error(lastFailure);
+          return null;
         } catch (err) {
           console.error("[authorize] exception:", err);
           return null;
