@@ -117,6 +117,17 @@ export class ServiceOrdersService {
     );
   }
 
+  private getPreventiveExecutionDate(row: any): Date {
+    const raw =
+      row?.deliveredAt ??
+      row?.completedAt ??
+      row?.activityFinishedAt ??
+      row?.updatedAt ??
+      new Date();
+    const dt = new Date(raw);
+    return Number.isNaN(dt.getTime()) ? new Date() : dt;
+  }
+
   private async realignPreventivePlanFutureOrders(tx: any, tenantId: string, serviceOrderId: string) {
     const so = await tx.workOrder.findFirst({
       where: { id: serviceOrderId, tenantId, kind: 'SERVICE_ORDER' },
@@ -140,6 +151,28 @@ export class ServiceOrdersService {
     });
     if (!asset) return;
 
+    const baseDate = this.getPreventiveExecutionDate(so);
+    const actorUserId = tenantStorage.getStore()?.userId ? String(tenantStorage.getStore()?.userId) : null;
+
+    await (tx as any).assetPreventiveMaintenance.upsert({
+      where: { workOrderId: serviceOrderId },
+      create: {
+        tenantId,
+        assetId: asset.id,
+        pmPlanId: so?.pmPlanId ?? null,
+        workOrderId: serviceOrderId,
+        source: 'WORK_ORDER',
+        executedAt: baseDate,
+        createdByUserId: actorUserId,
+      },
+      update: {
+        assetId: asset.id,
+        pmPlanId: so?.pmPlanId ?? null,
+        source: 'WORK_ORDER',
+        executedAt: baseDate,
+      },
+    });
+
     const plan = await (tx as any).assetMaintenancePlan.findFirst({
       where: { tenantId, assetId: asset.id, active: true },
       include: {
@@ -148,19 +181,12 @@ export class ServiceOrdersService {
     });
     if (!plan) return;
 
+    if (so?.pmPlanId && String(so.pmPlanId) !== String(plan.pmPlanId)) return;
+
     const freqValue = this.toPositiveInt(plan.frequencyValue, 'frequencyValue');
     const freqUnit = this.assertUnit(plan.frequencyUnit, 'frequencyUnit');
     const horizonValue = this.toPositiveInt(plan.planningHorizonValue ?? 6, 'planningHorizonValue');
     const horizonUnit = this.assertUnit(plan.planningHorizonUnit ?? 'MONTH', 'planningHorizonUnit');
-
-    const completionBase =
-      so.deliveredAt ??
-      so.completedAt ??
-      so.activityFinishedAt ??
-      so.updatedAt ??
-      new Date();
-
-    const baseDate = new Date(completionBase);
     const lastPlanMaintenance = plan?.lastMaintenanceAt ? new Date(plan.lastMaintenanceAt) : null;
     if (lastPlanMaintenance && baseDate.getTime() <= lastPlanMaintenance.getTime()) return;
 

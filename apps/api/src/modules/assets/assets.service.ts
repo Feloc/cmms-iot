@@ -5,6 +5,7 @@ import { tenantStorage } from '../../common/tenant-context';
 import { CreateAssetDto } from './dto/create-asset.dto';
 import { UpdateAssetDto } from './dto/update-asset.dto';
 import { GenerateAssetMaintenancePlanDto, MaintenanceFrequencyUnit, UpsertAssetMaintenancePlanDto } from './dto/maintenance-plan.dto';
+import { CreatePreventiveMaintenanceRecordDto } from './dto/create-preventive-maintenance-record.dto';
 
 
 type FindAllQuery = {
@@ -45,6 +46,11 @@ export class AssetsService {
     const tenantId = ctx?.tenantId;
     if (!tenantId) throw new BadRequestException('No tenant in context');
     return tenantId;
+  }
+
+  private getUserId(): string | null {
+    const ctx = tenantStorage.getStore();
+    return ctx?.userId ? String(ctx.userId) : null;
   }
 
   private async withTenantRLS<T>(fn: (tx: Prisma.TransactionClient) => Promise<T>): Promise<T> {
@@ -95,6 +101,112 @@ export class AssetsService {
     const d = v instanceof Date ? v : new Date(v);
     if (isNaN(d.getTime())) throw new BadRequestException(`${field} is invalid`);
     return d;
+  }
+
+  private getPreventiveExecutionDate(row: any): Date | null {
+    const raw = row?.deliveredAt ?? row?.completedAt ?? row?.updatedAt ?? row?.dueDate ?? null;
+    if (!raw) return null;
+    const dt = new Date(raw);
+    return Number.isNaN(dt.getTime()) ? null : dt;
+  }
+
+  private async listPreventiveMaintenanceHistory(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    asset: { id: string; code: string },
+    limit = 3,
+  ) {
+    const safeLimit = Math.max(3, Math.min(30, Number(limit || 3)));
+    const fetchTake = Math.max(safeLimit * 4, 12);
+
+    const recordedRows = await (tx as any).assetPreventiveMaintenance.findMany({
+      where: { tenantId, assetId: asset.id },
+      orderBy: [{ executedAt: 'desc' }, { createdAt: 'desc' }],
+      take: fetchTake,
+      include: {
+        pmPlan: { select: { id: true, name: true } },
+        workOrder: {
+          select: {
+            id: true,
+            title: true,
+            status: true,
+            pmPlanId: true,
+            dueDate: true,
+            deliveredAt: true,
+            completedAt: true,
+            updatedAt: true,
+            pmPlan: { select: { id: true, name: true } },
+          },
+        },
+      },
+    });
+
+    const recordedWorkOrderIds = new Set<string>(
+      (recordedRows ?? [])
+        .map((row: any) => String(row?.workOrderId || '').trim())
+        .filter((v: string) => !!v),
+    );
+
+    const legacyRows = await tx.workOrder.findMany({
+      where: {
+        tenantId,
+        kind: 'SERVICE_ORDER',
+        serviceOrderType: 'PREVENTIVO',
+        assetCode: asset.code,
+        status: { in: ['COMPLETED', 'CLOSED'] },
+      },
+      orderBy: [{ deliveredAt: 'desc' }, { completedAt: 'desc' }, { updatedAt: 'desc' }],
+      select: {
+        id: true,
+        dueDate: true,
+        status: true,
+        title: true,
+        pmPlanId: true,
+        deliveredAt: true,
+        completedAt: true,
+        updatedAt: true,
+        pmPlan: { select: { id: true, name: true } },
+      },
+      take: fetchTake,
+    });
+
+    const items = [
+      ...(recordedRows ?? []).map((row: any) => ({
+        id: String(row.id),
+        workOrderId: row?.workOrderId ? String(row.workOrderId) : null,
+        dueDate: row?.workOrder?.dueDate ? new Date(row.workOrder.dueDate).toISOString() : null,
+        executedAt: row?.executedAt ? new Date(row.executedAt).toISOString() : null,
+        status: row?.workOrder?.status ?? (row?.source === 'MANUAL' ? 'MANUAL' : null),
+        title:
+          row?.workOrder?.title ??
+          (row?.pmPlan?.name ? `Registro manual · ${row.pmPlan.name}` : 'Registro manual de mantenimiento'),
+        pmPlanId: row?.pmPlanId ?? row?.workOrder?.pmPlanId ?? null,
+        pmPlanName: row?.pmPlan?.name ?? row?.workOrder?.pmPlan?.name ?? null,
+        note: row?.note ?? null,
+        source: row?.source ?? (row?.workOrderId ? 'WORK_ORDER' : 'MANUAL'),
+      })),
+      ...(legacyRows ?? [])
+        .filter((wo: any) => !recordedWorkOrderIds.has(String(wo.id)))
+        .map((wo: any) => {
+          const executedAt = this.getPreventiveExecutionDate(wo);
+          return {
+            id: String(wo.id),
+            workOrderId: String(wo.id),
+            dueDate: wo?.dueDate ? new Date(wo.dueDate).toISOString() : null,
+            executedAt: executedAt ? executedAt.toISOString() : null,
+            status: wo?.status ?? null,
+            title: wo?.title ?? String(wo.id),
+            pmPlanId: wo?.pmPlanId ?? null,
+            pmPlanName: wo?.pmPlan?.name ?? null,
+            note: null,
+            source: 'WORK_ORDER',
+          };
+        }),
+    ]
+      .filter((item: any) => !!item?.executedAt)
+      .sort((a: any, b: any) => new Date(b.executedAt).getTime() - new Date(a.executedAt).getTime());
+
+    return items.slice(0, safeLimit);
   }
 
   private parseHourmeterDateWindow(from?: string, to?: string, defaultDays = 90): { from: Date; to: Date } {
@@ -505,6 +617,7 @@ if (q.customer) where.customer = { contains: q.customer.trim(), mode: 'insensiti
                 id: true,
                 pmPlanId: true,
                 active: true,
+                lastMaintenanceAt: true,
                 pmPlan: {
                   select: { id: true, name: true },
                 },
@@ -523,6 +636,7 @@ if (q.customer) where.customer = { contains: q.customer.trim(), mode: 'insensiti
             hasMaintenancePlan,
             maintenancePlanActive: hasMaintenancePlan ? plan?.active !== false : false,
             maintenancePlanName: hasMaintenancePlan ? plan?.pmPlan?.name ?? null : null,
+            lastMaintenanceAt: plan?.lastMaintenanceAt ?? null,
           };
         }),
         page,
@@ -664,30 +778,7 @@ if (q.customer) where.customer = { contains: q.customer.trim(), mode: 'insensiti
         take: 500,
       });
 
-      const recentWhere: any = {
-        tenantId,
-        kind: 'SERVICE_ORDER',
-        serviceOrderType: 'PREVENTIVO',
-        assetCode: asset.code,
-        status: { in: ['COMPLETED', 'CLOSED'] },
-      };
-      if (plan?.pmPlanId) recentWhere.pmPlanId = plan.pmPlanId;
-
-      const lastPreventiveMaintenances = await tx.workOrder.findMany({
-        where: recentWhere,
-        orderBy: [{ deliveredAt: 'desc' }, { completedAt: 'desc' }, { updatedAt: 'desc' }],
-        select: {
-          id: true,
-          dueDate: true,
-          status: true,
-          title: true,
-          pmPlanId: true,
-          deliveredAt: true,
-          completedAt: true,
-          updatedAt: true,
-        },
-        take: 3,
-      });
+      const lastPreventiveMaintenances = await this.listPreventiveMaintenanceHistory(tx, tenantId, asset, 3);
 
       return {
         assetId: asset.id,
@@ -701,17 +792,81 @@ if (q.customer) where.customer = { contains: q.customer.trim(), mode: 'insensiti
           title: wo.title,
           pmPlanId: wo.pmPlanId ?? null,
         })),
-        lastPreventiveMaintenances: (lastPreventiveMaintenances ?? []).map((wo: any) => {
-          const executedAt = wo?.deliveredAt ?? wo?.completedAt ?? wo?.updatedAt ?? null;
-          return {
-            id: wo.id,
-            dueDate: wo?.dueDate ? new Date(wo.dueDate).toISOString() : null,
-            executedAt: executedAt ? new Date(executedAt).toISOString() : null,
-            status: wo.status,
-            title: wo.title,
-            pmPlanId: wo.pmPlanId ?? null,
-          };
-        }),
+        lastPreventiveMaintenances,
+      };
+    });
+  }
+
+  async createPreventiveMaintenanceRecord(assetId: string, dto: CreatePreventiveMaintenanceRecordDto) {
+    if (!assetId) throw new BadRequestException('assetId is required');
+    const tenantId = this.getTenantId();
+    const actorUserId = this.getUserId();
+
+    return this.withTenantRLS(async (tx) => {
+      const asset = await tx.asset.findFirst({
+        where: { id: assetId, tenantId },
+        select: { id: true, code: true, name: true },
+      });
+      if (!asset) throw new NotFoundException('Asset not found');
+
+      const pmPlanId = String(dto?.pmPlanId || '').trim();
+      if (!pmPlanId) throw new BadRequestException('pmPlanId is required');
+
+      const pmPlan = await tx.pmPlan.findFirst({
+        where: { id: pmPlanId, tenantId },
+        select: { id: true, name: true },
+      });
+      if (!pmPlan) throw new BadRequestException('PM plan not found');
+
+      const executedAt = this.parseDateNullable(dto?.executedAt, 'executedAt');
+      if (!executedAt) throw new BadRequestException('executedAt is required');
+
+      const note = this.normalizeOptionalString(dto?.note);
+
+      const record = await (tx as any).assetPreventiveMaintenance.create({
+        data: {
+          tenantId,
+          assetId: asset.id,
+          pmPlanId: pmPlan.id,
+          source: 'MANUAL',
+          executedAt,
+          note,
+          createdByUserId: actorUserId,
+        },
+        include: {
+          pmPlan: { select: { id: true, name: true } },
+        },
+      });
+
+      const plan = await (tx as any).assetMaintenancePlan.findFirst({
+        where: { tenantId, assetId: asset.id, active: true },
+        select: { id: true, pmPlanId: true, lastMaintenanceAt: true },
+      });
+
+      let syncedPlan = false;
+      if (plan?.pmPlanId === pmPlan.id) {
+        const currentLastAt = plan?.lastMaintenanceAt ? new Date(plan.lastMaintenanceAt) : null;
+        if (!currentLastAt || executedAt.getTime() >= currentLastAt.getTime()) {
+          await (tx as any).assetMaintenancePlan.update({
+            where: { assetId: asset.id },
+            data: { lastMaintenanceAt: executedAt },
+          });
+          syncedPlan = true;
+        }
+      }
+
+      return {
+        assetId: asset.id,
+        assetCode: asset.code,
+        record: {
+          id: record.id,
+          executedAt: new Date(record.executedAt).toISOString(),
+          note: record.note ?? null,
+          source: record.source,
+          pmPlanId: record.pmPlanId ?? null,
+          pmPlanName: record?.pmPlan?.name ?? null,
+        },
+        syncedPlan,
       };
     });
   }

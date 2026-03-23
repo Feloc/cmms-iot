@@ -13,6 +13,7 @@ type Asset = {
   serialNumber?: string | null;
   customer?: string | null;
   acquiredOn?: string | null;
+  lastMaintenanceAt?: string | null;
   status: string;
   criticality: string;
   createdAt: string;
@@ -144,6 +145,29 @@ function fmtDate(d?: string | null) {
   return dt.toLocaleDateString('es-CO');
 }
 
+function monthsSince(dateText?: string | null) {
+  if (!dateText) return null;
+  const start = new Date(dateText);
+  if (Number.isNaN(start.getTime())) return null;
+
+  const now = new Date();
+  let months = (now.getFullYear() - start.getFullYear()) * 12 + (now.getMonth() - start.getMonth());
+  if (now.getDate() < start.getDate()) months -= 1;
+  return Math.max(0, months);
+}
+
+function maintenanceAge(asset: Asset) {
+  const baseDate = asset.lastMaintenanceAt || asset.acquiredOn || null;
+  const months = monthsSince(baseDate);
+  if (months == null) return { label: '-', title: 'Sin fecha base' };
+
+  const origin = asset.lastMaintenanceAt ? 'último mantenimiento' : 'adquisición';
+  return {
+    label: `${months} mes${months === 1 ? '' : 'es'}`,
+    title: `Calculado desde ${origin}: ${fmtDate(baseDate)}`,
+  };
+}
+
 function pmBadge(asset: Asset) {
   if (!asset.hasMaintenancePlan) {
     return (
@@ -235,6 +259,7 @@ function pmBadge(asset: Asset) {
               <th className="px-3 py-2 text-left">Modelo</th>
               <th className="px-3 py-2 text-left">Cliente</th>
               <th className="px-3 py-2 text-left">Adquisición</th>
+              <th className="px-3 py-2 text-left">Meses sin mtto</th>
               <th className="px-3 py-2 text-left">Estado</th>
               <th className="px-3 py-2 text-left">Plan PM</th>
               <th className="px-3 py-2 text-left">Acciones</th>
@@ -243,39 +268,43 @@ function pmBadge(asset: Asset) {
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={9} className="px-3 py-6 text-center text-gray-500">
+                <td colSpan={10} className="px-3 py-6 text-center text-gray-500">
                   Cargando…
                 </td>
               </tr>
             ) : assets.length === 0 ? (
               <tr>
-                <td colSpan={9} className="px-3 py-6 text-center text-gray-500">
+                <td colSpan={10} className="px-3 py-6 text-center text-gray-500">
                   No hay resultados.
                 </td>
               </tr>
             ) : (
-              assets.map((a) => (
-                <tr key={a.id} className="border-t">
-                  <td className="px-3 py-2 font-mono">{a.serialNumber || a.code || '-'}</td>
-                  <td className="px-3 py-2">{a.name}</td>
-                  <td className="px-3 py-2">{a.brand || '-'}</td>
-                  <td className="px-3 py-2">{a.model || '-'}</td>
-                  <td className="px-3 py-2">{a.customer || '-'}</td>
-                  <td className="px-3 py-2">{fmtDate(a.acquiredOn)}</td>
-                  <td className="px-3 py-2">{a.status}</td>
-                  <td className="px-3 py-2">{pmBadge(a)}</td>
-                  <td className="px-3 py-2">
-                    <div className="flex gap-2">
-                      <Link className="underline" href={`/assets/${a.id}`}>
-                        Ver
-                      </Link>
-                      <Link className="underline" href={`/assets/${a.id}/edit`}>
-                        Editar
-                      </Link>
-                    </div>
-                  </td>
-                </tr>
-              ))
+              assets.map((a) => {
+                const age = maintenanceAge(a);
+                return (
+                  <tr key={a.id} className="border-t">
+                    <td className="px-3 py-2 font-mono">{a.serialNumber || a.code || '-'}</td>
+                    <td className="px-3 py-2">{a.name}</td>
+                    <td className="px-3 py-2">{a.brand || '-'}</td>
+                    <td className="px-3 py-2">{a.model || '-'}</td>
+                    <td className="px-3 py-2">{a.customer || '-'}</td>
+                    <td className="px-3 py-2">{fmtDate(a.acquiredOn)}</td>
+                    <td className="px-3 py-2" title={age.title}>{age.label}</td>
+                    <td className="px-3 py-2">{a.status}</td>
+                    <td className="px-3 py-2">{pmBadge(a)}</td>
+                    <td className="px-3 py-2">
+                      <div className="flex gap-2">
+                        <Link className="underline" href={`/assets/${a.id}`}>
+                          Ver
+                        </Link>
+                        <Link className="underline" href={`/assets/${a.id}/edit`}>
+                          Editar
+                        </Link>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })
             )}
           </tbody>
         </table>

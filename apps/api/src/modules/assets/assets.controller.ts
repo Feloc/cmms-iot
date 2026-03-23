@@ -5,6 +5,7 @@ import { AssetsService } from './assets.service';
 import { CreateAssetDto } from './dto/create-asset.dto';
 import { UpdateAssetDto } from './dto/update-asset.dto';
 import { GenerateAssetMaintenancePlanDto, UpsertAssetMaintenancePlanDto } from './dto/maintenance-plan.dto';
+import { CreatePreventiveMaintenanceRecordDto } from './dto/create-preventive-maintenance-record.dto';
 import { FileInterceptor } from '@nestjs/platform-express';
 type FindAllQuery = {
   search?: string;
@@ -130,6 +131,11 @@ async getHourmeterPmPerformance(
   @Post(':id/maintenance-plan/generate')
   async generateMaintenancePlan(@Param('id') id: string, @Body() dto: GenerateAssetMaintenancePlanDto) {
     return this.service.generateMaintenancePlan(id, dto ?? {});
+  }
+
+  @Post(':id/preventive-maintenance-records')
+  async createPreventiveMaintenanceRecord(@Param('id') id: string, @Body() dto: CreatePreventiveMaintenanceRecordDto) {
+    return this.service.createPreventiveMaintenanceRecord(id, dto);
   }
 
 

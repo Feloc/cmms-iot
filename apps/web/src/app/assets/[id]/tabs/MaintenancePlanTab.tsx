@@ -8,11 +8,15 @@ type PmPlan = { id: string; name: string; intervalHours?: number | null; default
 type FutureServiceOrder = { id: string; dueDate?: string | null; status?: string | null; title?: string | null; pmPlanId?: string | null };
 type CompletedPreventiveOrder = {
   id: string;
+  workOrderId?: string | null;
   dueDate?: string | null;
   executedAt?: string | null;
   status?: string | null;
   title?: string | null;
   pmPlanId?: string | null;
+  pmPlanName?: string | null;
+  note?: string | null;
+  source?: string | null;
 };
 
 function isoToDateInput(v?: string | null) {
@@ -26,6 +30,10 @@ function unitLabel(u: Unit) {
   if (u === 'DAY') return 'Día(s)';
   if (u === 'MONTH') return 'Mes(es)';
   return 'Año(s)';
+}
+
+function maintenanceSourceLabel(source?: string | null) {
+  return String(source || '').toUpperCase() === 'MANUAL' ? 'Manual' : 'OS';
 }
 
 export default function MaintenancePlanTab({
@@ -54,6 +62,9 @@ export default function MaintenancePlanTab({
   const [planningHorizonValue, setPlanningHorizonValue] = React.useState<number>(6);
   const [planningHorizonUnit, setPlanningHorizonUnit] = React.useState<Unit>('MONTH');
   const [active, setActive] = React.useState(true);
+  const [manualPmPlanId, setManualPmPlanId] = React.useState('');
+  const [manualExecutedAt, setManualExecutedAt] = React.useState('');
+  const [manualNote, setManualNote] = React.useState('');
 
   const configuredPlan = asset?.maintenancePlan ?? null;
 
@@ -67,6 +78,15 @@ export default function MaintenancePlanTab({
     setPlanningHorizonUnit((String(configuredPlan?.planningHorizonUnit || 'MONTH').toUpperCase() as Unit) || 'MONTH');
     setActive(configuredPlan?.active !== false);
   }, [configuredPlan?.id, configuredPlan?.pmPlanId, configuredPlan?.frequencyValue, configuredPlan?.frequencyUnit, configuredPlan?.lastMaintenanceAt, configuredPlan?.planStartAt, configuredPlan?.planningHorizonValue, configuredPlan?.planningHorizonUnit, configuredPlan?.active]);
+
+  React.useEffect(() => {
+    if (manualPmPlanId) return;
+    if (configuredPlan?.pmPlanId) {
+      setManualPmPlanId(String(configuredPlan.pmPlanId));
+      return;
+    }
+    if (pmPlans.length > 0) setManualPmPlanId(String(pmPlans[0].id));
+  }, [configuredPlan?.pmPlanId, manualPmPlanId, pmPlans]);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -191,6 +211,46 @@ export default function MaintenancePlanTab({
       await loadFutureOrders();
     } catch (e: any) {
       setErr(e?.message ?? 'Error generando plan');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function registerManualMaintenance() {
+    setBusy(true);
+    setErr(null);
+    setInfo(null);
+    setGenerateResult(null);
+    try {
+      if (!manualPmPlanId) throw new Error('Debes seleccionar el protocolo/PM Plan realizado');
+      if (!manualExecutedAt) throw new Error('Debes seleccionar la fecha del mantenimiento realizado');
+
+      const res = await fetch(`${apiBase}/assets/${assetId}/preventive-maintenance-records`, {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          pmPlanId: manualPmPlanId,
+          executedAt: new Date(`${manualExecutedAt}T00:00:00`).toISOString(),
+          note: manualNote.trim() || null,
+        }),
+      });
+      const text = await res.text();
+      let json: any = {};
+      try { json = text ? JSON.parse(text) : {}; } catch {}
+      if (!res.ok) throw new Error(json?.message || json?.error || `HTTP ${res.status}`);
+
+      setInfo(
+        json?.syncedPlan
+          ? 'Mantenimiento manual registrado y usado como último mantenimiento del plan actual.'
+          : 'Mantenimiento manual registrado en el historial.',
+      );
+      setManualExecutedAt('');
+      setManualNote('');
+      await onUpdated?.();
+      await loadFutureOrders();
+    } catch (e: any) {
+      setErr(e?.message ?? 'Error registrando mantenimiento manual');
     } finally {
       setBusy(false);
     }
@@ -323,18 +383,81 @@ export default function MaintenancePlanTab({
         </div>
       ) : null}
 
+      <div className="border rounded-lg p-4 space-y-4">
+        <div>
+          <h3 className="font-semibold">Registrar mantenimiento realizado</h3>
+          <p className="text-sm text-gray-600">
+            Úsalo cuando tienes el dato histórico, pero no existe una OS preventiva registrada en el sistema.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <label className="space-y-1">
+            <span className="text-sm font-medium">Protocolo / PM Plan</span>
+            <select
+              className="border rounded px-3 py-2 w-full"
+              value={manualPmPlanId}
+              disabled={busy || loadingPlans}
+              onChange={(e) => setManualPmPlanId(e.target.value)}
+            >
+              <option value="">(seleccionar)</option>
+              {pmPlans.map((p) => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
+          </label>
+
+          <label className="space-y-1">
+            <span className="text-sm font-medium">Fecha realizada</span>
+            <input
+              type="date"
+              className="border rounded px-3 py-2 w-full"
+              value={manualExecutedAt}
+              disabled={busy}
+              onChange={(e) => setManualExecutedAt(e.target.value)}
+            />
+          </label>
+        </div>
+
+        <label className="space-y-1 block">
+          <span className="text-sm font-medium">Observación</span>
+          <textarea
+            className="border rounded px-3 py-2 w-full min-h-24"
+            value={manualNote}
+            disabled={busy}
+            onChange={(e) => setManualNote(e.target.value)}
+            placeholder="Ej. mantenimiento realizado antes de empezar a operar el sistema"
+          />
+        </label>
+
+        <div className="flex items-center gap-2">
+          <button type="button" className="px-3 py-2 border rounded disabled:opacity-50" disabled={busy} onClick={registerManualMaintenance}>
+            Registrar mantenimiento manual
+          </button>
+        </div>
+        <div className="text-xs text-gray-500">
+          Si el protocolo registrado coincide con el PM Plan configurado en este activo, la fecha también actualizará la base del plan.
+        </div>
+      </div>
+
       <div className="border rounded-lg p-4 space-y-2">
         <h3 className="font-semibold">Últimos 3 mantenimientos preventivos realizados</h3>
         {loadingFutureOrders ? (
           <div className="text-sm text-gray-600">Cargando…</div>
         ) : lastMaintenances.length === 0 ? (
-          <div className="text-sm text-gray-600">No hay mantenimientos preventivos cerrados para este activo/plan.</div>
+          <div className="text-sm text-gray-600">No hay mantenimientos preventivos registrados para este activo.</div>
         ) : (
           <ul className="list-disc pl-5 text-sm">
             {lastMaintenances.map((r) => (
               <li key={r.id}>
-                {r?.executedAt ? new Date(r.executedAt).toLocaleString() : 'Sin fecha de cierre'} · {r?.status ?? '-'} ·{' '}
-                <a className="underline" href={`/service-orders/${r.id}`}>{r.title || r.id}</a>
+                {r?.executedAt ? new Date(r.executedAt).toLocaleString() : 'Sin fecha de cierre'} · {maintenanceSourceLabel(r?.source)} ·{' '}
+                {r?.pmPlanName || 'Sin protocolo'} · {r?.status ?? '-'} ·{' '}
+                {r?.workOrderId ? (
+                  <a className="underline" href={`/service-orders/${r.workOrderId}`}>{r.title || r.workOrderId}</a>
+                ) : (
+                  <span>{r.title || r.id}</span>
+                )}
+                {r?.note ? ` · ${r.note}` : ''}
               </li>
             ))}
           </ul>
