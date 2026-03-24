@@ -116,6 +116,12 @@ export class DashboardService {
   async summary(args: SummaryArgs) {
     const { tenantId } = args;
     const { from, to, days } = parseRange(args);
+    const assetSummaryWhere: Prisma.AssetWhereInput = {
+      tenantId,
+      NOT: {
+        serialNumber: { startsWith: 'T', mode: 'insensitive' },
+      },
+    };
 
     // --- Assets ---
     const [
@@ -128,14 +134,15 @@ export class DashboardService {
       [{ count: forkliftsInWarranty } = { count: 0 }],
       assetsInWarrantyByNameRows,
     ] = await Promise.all([
-      this.prisma.asset.count({ where: { tenantId } }),
-      this.prisma.asset.groupBy({ by: ['status'], where: { tenantId }, _count: { id: true } }),
-      this.prisma.asset.groupBy({ by: ['criticality'], where: { tenantId }, _count: { id: true } }),
+      this.prisma.asset.count({ where: assetSummaryWhere }),
+      this.prisma.asset.groupBy({ by: ['status'], where: assetSummaryWhere, _count: { id: true } }),
+      this.prisma.asset.groupBy({ by: ['criticality'], where: assetSummaryWhere, _count: { id: true } }),
       this.prisma.$queryRaw<{ count: number }[]>(
         Prisma.sql`
           SELECT COUNT(*)::int AS count
           FROM "Asset"
           WHERE "tenantId" = ${tenantId}
+            AND COALESCE("serialNumber", '') NOT ILIKE 'T%'
             AND COALESCE(
               "guarantee"::date,
               CASE
@@ -150,6 +157,7 @@ export class DashboardService {
           SELECT COUNT(*)::int AS count
           FROM "Asset"
           WHERE "tenantId" = ${tenantId}
+            AND COALESCE("serialNumber", '') NOT ILIKE 'T%'
             AND COALESCE(
               "guarantee"::date,
               CASE
@@ -165,6 +173,7 @@ export class DashboardService {
           SELECT COUNT(*)::int AS count
           FROM "Asset"
           WHERE "tenantId" = ${tenantId}
+            AND COALESCE("serialNumber", '') NOT ILIKE 'T%'
             AND COALESCE("name", '') ILIKE '%montacarga%';
         `
       ),
@@ -173,6 +182,7 @@ export class DashboardService {
           SELECT COUNT(*)::int AS count
           FROM "Asset"
           WHERE "tenantId" = ${tenantId}
+            AND COALESCE("serialNumber", '') NOT ILIKE 'T%'
             AND COALESCE("name", '') ILIKE '%montacarga%'
             AND COALESCE(
               "guarantee"::date,
@@ -190,6 +200,7 @@ export class DashboardService {
             COUNT(*)::int AS "inWarranty"
           FROM "Asset"
           WHERE "tenantId" = ${tenantId}
+            AND COALESCE("serialNumber", '') NOT ILIKE 'T%'
             AND COALESCE(
               "guarantee"::date,
               CASE
@@ -212,29 +223,56 @@ export class DashboardService {
     const criticalHigh = assetsByCriticality['HIGH'] ?? 0;
 
     // Activos con SO abiertas (conteo de assetCode únicos con backlog)
-    const assetsWithOpenSORows = await this.prisma.workOrder.findMany({
-      where: { tenantId, kind: 'SERVICE_ORDER', status: { notIn: FINAL_STATUSES } },
-      select: { assetCode: true },
-      distinct: ['assetCode'],
-      take: 10000,
-    });
-    const assetsWithOpenServiceOrders = assetsWithOpenSORows.length;
+    const [{ count: assetsWithOpenServiceOrders } = { count: 0 }] = await this.prisma.$queryRaw<{ count: number }[]>(
+      Prisma.sql`
+        SELECT COUNT(DISTINCT w."assetCode")::int AS count
+        FROM "WorkOrder" w
+        JOIN "Asset" a
+          ON a."tenantId" = w."tenantId"
+         AND a."code" = w."assetCode"
+        WHERE w."tenantId" = ${tenantId}
+          AND w."kind" = 'SERVICE_ORDER'
+          AND w."status" NOT IN ('COMPLETED', 'CLOSED', 'CANCELED')
+          AND COALESCE(a."serialNumber", '') NOT ILIKE 'T%';
+      `
+    );
 
-    const topAssetsByOpenSO = await this.prisma.workOrder.groupBy({
-      by: ['assetCode'],
-      where: { tenantId, kind: 'SERVICE_ORDER', status: { notIn: FINAL_STATUSES } },
-      _count: { id: true },
-      orderBy: { _count: { id: 'desc' } },
-      take: 10,
-    });
+    const topAssetsByOpenSO = await this.prisma.$queryRaw<{ assetCode: string; openSO: number }[]>(
+      Prisma.sql`
+        SELECT
+          w."assetCode" AS "assetCode",
+          COUNT(*)::int AS "openSO"
+        FROM "WorkOrder" w
+        JOIN "Asset" a
+          ON a."tenantId" = w."tenantId"
+         AND a."code" = w."assetCode"
+        WHERE w."tenantId" = ${tenantId}
+          AND w."kind" = 'SERVICE_ORDER'
+          AND w."status" NOT IN ('COMPLETED', 'CLOSED', 'CANCELED')
+          AND COALESCE(a."serialNumber", '') NOT ILIKE 'T%'
+        GROUP BY w."assetCode"
+        ORDER BY COUNT(*) DESC, w."assetCode" ASC
+        LIMIT 10;
+      `
+    );
 
-    const topAssetsByOpenAlerts = await this.prisma.alert.groupBy({
-      by: ['assetCode'],
-      where: { tenantId, status: 'OPEN' },
-      _count: { id: true },
-      orderBy: { _count: { id: 'desc' } },
-      take: 10,
-    });
+    const topAssetsByOpenAlerts = await this.prisma.$queryRaw<{ assetCode: string; openAlerts: number }[]>(
+      Prisma.sql`
+        SELECT
+          al."assetCode" AS "assetCode",
+          COUNT(*)::int AS "openAlerts"
+        FROM "Alert" al
+        JOIN "Asset" a
+          ON a."tenantId" = al."tenantId"
+         AND a."code" = al."assetCode"
+        WHERE al."tenantId" = ${tenantId}
+          AND al."status" = 'OPEN'
+          AND COALESCE(a."serialNumber", '') NOT ILIKE 'T%'
+        GROUP BY al."assetCode"
+        ORDER BY COUNT(*) DESC, al."assetCode" ASC
+        LIMIT 10;
+      `
+    );
 
     // --- Alerts ---
     const [alertsOpen, recentAlerts] = await Promise.all([
@@ -1515,8 +1553,8 @@ const workTimeByServiceOrderType = typeEffPauseRows.map(r => {
         byCriticality: assetsByCriticality,
         criticalHigh,
         withOpenServiceOrders: assetsWithOpenServiceOrders,
-        topAssetsByOpenSO: topAssetsByOpenSO.map(r => ({ assetCode: r.assetCode, openSO: r._count.id })),
-        topAssetsByOpenAlerts: topAssetsByOpenAlerts.map(r => ({ assetCode: r.assetCode, openAlerts: r._count.id })),
+        topAssetsByOpenSO,
+        topAssetsByOpenAlerts,
       },
 
       alerts: {

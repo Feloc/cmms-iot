@@ -383,6 +383,48 @@ export default function MaintenancePlanTab({
         </div>
       ) : null}
 
+      <div className="border rounded-lg p-4 space-y-2">
+        <h3 className="font-semibold">Últimos 3 mantenimientos preventivos realizados</h3>
+        {loadingFutureOrders ? (
+          <div className="text-sm text-gray-600">Cargando…</div>
+        ) : lastMaintenances.length === 0 ? (
+          <div className="text-sm text-gray-600">No hay mantenimientos preventivos registrados para este activo.</div>
+        ) : (
+          <ul className="list-disc pl-5 text-sm">
+            {lastMaintenances.map((r) => (
+              <li key={r.id}>
+                {r?.executedAt ? new Date(r.executedAt).toLocaleString() : 'Sin fecha de cierre'} · {maintenanceSourceLabel(r?.source)} ·{' '}
+                {r?.pmPlanName || 'Sin protocolo'} · {r?.status ?? '-'} ·{' '}
+                {r?.workOrderId ? (
+                  <a className="underline" href={`/service-orders/${r.workOrderId}`}>{r.title || r.workOrderId}</a>
+                ) : (
+                  <span>{r.title || r.id}</span>
+                )}
+                {r?.note ? ` · ${r.note}` : ''}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      <div className="border rounded-lg p-4 space-y-2">
+        <h3 className="font-semibold">OS preventivas futuras registradas</h3>
+        {loadingFutureOrders ? (
+          <div className="text-sm text-gray-600">Cargando…</div>
+        ) : futureOrders.length === 0 ? (
+          <div className="text-sm text-gray-600">No hay OS preventivas futuras para este activo/plan.</div>
+        ) : (
+          <ul className="list-disc pl-5 text-sm">
+            {futureOrders.slice(0, 50).map((r) => (
+              <li key={r.id}>
+                {r?.dueDate ? new Date(r.dueDate).toLocaleString() : 'Sin fecha'} · {r?.status ?? '-'} ·{' '}
+                <a className="underline" href={`/service-orders/${r.id}`}>{r.title || r.id}</a>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
       <div className="border rounded-lg p-4 space-y-4">
         <div>
           <h3 className="font-semibold">Registrar mantenimiento realizado</h3>
@@ -438,48 +480,6 @@ export default function MaintenancePlanTab({
         <div className="text-xs text-gray-500">
           Si el protocolo registrado coincide con el PM Plan configurado en este activo, la fecha también actualizará la base del plan.
         </div>
-      </div>
-
-      <div className="border rounded-lg p-4 space-y-2">
-        <h3 className="font-semibold">Últimos 3 mantenimientos preventivos realizados</h3>
-        {loadingFutureOrders ? (
-          <div className="text-sm text-gray-600">Cargando…</div>
-        ) : lastMaintenances.length === 0 ? (
-          <div className="text-sm text-gray-600">No hay mantenimientos preventivos registrados para este activo.</div>
-        ) : (
-          <ul className="list-disc pl-5 text-sm">
-            {lastMaintenances.map((r) => (
-              <li key={r.id}>
-                {r?.executedAt ? new Date(r.executedAt).toLocaleString() : 'Sin fecha de cierre'} · {maintenanceSourceLabel(r?.source)} ·{' '}
-                {r?.pmPlanName || 'Sin protocolo'} · {r?.status ?? '-'} ·{' '}
-                {r?.workOrderId ? (
-                  <a className="underline" href={`/service-orders/${r.workOrderId}`}>{r.title || r.workOrderId}</a>
-                ) : (
-                  <span>{r.title || r.id}</span>
-                )}
-                {r?.note ? ` · ${r.note}` : ''}
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-
-      <div className="border rounded-lg p-4 space-y-2">
-        <h3 className="font-semibold">OS preventivas futuras registradas</h3>
-        {loadingFutureOrders ? (
-          <div className="text-sm text-gray-600">Cargando…</div>
-        ) : futureOrders.length === 0 ? (
-          <div className="text-sm text-gray-600">No hay OS preventivas futuras para este activo/plan.</div>
-        ) : (
-          <ul className="list-disc pl-5 text-sm">
-            {futureOrders.slice(0, 50).map((r) => (
-              <li key={r.id}>
-                {r?.dueDate ? new Date(r.dueDate).toLocaleString() : 'Sin fecha'} · {r?.status ?? '-'} ·{' '}
-                <a className="underline" href={`/service-orders/${r.id}`}>{r.title || r.id}</a>
-              </li>
-            ))}
-          </ul>
-        )}
       </div>
     </section>
   );

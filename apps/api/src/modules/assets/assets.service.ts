@@ -12,8 +12,12 @@ type FindAllQuery = {
   search?: string;
   serial?: string;
   name?: string;
+  nameIn?: string[];
+  brand?: string;
   model?: string;
   customer?: string;
+  guarantee?: 'IN_WARRANTY' | 'OUT_OF_WARRANTY' | '';
+  pmConfigured?: 'CONFIGURED' | 'UNCONFIGURED' | '';
   status?: AssetStatus | '';
   locationId?: string;
   categoryId?: string;
@@ -565,29 +569,7 @@ export class AssetsService {
     const size = Math.min(100, Math.max(1, Number(q.size || 20)));
     const skip = (page - 1) * size;
 
-    const where: Prisma.AssetWhereInput = { tenantId };
-
-    if (q.search) {
-      const s = q.search.trim();
-      where.OR = [
-        { code: { contains: s, mode: 'insensitive' } },
-        { name: { contains: s, mode: 'insensitive' } },
-        { brand: { contains: s, mode: 'insensitive' } },
-        { model: { contains: s, mode: 'insensitive' } },
-        { serialNumber: { contains: s, mode: 'insensitive' } },
-        { customer: { contains: s, mode: 'insensitive' } },
-      ];
-    }
-
-// Field-specific filters (AND with `search` if provided)
-if (q.serial) where.serialNumber = { contains: q.serial.trim(), mode: 'insensitive' };
-if (q.name) where.name = { contains: q.name.trim(), mode: 'insensitive' };
-if (q.model) where.model = { contains: q.model.trim(), mode: 'insensitive' };
-if (q.customer) where.customer = { contains: q.customer.trim(), mode: 'insensitive' };
-
-    if (q.status) where.status = q.status as AssetStatus;
-    if (q.locationId) where.locationId = q.locationId;
-    if (q.categoryId) where.categoryId = q.categoryId;
+    const where = this.buildFindAllWhere(tenantId, q);
 
     const orderBy: Prisma.AssetOrderByWithRelationInput[] = [];
     switch (q.orderBy) {
@@ -623,6 +605,13 @@ if (q.customer) where.customer = { contains: q.customer.trim(), mode: 'insensiti
                 },
               },
             },
+            preventiveMaintenanceRecords: {
+              select: {
+                executedAt: true,
+              },
+              orderBy: [{ executedAt: 'desc' }, { createdAt: 'desc' }],
+              take: 1,
+            },
           },
         }),
         tx.asset.count({ where }),
@@ -630,13 +619,20 @@ if (q.customer) where.customer = { contains: q.customer.trim(), mode: 'insensiti
       return {
         items: (items ?? []).map((item: any) => {
           const plan = item?.maintenancePlan ?? null;
+          const latestRecordedMaintenance = item?.preventiveMaintenanceRecords?.[0] ?? null;
+          const planLastMaintenanceAt = plan?.lastMaintenanceAt ? new Date(plan.lastMaintenanceAt) : null;
+          const recordedLastMaintenanceAt = latestRecordedMaintenance?.executedAt ? new Date(latestRecordedMaintenance.executedAt) : null;
+          const effectiveLastMaintenanceAt =
+            recordedLastMaintenanceAt && (!planLastMaintenanceAt || recordedLastMaintenanceAt.getTime() >= planLastMaintenanceAt.getTime())
+              ? recordedLastMaintenanceAt
+              : planLastMaintenanceAt;
           const hasMaintenancePlan = !!String(plan?.pmPlanId || '').trim();
           return {
             ...item,
             hasMaintenancePlan,
             maintenancePlanActive: hasMaintenancePlan ? plan?.active !== false : false,
             maintenancePlanName: hasMaintenancePlan ? plan?.pmPlan?.name ?? null : null,
-            lastMaintenanceAt: plan?.lastMaintenanceAt ?? null,
+            lastMaintenanceAt: effectiveLastMaintenanceAt ? effectiveLastMaintenanceAt.toISOString() : null,
           };
         }),
         page,
@@ -645,6 +641,103 @@ if (q.customer) where.customer = { contains: q.customer.trim(), mode: 'insensiti
         pages: Math.ceil(total / size),
       };
     });
+  }
+
+  async getFilterOptions(q: FindAllQuery = {}) {
+    const tenantId = this.getTenantId();
+    const where = this.buildFindAllWhere(tenantId, { ...q, name: undefined, nameIn: undefined, page: undefined, size: undefined, orderBy: undefined });
+
+    return this.withTenantRLS(async (tx) => {
+      const rows = await tx.asset.findMany({
+        where,
+        select: { name: true },
+        distinct: ['name'],
+        orderBy: { name: 'asc' },
+        take: 10000,
+      });
+
+      return {
+        names: (rows ?? [])
+          .map((row: any) => String(row?.name || '').trim())
+          .filter((name: string) => !!name),
+      };
+    });
+  }
+
+  private buildFindAllWhere(tenantId: string, q: FindAllQuery = {}): Prisma.AssetWhereInput {
+    const where: Prisma.AssetWhereInput = { tenantId };
+
+    if (q.search) {
+      const s = q.search.trim();
+      where.OR = [
+        { code: { contains: s, mode: 'insensitive' } },
+        { name: { contains: s, mode: 'insensitive' } },
+        { brand: { contains: s, mode: 'insensitive' } },
+        { model: { contains: s, mode: 'insensitive' } },
+        { serialNumber: { contains: s, mode: 'insensitive' } },
+        { customer: { contains: s, mode: 'insensitive' } },
+      ];
+    }
+
+// Field-specific filters (AND with `search` if provided)
+if (q.serial) where.serialNumber = { contains: q.serial.trim(), mode: 'insensitive' };
+if (q.nameIn?.length) where.name = { in: q.nameIn };
+else if (q.name) where.name = { contains: q.name.trim(), mode: 'insensitive' };
+if (q.brand) where.brand = { contains: q.brand.trim(), mode: 'insensitive' };
+if (q.model) where.model = { contains: q.model.trim(), mode: 'insensitive' };
+if (q.customer) where.customer = { contains: q.customer.trim(), mode: 'insensitive' };
+    if (q.guarantee) {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const oneYearAgo = new Date(today.getTime());
+      oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+
+      if (q.guarantee === 'IN_WARRANTY') {
+        where.AND = [
+          ...(Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : []),
+          {
+            OR: [
+              { guarantee: { gte: today } },
+              {
+                AND: [
+                  { guarantee: null },
+                  { acquiredOn: { not: null, gte: oneYearAgo } },
+                ],
+              },
+            ],
+          },
+        ];
+      } else if (q.guarantee === 'OUT_OF_WARRANTY') {
+        where.AND = [
+          ...(Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : []),
+          {
+            OR: [
+              { guarantee: { lt: today } },
+              {
+                AND: [
+                  { guarantee: null },
+                  {
+                    OR: [
+                      { acquiredOn: null },
+                      { acquiredOn: { lt: oneYearAgo } },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        ];
+      }
+    }
+
+    if (q.pmConfigured === 'CONFIGURED') where.maintenancePlan = { isNot: null };
+    if (q.pmConfigured === 'UNCONFIGURED') where.maintenancePlan = { is: null };
+
+    if (q.status) where.status = q.status as AssetStatus;
+    if (q.locationId) where.locationId = q.locationId;
+    if (q.categoryId) where.categoryId = q.categoryId;
+
+    return where;
   }
 
   async findOne(id: string) {

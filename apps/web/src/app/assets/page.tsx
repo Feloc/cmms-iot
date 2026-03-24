@@ -30,13 +30,29 @@ type AssetListResponse = {
   pages: number;
 };
 
+type AssetFilterOptionsResponse = {
+  names: string[];
+};
+
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+
+function normalizeFilterText(value: string) {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
+}
 
 type Filters = {
   serial: string;
-  name: string;
+  nameIn: string[];
+  brand: string;
   model: string;
   customer: string;
+  guarantee: '' | 'IN_WARRANTY' | 'OUT_OF_WARRANTY';
+  pmConfigured: '' | 'CONFIGURED' | 'UNCONFIGURED';
+  status: '' | 'ACTIVE' | 'INACTIVE' | 'DECOMMISSIONED';
 };
 
 export default function AssetsPage() {
@@ -64,17 +80,38 @@ export default function AssetsPage() {
 
   const [filters, setFilters] = React.useState<Filters>({
     serial: '',
-    name: '',
+    nameIn: [],
+    brand: '',
     model: '',
     customer: '',
+    guarantee: '',
+    pmConfigured: '',
+    status: '',
   });
 
   const [assets, setAssets] = React.useState<Asset[]>([]);
   const [page, setPage] = React.useState(1);
   const [pages, setPages] = React.useState(1);
+  const [total, setTotal] = React.useState(0);
+  const [nameOptions, setNameOptions] = React.useState<string[]>([]);
+  const [nameOptionSearch, setNameOptionSearch] = React.useState('');
 
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  const filteredNameOptions = React.useMemo(() => {
+    const needle = normalizeFilterText(nameOptionSearch);
+    if (!needle) return nameOptions;
+    return nameOptions.filter((name) => normalizeFilterText(name).includes(needle));
+  }, [nameOptions, nameOptionSearch]);
+  const selectedVisibleNameCount = React.useMemo(
+    () => filteredNameOptions.filter((name) => filters.nameIn.includes(name)).length,
+    [filteredNameOptions, filters.nameIn],
+  );
+  const selectedNameSummary = React.useMemo(() => {
+    if (filters.nameIn.length === 0) return 'Todas';
+    if (filters.nameIn.length === 1) return filters.nameIn[0];
+    return `${filters.nameIn.length} seleccionados`;
+  }, [filters.nameIn]);
 
   async function load(p = 1) {
     if (!tenantSlug) return; // No dispares hasta tener tenant
@@ -86,14 +123,22 @@ export default function AssetsPage() {
       qs.set('size', '20');
 
       const serial = filters.serial.trim();
-      const name = filters.name.trim();
+      const nameIn = filters.nameIn;
+      const brand = filters.brand.trim();
       const model = filters.model.trim();
       const customer = filters.customer.trim();
+      const guarantee = filters.guarantee;
+      const pmConfigured = filters.pmConfigured;
+      const status = filters.status;
 
       if (serial) qs.set('serial', serial);
-      if (name) qs.set('name', name);
+      if (nameIn.length > 0) qs.set('nameIn', nameIn.join(','));
+      if (brand) qs.set('brand', brand);
       if (model) qs.set('model', model);
       if (customer) qs.set('customer', customer);
+      if (guarantee) qs.set('guarantee', guarantee);
+      if (pmConfigured) qs.set('pmConfigured', pmConfigured);
+      if (status) qs.set('status', status);
 
       const url = `${API_BASE}/assets?${qs.toString()}`;
       const res = await fetch(url, {
@@ -116,10 +161,50 @@ export default function AssetsPage() {
       setAssets(Array.isArray(data.items) ? data.items : []);
       setPage(data.page || p);
       setPages(data.pages || 1);
+      setTotal(data.total || 0);
     } catch (e: any) {
       setError(e?.message || 'Error cargando assets');
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function loadNameOptions() {
+    if (!tenantSlug) return;
+    try {
+      const qs = new URLSearchParams();
+      const serial = filters.serial.trim();
+      const brand = filters.brand.trim();
+      const model = filters.model.trim();
+      const customer = filters.customer.trim();
+      const guarantee = filters.guarantee;
+      const pmConfigured = filters.pmConfigured;
+      const status = filters.status;
+
+      if (serial) qs.set('serial', serial);
+      if (brand) qs.set('brand', brand);
+      if (model) qs.set('model', model);
+      if (customer) qs.set('customer', customer);
+      if (guarantee) qs.set('guarantee', guarantee);
+      if (pmConfigured) qs.set('pmConfigured', pmConfigured);
+      if (status) qs.set('status', status);
+
+      const res = await fetch(`${API_BASE}/assets/filter-options?${qs.toString()}`, {
+        method: 'GET',
+        credentials: 'include',
+        headers,
+      });
+      const text = await res.text();
+      let json: any = {};
+      try {
+        json = text ? JSON.parse(text) : {};
+      } catch {}
+      if (!res.ok) throw new Error(json?.message || json?.error || `HTTP ${res.status}`);
+
+      const data = json as AssetFilterOptionsResponse;
+      setNameOptions(Array.isArray(data.names) ? data.names : []);
+    } catch (e: any) {
+      setError(e?.message || 'Error cargando opciones de filtro');
     }
   }
 
@@ -136,7 +221,13 @@ export default function AssetsPage() {
     }, 300);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filters.serial, filters.name, filters.model, filters.customer, tenantSlug]);
+  }, [filters.serial, filters.nameIn, filters.brand, filters.model, filters.customer, filters.guarantee, filters.pmConfigured, filters.status, tenantSlug]);
+
+  React.useEffect(() => {
+    if (!tenantSlug) return;
+    loadNameOptions();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filters.serial, filters.brand, filters.model, filters.customer, filters.guarantee, filters.pmConfigured, filters.status, tenantSlug]);
 
 function fmtDate(d?: string | null) {
   if (!d) return '-';
@@ -151,8 +242,9 @@ function monthsSince(dateText?: string | null) {
   if (Number.isNaN(start.getTime())) return null;
 
   const now = new Date();
-  let months = (now.getFullYear() - start.getFullYear()) * 12 + (now.getMonth() - start.getMonth());
-  if (now.getDate() < start.getDate()) months -= 1;
+  const diffMs = now.getTime() - start.getTime();
+  const averageMonthMs = (365.25 / 12) * 24 * 60 * 60 * 1000;
+  const months = diffMs / averageMonthMs;
   return Math.max(0, months);
 }
 
@@ -163,7 +255,7 @@ function maintenanceAge(asset: Asset) {
 
   const origin = asset.lastMaintenanceAt ? 'último mantenimiento' : 'adquisición';
   return {
-    label: `${months} mes${months === 1 ? '' : 'es'}`,
+    label: new Intl.NumberFormat('es-CO', { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(months),
     title: `Calculado desde ${origin}: ${fmtDate(baseDate)}`,
   };
 }
@@ -203,7 +295,7 @@ function pmBadge(asset: Asset) {
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
           <h1 className="text-xl font-semibold">Assets</h1>
-          <div className="text-sm text-gray-600">Filtra por serial, nombre, modelo y cliente.</div>
+          <div className="text-sm text-gray-600">Usa los filtros del encabezado para trabajar la lista como una tabla.</div>
         </div>
         <div className="flex items-center gap-2">
           <Link className="px-3 py-2 border rounded" href="/assets/new">
@@ -212,38 +304,13 @@ function pmBadge(asset: Asset) {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
-        <input
-          className="border rounded px-3 py-2 text-sm"
-          placeholder="Serial..."
-          value={filters.serial}
-          onChange={(e) => setFilters((s) => ({ ...s, serial: e.target.value }))}
-        />
-        <input
-          className="border rounded px-3 py-2 text-sm"
-          placeholder="Nombre..."
-          value={filters.name}
-          onChange={(e) => setFilters((s) => ({ ...s, name: e.target.value }))}
-        />
-        <input
-          className="border rounded px-3 py-2 text-sm"
-          placeholder="Modelo..."
-          value={filters.model}
-          onChange={(e) => setFilters((s) => ({ ...s, model: e.target.value }))}
-        />
-        <input
-          className="border rounded px-3 py-2 text-sm"
-          placeholder="Cliente..."
-          value={filters.customer}
-          onChange={(e) => setFilters((s) => ({ ...s, customer: e.target.value }))}
-        />
-      </div>
-
       <div className="flex items-center justify-between">
-        {error ? <div className="text-sm text-red-600">{error}</div> : <div />}
+        <div className="text-sm text-gray-600">
+          {error ? <span className="text-red-600">{error}</span> : `${total} registro${total === 1 ? '' : 's'}`}
+        </div>
         <button
           className="px-3 py-2 border rounded text-sm"
-          onClick={() => setFilters({ serial: '', name: '', model: '', customer: '' })}
+          onClick={() => setFilters({ serial: '', nameIn: [], brand: '', model: '', customer: '', guarantee: '', pmConfigured: '', status: '' })}
         >
           Limpiar filtros
         </button>
@@ -263,6 +330,139 @@ function pmBadge(asset: Asset) {
               <th className="px-3 py-2 text-left">Estado</th>
               <th className="px-3 py-2 text-left">Plan PM</th>
               <th className="px-3 py-2 text-left">Acciones</th>
+            </tr>
+            <tr className="border-t bg-white">
+              <th className="px-2 py-2">
+                <input
+                  className="border rounded px-2 py-1 text-xs w-full font-normal"
+                  placeholder="Filtrar..."
+                  value={filters.serial}
+                  onChange={(e) => setFilters((s) => ({ ...s, serial: e.target.value }))}
+                />
+              </th>
+              <th className="px-2 py-2">
+                <details className="relative">
+                  <summary className="list-none border rounded px-2 py-1 text-xs w-full font-normal cursor-pointer text-left bg-white">
+                    {selectedNameSummary}
+                  </summary>
+                  <div className="absolute left-0 z-20 mt-1 w-64 rounded border bg-white p-2 shadow-lg">
+                    <input
+                      className="mb-2 border rounded px-2 py-1 text-xs w-full font-normal"
+                      placeholder="Buscar dentro del listado..."
+                      value={nameOptionSearch}
+                      onChange={(e) => setNameOptionSearch(e.target.value)}
+                    />
+                    <div className="flex items-center justify-between gap-2 pb-2 text-xs">
+                      <button
+                        type="button"
+                        className="underline"
+                        onClick={() =>
+                          setFilters((s) => ({
+                            ...s,
+                            nameIn: Array.from(new Set([...s.nameIn, ...filteredNameOptions])),
+                          }))
+                        }
+                      >
+                        Todos
+                      </button>
+                      <button
+                        type="button"
+                        className="underline"
+                        onClick={() =>
+                          setFilters((s) => ({
+                            ...s,
+                            nameIn: s.nameIn.filter((item) => !filteredNameOptions.includes(item)),
+                          }))
+                        }
+                      >
+                        Ninguno
+                      </button>
+                    </div>
+                    <div className="pb-2 text-[11px] text-gray-500">
+                      {filteredNameOptions.length} opcion{filteredNameOptions.length === 1 ? '' : 'es'} visibles
+                      {filteredNameOptions.length > 0 ? ` • ${selectedVisibleNameCount} seleccionada${selectedVisibleNameCount === 1 ? '' : 's'}` : ''}
+                    </div>
+                    <div className="max-h-56 overflow-auto space-y-1">
+                      {filteredNameOptions.map((name) => (
+                        <label key={name} className="flex items-center gap-2 text-xs font-normal">
+                          <input
+                            type="checkbox"
+                            checked={filters.nameIn.includes(name)}
+                            onChange={(e) =>
+                              setFilters((s) => ({
+                                ...s,
+                                nameIn: e.target.checked ? [...s.nameIn, name] : s.nameIn.filter((item) => item !== name),
+                              }))
+                            }
+                          />
+                          <span>{name}</span>
+                        </label>
+                      ))}
+                      {filteredNameOptions.length === 0 ? <div className="text-xs text-gray-500">Sin opciones</div> : null}
+                    </div>
+                  </div>
+                </details>
+              </th>
+              <th className="px-2 py-2">
+                <input
+                  className="border rounded px-2 py-1 text-xs w-full font-normal"
+                  placeholder="Filtrar..."
+                  value={filters.brand}
+                  onChange={(e) => setFilters((s) => ({ ...s, brand: e.target.value }))}
+                />
+              </th>
+              <th className="px-2 py-2">
+                <input
+                  className="border rounded px-2 py-1 text-xs w-full font-normal"
+                  placeholder="Filtrar..."
+                  value={filters.model}
+                  onChange={(e) => setFilters((s) => ({ ...s, model: e.target.value }))}
+                />
+              </th>
+              <th className="px-2 py-2">
+                <input
+                  className="border rounded px-2 py-1 text-xs w-full font-normal"
+                  placeholder="Filtrar..."
+                  value={filters.customer}
+                  onChange={(e) => setFilters((s) => ({ ...s, customer: e.target.value }))}
+                />
+              </th>
+              <th className="px-2 py-2">
+                <select
+                  className="border rounded px-2 py-1 text-xs w-full font-normal"
+                  value={filters.guarantee}
+                  onChange={(e) => setFilters((s) => ({ ...s, guarantee: e.target.value as Filters['guarantee'] }))}
+                >
+                  <option value="">Todas</option>
+                  <option value="IN_WARRANTY">En garantía</option>
+                  <option value="OUT_OF_WARRANTY">Fuera</option>
+                </select>
+              </th>
+              <th className="px-2 py-2"></th>
+              <th className="px-2 py-2">
+                <select
+                  className="border rounded px-2 py-1 text-xs w-full font-normal"
+                  value={filters.status}
+                  onChange={(e) => setFilters((s) => ({ ...s, status: e.target.value as Filters['status'] }))}
+                >
+                  <option value="">Todos</option>
+                  <option value="ACTIVE">Activo</option>
+                  <option value="INACTIVE">Inactivo</option>
+                  <option value="DECOMMISSIONED">Baja</option>
+                </select>
+              </th>
+              <th className="px-2 py-2">
+                <select
+                  className="border rounded px-2 py-1 text-xs w-full font-normal"
+                  value={filters.pmConfigured}
+                  onChange={(e) => setFilters((s) => ({ ...s, pmConfigured: e.target.value as Filters['pmConfigured'] }))}
+                >
+                  <option value="">Todos</option>
+                  <option value="CONFIGURED">Con plan</option>
+                  <option value="UNCONFIGURED">Sin plan</option>
+                </select>
+              </th>
+              <th className="px-2 py-2"></th>
             </tr>
           </thead>
           <tbody>

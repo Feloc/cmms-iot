@@ -11,8 +11,12 @@ type FindAllQuery = {
   search?: string;
   serial?: string;
   name?: string;
+  nameIn?: string[];
+  brand?: string;
   model?: string;
   customer?: string;
+  guarantee?: 'IN_WARRANTY' | 'OUT_OF_WARRANTY' | '';
+  pmConfigured?: 'CONFIGURED' | 'UNCONFIGURED' | '';
   status?: 'ACTIVE' | 'INACTIVE' | 'DECOMMISSIONED' | '';
   locationId?: string;
   categoryId?: string;
@@ -31,8 +35,12 @@ export class AssetsController {
     @Query('search') search?: string,
     @Query('serial') serial?: string,
     @Query('name') name?: string,
+    @Query('nameIn') nameIn?: string | string[],
+    @Query('brand') brand?: string,
     @Query('model') model?: string,
     @Query('customer') customer?: string,
+    @Query('guarantee') guarantee?: string,
+    @Query('pmConfigured') pmConfigured?: string,
     @Query('status') status?: string,
     @Query('locationId') locationId?: string,
     @Query('categoryId') categoryId?: string,
@@ -40,12 +48,19 @@ export class AssetsController {
     @Query('size') size?: string,
     @Query('orderBy') orderBy?: string,
   ) {
+    const nameInList = Array.isArray(nameIn)
+      ? nameIn.map((v) => String(v).trim()).filter(Boolean)
+      : String(nameIn || '').split(',').map((v) => v.trim()).filter(Boolean);
     const q: FindAllQuery = {
       search,
       serial: serial || undefined,
       name: name || undefined,
+      nameIn: nameInList.length ? nameInList : undefined,
+      brand: brand || undefined,
       model: model || undefined,
       customer: customer || undefined,
+      guarantee: (guarantee as any) || '',
+      pmConfigured: (pmConfigured as any) || '',
       status: (status as any) || '',
       locationId: locationId || undefined,
       categoryId: categoryId || undefined,
@@ -54,6 +69,28 @@ export class AssetsController {
       orderBy: (orderBy as any) || undefined,
     };
     return this.service.findAll(q as any);
+  }
+
+  @Get('filter-options')
+  async getFilterOptions(
+    @Query('serial') serial?: string,
+    @Query('brand') brand?: string,
+    @Query('model') model?: string,
+    @Query('customer') customer?: string,
+    @Query('guarantee') guarantee?: string,
+    @Query('pmConfigured') pmConfigured?: string,
+    @Query('status') status?: string,
+  ) {
+    const q: FindAllQuery = {
+      serial: serial || undefined,
+      brand: brand || undefined,
+      model: model || undefined,
+      customer: customer || undefined,
+      guarantee: (guarantee as any) || '',
+      pmConfigured: (pmConfigured as any) || '',
+      status: (status as any) || '',
+    };
+    return this.service.getFilterOptions(q as any);
   }
 
   @Get('hourmeter-analytics/risk')
