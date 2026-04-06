@@ -69,6 +69,7 @@ model Tenant {
   workMeasurements      WorkMeasurement[]
   assetMeterReadings    AssetMeterReading[]
   serviceOrderIssues    ServiceOrderIssue[]
+  serviceOrderCommercialNotes ServiceOrderCommercialNote[]
   attachments           Attachment[]
   workNotes             WorkNote[]
   assetImportUploads    AssetImportUpload[]
@@ -346,6 +347,7 @@ model WorkOrder {
   workMeasurements   WorkMeasurement[]
   meterReadings      AssetMeterReading[]
   serviceOrderIssue  ServiceOrderIssue?
+  commercialNotes    ServiceOrderCommercialNote[]
   attachments        Attachment[]
   workNotes          WorkNote[]
 
@@ -365,10 +367,14 @@ enum WorkOrderStatus {
 }
 
 enum ServiceOrderCommercialStatus {
+  NO_MANAGEMENT
   PENDING_QUOTE
   PENDING_APPROVAL
+  NOT_APPROVED
   APPROVED
+  PROGRAMMED
   CONFIRMED
+  COMPLETED
 }
 
 enum WorkOrderPriority {
@@ -721,6 +727,24 @@ model WorkNote {
   addedAt     DateTime @default(now())
 
   @@index([tenantId, workOrderId, addedAt])
+}
+
+model ServiceOrderCommercialNote {
+  id               String   @id @default(cuid())
+  tenantId         String
+  tenant           Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  workOrderId      String
+  workOrder        WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+
+  commercialStatus ServiceOrderCommercialStatus?
+  comment          String
+  eventAt          DateTime
+  addedByUserId    String
+  createdAt        DateTime @default(now())
+
+  @@index([tenantId, workOrderId, eventAt(sort: Desc)])
+  @@index([tenantId, addedByUserId, createdAt(sort: Desc)])
 }
 
 

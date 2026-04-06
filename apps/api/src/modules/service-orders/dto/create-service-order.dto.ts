@@ -16,7 +16,24 @@ export class CreateServiceOrderDto {
   durationMin?: number;
 
   /** Estado comercial / de negociación con el cliente */
-  commercialStatus?: 'PENDING_QUOTE' | 'PENDING_APPROVAL' | 'APPROVED' | 'CONFIRMED' | 'PC' | 'PA' | 'AP' | 'CF' | null;
+  commercialStatus?:
+    | 'NO_MANAGEMENT'
+    | 'PENDING_QUOTE'
+    | 'PENDING_APPROVAL'
+    | 'NOT_APPROVED'
+    | 'APPROVED'
+    | 'PROGRAMMED'
+    | 'CONFIRMED'
+    | 'COMPLETED'
+    | 'NG'
+    | 'PC'
+    | 'PA'
+    | 'NA'
+    | 'AP'
+    | 'PR'
+    | 'CF'
+    | 'CP'
+    | null;
 
   /** Solo para PREVENTIVO */
   pmPlanId?: string;

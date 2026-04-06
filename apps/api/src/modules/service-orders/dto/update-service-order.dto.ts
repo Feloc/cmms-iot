@@ -10,7 +10,24 @@ export class UpdateServiceOrderDto {
   status?: 'OPEN' | 'SCHEDULED' | 'IN_PROGRESS' | 'ON_HOLD' | 'COMPLETED' | 'CLOSED' | 'CANCELED';
 
   serviceOrderType?: 'ALISTAMIENTO' | 'DIAGNOSTICO' | 'PREVENTIVO' | 'CORRECTIVO' | 'ENTREGA' | 'OTRO';
-  commercialStatus?: 'PENDING_QUOTE' | 'PENDING_APPROVAL' | 'APPROVED' | 'CONFIRMED' | 'PC' | 'PA' | 'AP' | 'CF' | null;
+  commercialStatus?:
+    | 'NO_MANAGEMENT'
+    | 'PENDING_QUOTE'
+    | 'PENDING_APPROVAL'
+    | 'NOT_APPROVED'
+    | 'APPROVED'
+    | 'PROGRAMMED'
+    | 'CONFIRMED'
+    | 'COMPLETED'
+    | 'NG'
+    | 'PC'
+    | 'PA'
+    | 'NA'
+    | 'AP'
+    | 'PR'
+    | 'CF'
+    | 'CP'
+    | null;
 
   pmPlanId?: string | null;
   hasIssue?: boolean;

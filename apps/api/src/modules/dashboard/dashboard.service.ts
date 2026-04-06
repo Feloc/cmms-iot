@@ -85,10 +85,14 @@ export class DashboardService {
       Array<{
         month: string;
         scheduled: number;
+        noManagement: number;
         pendingQuote: number;
         pendingApproval: number;
+        notApproved: number;
         approved: number;
+        programmed: number;
         confirmed: number;
+        completed: number;
         undefinedStatus: number;
       }>
     >(
@@ -96,15 +100,19 @@ export class DashboardService {
         SELECT
           date_trunc('month', "dueDate")::date AS month,
           COUNT(*)::int AS scheduled,
+          COUNT(*) FILTER (WHERE "commercialStatus" = 'NO_MANAGEMENT')::int AS "noManagement",
           COUNT(*) FILTER (WHERE "commercialStatus" = 'PENDING_QUOTE')::int AS "pendingQuote",
           COUNT(*) FILTER (WHERE "commercialStatus" = 'PENDING_APPROVAL')::int AS "pendingApproval",
+          COUNT(*) FILTER (WHERE "commercialStatus" = 'NOT_APPROVED')::int AS "notApproved",
           COUNT(*) FILTER (WHERE "commercialStatus" = 'APPROVED')::int AS approved,
+          COUNT(*) FILTER (WHERE "commercialStatus" = 'PROGRAMMED')::int AS programmed,
           COUNT(*) FILTER (WHERE "commercialStatus" = 'CONFIRMED')::int AS confirmed,
+          COUNT(*) FILTER (WHERE "commercialStatus" = 'COMPLETED')::int AS completed,
           COUNT(*) FILTER (WHERE "commercialStatus" IS NULL)::int AS "undefinedStatus"
         FROM "WorkOrder"
         WHERE "tenantId" = ${tenantId}
           AND "kind" = 'SERVICE_ORDER'
-          AND "status" = 'SCHEDULED'
+          AND "status" IN ('SCHEDULED', 'COMPLETED')
           AND "dueDate" IS NOT NULL
           ${rangeFilter}
         GROUP BY 1

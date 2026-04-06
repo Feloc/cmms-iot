@@ -35,6 +35,16 @@ type WorkLog = {
   user?: User | null;
 };
 
+type CommercialNote = {
+  id: string;
+  commercialStatus?: CommercialStatus | null;
+  comment: string;
+  eventAt?: string | null;
+  addedByUserId?: string | null;
+  createdAt?: string | null;
+  user?: User | null;
+};
+
 type AuditEntry = {
   at: string;
   byUserId: string;
@@ -127,7 +137,15 @@ type QuoteSummary = {
 type QuotesResponse = {
   items: QuoteSummary[];
 };
-type CommercialStatus = 'PENDING_QUOTE' | 'PENDING_APPROVAL' | 'APPROVED' | 'CONFIRMED';
+type CommercialStatus =
+  | 'NO_MANAGEMENT'
+  | 'PENDING_QUOTE'
+  | 'PENDING_APPROVAL'
+  | 'NOT_APPROVED'
+  | 'APPROVED'
+  | 'PROGRAMMED'
+  | 'CONFIRMED'
+  | 'COMPLETED';
 
 type ServiceOrder = {
   id: string;
@@ -230,14 +248,22 @@ function statusPillClass(status: string) {
 
 function commercialStatusMeta(status?: string | null) {
   switch (String(status || '').toUpperCase()) {
+    case 'NO_MANAGEMENT':
+      return { code: 'NG', label: 'No gestión', className: 'bg-slate-100 text-slate-900 border-slate-200' };
     case 'PENDING_QUOTE':
       return { code: 'PC', label: 'Pendiente cotizar', className: 'bg-orange-100 text-orange-900 border-orange-200' };
     case 'PENDING_APPROVAL':
       return { code: 'PA', label: 'Pendiente aprobación', className: 'bg-amber-100 text-amber-900 border-amber-200' };
+    case 'NOT_APPROVED':
+      return { code: 'NA', label: 'No aprobado', className: 'bg-rose-100 text-rose-900 border-rose-200' };
     case 'APPROVED':
       return { code: 'AP', label: 'Aprobado', className: 'bg-sky-100 text-sky-900 border-sky-200' };
+    case 'PROGRAMMED':
+      return { code: 'PR', label: 'Programado', className: 'bg-violet-100 text-violet-900 border-violet-200' };
     case 'CONFIRMED':
       return { code: 'CF', label: 'Confirmado', className: 'bg-emerald-100 text-emerald-900 border-emerald-200' };
+    case 'COMPLETED':
+      return { code: 'CP', label: 'Completado', className: 'bg-green-100 text-green-900 border-green-200' };
     default:
       return null;
   }
@@ -358,6 +384,9 @@ export default function ServiceOrderDetailPage() {
   const [issueFollowUpNote, setIssueFollowUpNote] = useState<string>('');
   const [issueResolutionSummary, setIssueResolutionSummary] = useState<string>('');
   const [issueVerificationNotes, setIssueVerificationNotes] = useState<string>('');
+  const [commercialNoteAt, setCommercialNoteAt] = useState<string>(nowLocalInputValue());
+  const [commercialNoteComment, setCommercialNoteComment] = useState<string>('');
+  const [commercialNoteBusy, setCommercialNoteBusy] = useState(false);
 
   const { data, error, isLoading, mutate } = useApiSWR<ServiceOrder>(
     id ? `/service-orders/${id}` : null,
@@ -386,6 +415,11 @@ export default function ServiceOrderDetailPage() {
     auth.token,
     auth.tenantSlug,
   );
+  const { data: commercialNotesData, mutate: mutateCommercialNotes } = useApiSWR<CommercialNote[]>(
+    id ? `/service-orders/${id}/commercial-notes` : null,
+    auth.token,
+    auth.tenantSlug,
+  );
 
   useEffect(() => {
     const ow = (data as any)?._meta?.openWorkLogElsewhere as OpenWorkLogElsewhere | null | undefined;
@@ -396,6 +430,11 @@ export default function ServiceOrderDetailPage() {
     (data as any)?._meta?.openWorkLogElsewhere?.workOrderId,
     (data as any)?._meta?.openWorkLogElsewhere?.workLogId,
   ]);
+
+  useEffect(() => {
+    setCommercialNoteAt(nowLocalInputValue());
+    setCommercialNoteComment('');
+  }, [id]);
 
   useEffect(() => {
     if (!isAdmin) return;
@@ -677,6 +716,7 @@ const isAssignedTech = !!myUserId && (data.assignments ?? []).some((a) => a.role
 const canChangeStatus = isAdmin || (role === 'TECH' && isAssignedTech);
   const commercialMeta = commercialStatusMeta(data.commercialStatus);
   const canEditCommercialStatus = isAdmin && !['OPEN', 'CANCELED'].includes(String(data.status || '').toUpperCase());
+  const commercialNotes = commercialNotesData ?? [];
 
   const canGenerateReport = ['COMPLETED', 'CLOSED'].includes(String(data.status || '').toUpperCase());
   const reports = (reportsData?.items ?? []) as WorkOrderReportRow[];
@@ -790,6 +830,62 @@ const canChangeStatus = isAdmin || (role === 'TECH' && isAssignedTech);
       dueDate: dueLocal ? localInputToIso(dueLocal) : null,
       technicianId: technicianId || undefined,
     });
+  }
+
+  async function addCommercialNote() {
+    if (!id || !auth.token || !auth.tenantSlug) return;
+    const comment = commercialNoteComment.trim();
+    if (!comment) {
+      setUiErr('Debes escribir un comentario para el seguimiento comercial.');
+      return;
+    }
+
+    const eventAtIso = commercialNoteAt ? localInputToIso(commercialNoteAt) : null;
+    if (commercialNoteAt && !eventAtIso) {
+      setUiErr('La fecha del seguimiento comercial no es válida.');
+      return;
+    }
+
+    setCommercialNoteBusy(true);
+    setUiErr('');
+    setUiInfo('');
+    try {
+      await apiFetch(`/service-orders/${id}/commercial-notes`, {
+        method: 'POST',
+        token: auth.token!,
+        tenantSlug: auth.tenantSlug!,
+        body: { eventAt: eventAtIso || undefined, comment },
+      });
+      setCommercialNoteAt(nowLocalInputValue());
+      setCommercialNoteComment('');
+      await mutateCommercialNotes();
+      await mutate();
+    } catch (e: any) {
+      setUiErr(e?.message ?? 'Error agregando seguimiento comercial');
+    } finally {
+      setCommercialNoteBusy(false);
+    }
+  }
+
+  async function removeCommercialNote(noteId: string) {
+    if (!id || !auth.token || !auth.tenantSlug) return;
+    if (!confirm('¿Eliminar este seguimiento comercial?')) return;
+
+    setCommercialNoteBusy(true);
+    setUiErr('');
+    setUiInfo('');
+    try {
+      await apiFetch(`/service-orders/${id}/commercial-notes/${noteId}`, {
+        method: 'DELETE',
+        token: auth.token!,
+        tenantSlug: auth.tenantSlug!,
+      });
+      await mutateCommercialNotes();
+    } catch (e: any) {
+      setUiErr(e?.message ?? 'Error eliminando seguimiento comercial');
+    } finally {
+      setCommercialNoteBusy(false);
+    }
   }
 
   async function setVisitMode(mode: VisitMode) {
@@ -1243,10 +1339,14 @@ async function setTimestamp(key: TsKey, localValue: string) {
               onChange={(e) => setEditCommercialStatus(e.target.value)}
             >
               <option value="">(sin definir)</option>
+              <option value="NO_MANAGEMENT">NG · No gestión</option>
               <option value="PENDING_QUOTE">PC · Pendiente cotizar</option>
               <option value="PENDING_APPROVAL">PA · Pendiente aprobación</option>
+              <option value="NOT_APPROVED">NA · No aprobado</option>
               <option value="APPROVED">AP · Aprobado</option>
+              <option value="PROGRAMMED">PR · Programado</option>
               <option value="CONFIRMED">CF · Confirmado</option>
+              <option value="COMPLETED">CP · Completado</option>
             </select>
             <p className="text-xs text-gray-500">Seguimiento comercial de la OS con el cliente.</p>
           </div>
@@ -1403,10 +1503,14 @@ async function setTimestamp(key: TsKey, localValue: string) {
                   onChange={(e) => patch(`/service-orders/${id}`, { commercialStatus: e.target.value || null })}
                 >
                   <option value="">(sin definir)</option>
+                  <option value="NO_MANAGEMENT">NG · No gestión</option>
                   <option value="PENDING_QUOTE">PC · Pendiente cotizar</option>
                   <option value="PENDING_APPROVAL">PA · Pendiente aprobación</option>
+                  <option value="NOT_APPROVED">NA · No aprobado</option>
                   <option value="APPROVED">AP · Aprobado</option>
+                  <option value="PROGRAMMED">PR · Programado</option>
                   <option value="CONFIRMED">CF · Confirmado</option>
+                  <option value="COMPLETED">CP · Completado</option>
                 </select>
                 <p className="text-xs text-gray-500">
                   {!canEditCommercialStatus ? 'Disponible cuando la OS está programada o en ejecución.' : 'Seguimiento comercial con el cliente.'}
@@ -1450,6 +1554,102 @@ async function setTimestamp(key: TsKey, localValue: string) {
               ))}
             </select>
           </div>
+        </div>
+      </section>
+
+      <section className="border rounded p-4 space-y-3">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h2 className="font-semibold">Seguimiento comercial</h2>
+            <p className="text-xs text-gray-500">
+              Registra fecha y comentario del proceso comercial. Cada entrada conserva el estado de negociación vigente al momento del registro.
+            </p>
+          </div>
+          <div className="text-sm">
+            {commercialMeta ? (
+              <span className={`px-2 py-1 text-xs border rounded ${commercialMeta.className}`} title={commercialMeta.label}>
+                Estado actual: {commercialMeta.code} · {commercialMeta.label}
+              </span>
+            ) : (
+              <span className="text-gray-500">Estado actual: Sin definir</span>
+            )}
+          </div>
+        </div>
+
+        {isAdmin ? (
+          <div className="grid grid-cols-1 md:grid-cols-[220px,1fr,auto] gap-2 items-start">
+            <div className="space-y-1">
+              <label className="text-sm font-medium">Fecha seguimiento</label>
+              <input
+                type="datetime-local"
+                className="border rounded px-3 py-2 w-full"
+                value={commercialNoteAt}
+                disabled={commercialNoteBusy}
+                onChange={(e) => setCommercialNoteAt(e.target.value)}
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-sm font-medium">Comentario</label>
+              <textarea
+                className="border rounded px-3 py-2 w-full min-h-[88px]"
+                placeholder="Ej. Se envió cotización, cliente pidió ajuste, quedó pendiente aprobación..."
+                value={commercialNoteComment}
+                disabled={commercialNoteBusy}
+                onChange={(e) => setCommercialNoteComment(e.target.value)}
+              />
+            </div>
+            <div className="pt-6">
+              <button
+                type="button"
+                className="px-3 py-2 rounded bg-black text-white text-sm disabled:opacity-50"
+                disabled={commercialNoteBusy}
+                onClick={addCommercialNote}
+              >
+                Agregar
+              </button>
+            </div>
+          </div>
+        ) : null}
+
+        <div className="space-y-2">
+          {commercialNotes.map((note) => {
+            const noteMeta = commercialStatusMeta(note.commercialStatus);
+            return (
+              <div key={note.id} className="border rounded p-3 space-y-2">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="space-y-1">
+                    <div className="flex flex-wrap items-center gap-2 text-sm">
+                      <span className="font-medium">{fmtDateTime(note.eventAt)}</span>
+                      {noteMeta ? (
+                        <span className={`px-2 py-0.5 text-xs border rounded ${noteMeta.className}`} title={noteMeta.label}>
+                          {noteMeta.code} · {noteMeta.label}
+                        </span>
+                      ) : (
+                        <span className="text-xs text-gray-500">Sin estado definido</span>
+                      )}
+                    </div>
+                    <div className="text-xs text-gray-500">
+                      Registrado por {note.user?.name || note.addedByUserId || 'usuario'}{note.createdAt ? ` · ${fmtDateTime(note.createdAt)}` : ''}
+                    </div>
+                  </div>
+                  {isAdmin ? (
+                    <button
+                      type="button"
+                      className="px-2 py-1 border rounded text-sm disabled:opacity-50"
+                      disabled={commercialNoteBusy}
+                      onClick={() => removeCommercialNote(note.id)}
+                    >
+                      Eliminar
+                    </button>
+                  ) : null}
+                </div>
+                <div className="text-sm whitespace-pre-wrap text-gray-700">{note.comment}</div>
+              </div>
+            );
+          })}
+          {commercialNotes.length === 0 ? (
+            <div className="text-sm text-gray-500">Aún no hay seguimientos comerciales registrados.</div>
+          ) : null}
         </div>
       </section>
 

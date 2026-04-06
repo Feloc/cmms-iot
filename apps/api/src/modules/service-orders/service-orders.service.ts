@@ -15,6 +15,7 @@ import { CreateServiceOrderReportDto } from './dto/create-report.dto';
 import { UpdateServiceOrderWorkLogDto } from './dto/update-worklog.dto';
 import { CreateServiceOrderHourmeterReadingDto } from './dto/meter-reading.dto';
 import { CreateServiceOrderQuoteDto } from './dto/create-quote.dto';
+import { CreateServiceOrderCommercialNoteDto } from './dto/commercial-note.dto';
 import { Prisma } from '@prisma/client';
 import { normalizeQueryArray } from './utils/query-array';
 import { ListServiceOrderIssuesQuery } from './dto/list-issues.query';
@@ -332,19 +333,29 @@ export class ServiceOrdersService {
     if (!normalized || this.isUndefinedCommercialStatusFilter(normalized)) return 'Sin definir';
     const withCode = opts?.withCode !== false;
 
+    if (normalized === 'NO_MANAGEMENT' || normalized === 'NG') return withCode ? 'NG · No gestión' : 'No gestión';
     if (normalized === 'PENDING_QUOTE' || normalized === 'PC') return withCode ? 'PC · Pendiente cotizar' : 'Pendiente cotizar';
     if (normalized === 'PENDING_APPROVAL' || normalized === 'PA') return withCode ? 'PA · Pendiente aprobación' : 'Pendiente aprobación';
+    if (normalized === 'NOT_APPROVED' || normalized === 'NA') return withCode ? 'NA · No aprobado' : 'No aprobado';
     if (normalized === 'APPROVED' || normalized === 'AP') return withCode ? 'AP · Aprobado' : 'Aprobado';
+    if (normalized === 'PROGRAMMED' || normalized === 'PR') return withCode ? 'PR · Programado' : 'Programado';
     if (normalized === 'CONFIRMED' || normalized === 'CF') return withCode ? 'CF · Confirmado' : 'Confirmado';
+    if (normalized === 'COMPLETED' || normalized === 'CP') return withCode ? 'CP · Completado' : 'Completado';
     return String(status);
   }
 
-  private normalizeCommercialStatus(v: any): 'PENDING_QUOTE' | 'PENDING_APPROVAL' | 'APPROVED' | 'CONFIRMED' {
+  private normalizeCommercialStatus(
+    v: any
+  ): 'NO_MANAGEMENT' | 'PENDING_QUOTE' | 'PENDING_APPROVAL' | 'NOT_APPROVED' | 'APPROVED' | 'PROGRAMMED' | 'CONFIRMED' | 'COMPLETED' {
     const s = String(v ?? '').trim().toUpperCase();
+    if (s === 'NO_MANAGEMENT' || s === 'NG') return 'NO_MANAGEMENT';
     if (s === 'PENDING_QUOTE' || s === 'PC') return 'PENDING_QUOTE';
     if (s === 'PENDING_APPROVAL' || s === 'PA') return 'PENDING_APPROVAL';
+    if (s === 'NOT_APPROVED' || s === 'NA') return 'NOT_APPROVED';
     if (s === 'APPROVED' || s === 'AP') return 'APPROVED';
+    if (s === 'PROGRAMMED' || s === 'PR') return 'PROGRAMMED';
     if (s === 'CONFIRMED' || s === 'CF') return 'CONFIRMED';
+    if (s === 'COMPLETED' || s === 'CP') return 'COMPLETED';
     throw new BadRequestException('Invalid commercial status');
   }
 
@@ -524,6 +535,82 @@ private normalizeMeasurementPhase(v: any): 'BEFORE' | 'AFTER' | 'OTHER' {
   const phase = String(v ?? 'OTHER').trim().toUpperCase();
   if (phase === 'BEFORE' || phase === 'AFTER') return phase;
   return 'OTHER';
+}
+
+private normalizeCommercialComment(v: any): string {
+  const comment = String(v ?? '').trim();
+  if (!comment) throw new BadRequestException('comment is required');
+  return comment;
+}
+
+private async enrichCommercialNotes(rows: any[], tenantId: string) {
+  const userIds = Array.from(new Set((rows ?? []).map((row: any) => String(row?.addedByUserId || '').trim()).filter(Boolean)));
+  const users = userIds.length
+    ? await this.prisma.user.findMany({
+        where: { tenantId, id: { in: userIds } },
+        select: { id: true, name: true, email: true, role: true },
+      })
+    : [];
+  const userById = new Map(users.map((u: any) => [u.id, u]));
+
+  return (rows ?? []).map((row: any) => ({
+    id: row.id,
+    commercialStatus: row?.commercialStatus ?? null,
+    comment: row?.comment ?? '',
+    eventAt: row?.eventAt ? new Date(row.eventAt).toISOString() : null,
+    addedByUserId: row?.addedByUserId ?? null,
+    createdAt: row?.createdAt ? new Date(row.createdAt).toISOString() : null,
+    user: row?.addedByUserId ? userById.get(row.addedByUserId) ?? null : null,
+  }));
+}
+
+async getCommercialNotes(id: string) {
+  const { tenantId } = await this.assertSo(id);
+  const rows = await (this.prisma as any).serviceOrderCommercialNote.findMany({
+    where: { tenantId, workOrderId: id },
+    orderBy: [{ eventAt: 'desc' }, { createdAt: 'desc' }],
+  });
+  return this.enrichCommercialNotes(rows ?? [], tenantId);
+}
+
+async addCommercialNote(id: string, dto: CreateServiceOrderCommercialNoteDto) {
+  await this.assertAdmin();
+  const tenantId = this.getTenantId();
+  const addedByUserId = this.getUserId();
+
+  const so = await this.prisma.workOrder.findFirst({
+    where: { id, tenantId, kind: 'SERVICE_ORDER' },
+    select: { id: true, commercialStatus: true },
+  });
+  if (!so) throw new NotFoundException('Service order not found');
+
+  const comment = this.normalizeCommercialComment((dto as any)?.comment);
+  const eventAt = (dto as any)?.eventAt ? this.coerceDate((dto as any).eventAt as any) : new Date();
+  if (!eventAt) throw new BadRequestException('eventAt is invalid');
+
+  const created = await (this.prisma as any).serviceOrderCommercialNote.create({
+    data: {
+      tenantId,
+      workOrderId: id,
+      commercialStatus: (so as any).commercialStatus ?? null,
+      comment,
+      eventAt,
+      addedByUserId,
+    },
+  });
+
+  const [enriched] = await this.enrichCommercialNotes([created], tenantId);
+  return enriched ?? created;
+}
+
+async deleteCommercialNote(id: string, noteId: string) {
+  await this.assertAdmin();
+  const { tenantId } = await this.assertSo(id);
+  await (this.prisma as any).serviceOrderCommercialNote.findFirstOrThrow({
+    where: { id: noteId, tenantId, workOrderId: id },
+  });
+  await (this.prisma as any).serviceOrderCommercialNote.delete({ where: { id: noteId } });
+  return { ok: true };
 }
 
 private mapHourmeterReading(row: any) {
@@ -2036,7 +2123,12 @@ return { ...(so as any), workLogs: enrichedLogs, formData, asset: asset ?? null,
           : this.normalizeCommercialStatus((dto as any).commercialStatus);
 
     const effectiveStatus = String((applyStatus ? (dto as any).status : current.status) || 'OPEN').toUpperCase();
-    if (normalizedCommercialStatus && ['OPEN', 'CANCELED'].includes(effectiveStatus)) {
+    const finalCommercialStatus =
+      applyStatus && effectiveStatus === 'COMPLETED'
+        ? ('COMPLETED' as const)
+        : normalizedCommercialStatus;
+
+    if (finalCommercialStatus && ['OPEN', 'CANCELED'].includes(effectiveStatus)) {
       throw new BadRequestException('Commercial status requires the service order to be scheduled or in execution');
     }
 
@@ -2046,7 +2138,7 @@ return { ...(so as any), workLogs: enrichedLogs, formData, asset: asset ?? null,
       ...(dto.description !== undefined ? { description: dto.description } : {}),
       ...(applyStatus ? { status: dto.status as any } : {}),
       ...(dto.serviceOrderType !== undefined ? { serviceOrderType: dto.serviceOrderType as any } : {}),
-      ...(normalizedCommercialStatus !== undefined ? { commercialStatus: normalizedCommercialStatus as any } : {}),
+      ...(finalCommercialStatus !== undefined ? { commercialStatus: finalCommercialStatus as any } : {}),
       ...(dto.pmPlanId !== undefined ? { pmPlanId: dto.pmPlanId } : {}),
       ...(dto.hasIssue !== undefined ? { hasIssue: dto.hasIssue } : {}),
       ...(dto.durationMin !== undefined ? { durationMin: dto.durationMin } : {}),
@@ -2147,7 +2239,7 @@ return { ...(so as any), workLogs: enrichedLogs, formData, asset: asset ?? null,
       ['title', (current as any).title, (dto as any).title],
       ['description', (current as any).description, (dto as any).description],
       ['serviceOrderType', (current as any).serviceOrderType, (dto as any).serviceOrderType],
-      ['commercialStatus', (current as any).commercialStatus, normalizedCommercialStatus],
+      ['commercialStatus', (current as any).commercialStatus, finalCommercialStatus],
       ['pmPlanId', (current as any).pmPlanId, (dto as any).pmPlanId],
       ['hasIssue', (current as any).hasIssue, (dto as any).hasIssue],
       ['durationMin', (current as any).durationMin, (dto as any).durationMin],
@@ -2365,6 +2457,7 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
     if ((dto as any).activityFinishedAt !== undefined && next.activityFinishedAt) {
       if (!['CLOSED', 'CANCELED'].includes(currentStatus)) {
         data.status = 'COMPLETED';
+        data.commercialStatus = 'COMPLETED' as any;
       }
     }
 
@@ -2412,6 +2505,14 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
       const prevS = String(current.status || 'OPEN').toUpperCase();
       const nextS = String((data as any).status || '').toUpperCase();
       if (prevS !== nextS) auditEntries.push(this.buildAuditEntry(actorUserId, 'status', 'auto(timestamps)', prevS, nextS));
+    }
+
+    if ((data as any).commercialStatus !== undefined) {
+      const prevCommercial = (current as any).commercialStatus ?? null;
+      const nextCommercial = (data as any).commercialStatus ?? null;
+      if (prevCommercial !== nextCommercial) {
+        auditEntries.push(this.buildAuditEntry(actorUserId, 'commercialStatus', 'auto(completed)', prevCommercial, nextCommercial));
+      }
     }
 
     if (auditEntries.length) {

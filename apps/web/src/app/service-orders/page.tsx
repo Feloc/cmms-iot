@@ -31,7 +31,15 @@ type ServiceOrder = {
 };
 
 type Paginated<T> = { items: T[]; total: number; page: number; size: number; statusCounts?: Record<string, number> };
-type CommercialStatus = 'PENDING_QUOTE' | 'PENDING_APPROVAL' | 'APPROVED' | 'CONFIRMED';
+type CommercialStatus =
+  | 'NO_MANAGEMENT'
+  | 'PENDING_QUOTE'
+  | 'PENDING_APPROVAL'
+  | 'NOT_APPROVED'
+  | 'APPROVED'
+  | 'PROGRAMMED'
+  | 'CONFIRMED'
+  | 'COMPLETED';
 
 type Filter =
   | { id: string; field: 'q'; value: string }
@@ -84,14 +92,22 @@ function monthToRange(value: string) {
 
 function commercialStatusMeta(status?: string | null) {
   switch (String(status || '').toUpperCase()) {
+    case 'NO_MANAGEMENT':
+      return { code: 'NG', label: 'No gestión', className: 'bg-slate-50 text-slate-800 border-slate-200' };
     case 'PENDING_QUOTE':
       return { code: 'PC', label: 'Pendiente cotizar', className: 'bg-orange-50 text-orange-800 border-orange-200' };
     case 'PENDING_APPROVAL':
       return { code: 'PA', label: 'Pendiente aprobación', className: 'bg-amber-50 text-amber-800 border-amber-200' };
+    case 'NOT_APPROVED':
+      return { code: 'NA', label: 'No aprobado', className: 'bg-rose-50 text-rose-800 border-rose-200' };
     case 'APPROVED':
       return { code: 'AP', label: 'Aprobado', className: 'bg-sky-50 text-sky-800 border-sky-200' };
+    case 'PROGRAMMED':
+      return { code: 'PR', label: 'Programado', className: 'bg-violet-50 text-violet-800 border-violet-200' };
     case 'CONFIRMED':
       return { code: 'CF', label: 'Confirmado', className: 'bg-emerald-50 text-emerald-800 border-emerald-200' };
+    case 'COMPLETED':
+      return { code: 'CP', label: 'Completado', className: 'bg-green-50 text-green-800 border-green-200' };
     default:
       return null;
   }
@@ -548,10 +564,14 @@ export default function ServiceOrdersPage() {
                 <select className="border rounded px-2 py-2 text-sm" value={f.value} onChange={(e) => setFilterValue(f.id, e.target.value)}>
                   <option value="">(cualquiera)</option>
                   <option value={COMMERCIAL_STATUS_UNDEFINED_FILTER}>Sin definir</option>
+                  <option value="NO_MANAGEMENT">NG · No gestión</option>
                   <option value="PENDING_QUOTE">PC · Pendiente cotizar</option>
                   <option value="PENDING_APPROVAL">PA · Pendiente aprobación</option>
+                  <option value="NOT_APPROVED">NA · No aprobado</option>
                   <option value="APPROVED">AP · Aprobado</option>
+                  <option value="PROGRAMMED">PR · Programado</option>
                   <option value="CONFIRMED">CF · Confirmado</option>
+                  <option value="COMPLETED">CP · Completado</option>
                 </select>
               ) : null}
 
@@ -668,10 +688,14 @@ export default function ServiceOrdersPage() {
                           title={!canEditCommercialStatus ? 'Disponible solo cuando la OS está en SCHEDULED.' : 'Seguimiento comercial con el cliente.'}
                         >
                           <option value="">(sin definir)</option>
+                          <option value="NO_MANAGEMENT">NG · No gestión</option>
                           <option value="PENDING_QUOTE">PC · Pendiente cotizar</option>
                           <option value="PENDING_APPROVAL">PA · Pendiente aprobación</option>
+                          <option value="NOT_APPROVED">NA · No aprobado</option>
                           <option value="APPROVED">AP · Aprobado</option>
+                          <option value="PROGRAMMED">PR · Programado</option>
                           <option value="CONFIRMED">CF · Confirmado</option>
+                          <option value="COMPLETED">CP · Completado</option>
                         </select>
                         {commercial ? (
                           <span className={`inline-flex px-2 py-0.5 border rounded text-xs ${commercial.className}`} title={commercial.label}>

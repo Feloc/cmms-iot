@@ -26,7 +26,15 @@ import {
 import { es } from 'date-fns/locale';
 
 type User = { id: string; name: string; email: string; role: string };
-type CommercialStatus = 'PENDING_QUOTE' | 'PENDING_APPROVAL' | 'APPROVED' | 'CONFIRMED';
+type CommercialStatus =
+  | 'NO_MANAGEMENT'
+  | 'PENDING_QUOTE'
+  | 'PENDING_APPROVAL'
+  | 'NOT_APPROVED'
+  | 'APPROVED'
+  | 'PROGRAMMED'
+  | 'CONFIRMED'
+  | 'COMPLETED';
 
 type ServiceOrder = {
   id: string;
@@ -212,14 +220,22 @@ function clampText(s: string, max: number) {
 
 function commercialStatusMeta(status?: string | null) {
   switch (String(status || '').trim().toUpperCase()) {
+    case 'NO_MANAGEMENT':
+      return { code: 'NG', label: 'No gestion' };
     case 'PENDING_QUOTE':
       return { code: 'PC', label: 'Pendiente cotizar' };
     case 'PENDING_APPROVAL':
       return { code: 'PA', label: 'Pendiente aprobacion' };
+    case 'NOT_APPROVED':
+      return { code: 'NA', label: 'No aprobado' };
     case 'APPROVED':
       return { code: 'AP', label: 'Aprobado' };
+    case 'PROGRAMMED':
+      return { code: 'PR', label: 'Programado' };
     case 'CONFIRMED':
       return { code: 'CF', label: 'Confirmado' };
+    case 'COMPLETED':
+      return { code: 'CP', label: 'Completado' };
     default:
       return null;
   }

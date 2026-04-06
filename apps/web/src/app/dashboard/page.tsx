@@ -61,10 +61,14 @@ type OperationalTimesComparisons = {
 type ScheduledNegotiationMonthRow = {
   month: string;
   scheduled: number;
+  noManagement: number;
   pendingQuote: number;
   pendingApproval: number;
+  notApproved: number;
   approved: number;
+  programmed: number;
   confirmed: number;
+  completed: number;
   undefinedStatus: number;
 };
 
@@ -72,10 +76,14 @@ type ScheduledNegotiationChartRow = {
   monthKey: string;
   month: string;
   scheduled: number;
+  ng: number;
   pc: number;
   pa: number;
+  na: number;
   ap: number;
+  pr: number;
   cf: number;
+  cp: number;
   undefinedStatus: number;
 };
 
@@ -269,11 +277,15 @@ function NegotiationTooltip(props: any) {
   const row = payload[0]?.payload as ScheduledNegotiationChartRow | undefined;
   if (!row) return null;
   const items = [
-    { key: 'scheduled', label: 'SCHEDULED total', color: '#0f172a', value: row.scheduled, showPct: false },
+    { key: 'scheduled', label: 'OS total', color: '#0f172a', value: row.scheduled, showPct: false },
+    { key: 'ng', label: 'NG', color: '#64748b', value: row.ng, showPct: true },
     { key: 'pc', label: 'PC', color: '#f97316', value: row.pc, showPct: true },
     { key: 'pa', label: 'PA', color: '#f59e0b', value: row.pa, showPct: true },
+    { key: 'na', label: 'NA', color: '#f43f5e', value: row.na, showPct: true },
     { key: 'ap', label: 'AP', color: '#0ea5e9', value: row.ap, showPct: true },
+    { key: 'pr', label: 'PR', color: '#8b5cf6', value: row.pr, showPct: true },
     { key: 'cf', label: 'CF', color: '#22c55e', value: row.cf, showPct: true },
+    { key: 'cp', label: 'CP', color: '#16a34a', value: row.cp, showPct: true },
     { key: 'undefinedStatus', label: 'Sin definir', color: '#94a3b8', value: row.undefinedStatus, showPct: true },
   ];
   return (
@@ -598,20 +610,28 @@ export default function Dashboard() {
         const monthKey = monthKeyFromValue(row.month);
         if (!monthKey) continue;
         const scheduled = Number(row?.scheduled ?? 0);
+        const ng = Number(row?.noManagement ?? 0);
         const pc = Number(row?.pendingQuote ?? 0);
         const pa = Number(row?.pendingApproval ?? 0);
+        const na = Number(row?.notApproved ?? 0);
         const ap = Number(row?.approved ?? 0);
+        const pr = Number(row?.programmed ?? 0);
         const cf = Number(row?.confirmed ?? 0);
-        const undefinedStatus = Math.max(0, scheduled - pc - pa - ap - cf);
+        const cp = Number(row?.completed ?? 0);
+        const undefinedStatus = Math.max(0, scheduled - ng - pc - pa - na - ap - pr - cf - cp);
         const [year, month] = monthKey.split('-').map(Number);
         result.push({
           monthKey,
           month: new Date(year, (month || 1) - 1, 1).toLocaleDateString(undefined, { month: 'short', year: '2-digit' }),
           scheduled,
+          ng,
           pc,
           pa,
+          na,
           ap,
+          pr,
           cf,
+          cp,
           undefinedStatus,
         });
       }
@@ -642,14 +662,18 @@ export default function Dashboard() {
       visibleScheduledNegotiationChart.reduce(
         (acc, row) => {
           acc.scheduled += row.scheduled;
+          acc.ng += row.ng;
           acc.pc += row.pc;
           acc.pa += row.pa;
+          acc.na += row.na;
           acc.ap += row.ap;
+          acc.pr += row.pr;
           acc.cf += row.cf;
+          acc.cp += row.cp;
           acc.undefinedStatus += row.undefinedStatus;
           return acc;
         },
-        { scheduled: 0, pc: 0, pa: 0, ap: 0, cf: 0, undefinedStatus: 0 }
+        { scheduled: 0, ng: 0, pc: 0, pa: 0, na: 0, ap: 0, pr: 0, cf: 0, cp: 0, undefinedStatus: 0 }
       ),
     [visibleScheduledNegotiationChart]
   );
@@ -833,8 +857,8 @@ export default function Dashboard() {
           <Card>
             <CardHeader className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
               <CardTitle className="text-base flex items-center">
-                Negociación de OS programadas por mes
-                <HelpTip text='Cuenta todas las órdenes en estado SCHEDULED con fecha programada y las desglosa por estado comercial, sin depender del rango principal del dashboard.' />
+                Negociación de OS programadas y completadas por mes
+                <HelpTip text='Cuenta todas las órdenes de servicio en estado SCHEDULED o COMPLETED con fecha programada y las desglosa por estado comercial, sin depender del rango principal del dashboard.' />
               </CardTitle>
               <Select value={selectedNegotiationMonth} onValueChange={setSelectedNegotiationMonth}>
                 <SelectTrigger className="w-full md:w-[220px]">
@@ -857,9 +881,9 @@ export default function Dashboard() {
                 </div>
               ) : !visibleScheduledNegotiationChart.length ? (
                 isNegotiationMonthsLoading ? (
-                  <div className="text-sm text-neutral-500">Cargando meses con OS programadas...</div>
+                  <div className="text-sm text-neutral-500">Cargando meses con OS programadas y completadas...</div>
                 ) : (
-                  <div className="text-sm text-neutral-500">Sin meses con OS programadas</div>
+                  <div className="text-sm text-neutral-500">Sin meses con OS programadas o completadas</div>
                 )
               ) : (
                 <>
@@ -871,30 +895,47 @@ export default function Dashboard() {
                         <YAxis allowDecimals={false} />
                         <Tooltip content={<NegotiationTooltip />} />
                         <Legend />
+                        <Bar dataKey="ng" stackId="negotiation" name="NG" fill="#64748b" radius={[0, 0, 0, 0]}>
+                          <LabelList dataKey="ng" content={<CenterIntegerBarLabel />} />
+                        </Bar>
                         <Bar dataKey="pc" stackId="negotiation" name="PC" fill="#f97316" radius={[0, 0, 0, 0]}>
                           <LabelList dataKey="pc" content={<CenterIntegerBarLabel />} />
                         </Bar>
                         <Bar dataKey="pa" stackId="negotiation" name="PA" fill="#f59e0b" radius={[0, 0, 0, 0]}>
                           <LabelList dataKey="pa" content={<CenterIntegerBarLabel />} />
                         </Bar>
+                        <Bar dataKey="na" stackId="negotiation" name="NA" fill="#f43f5e" radius={[0, 0, 0, 0]}>
+                          <LabelList dataKey="na" content={<CenterIntegerBarLabel />} />
+                        </Bar>
                         <Bar dataKey="ap" stackId="negotiation" name="AP" fill="#0ea5e9" radius={[0, 0, 0, 0]}>
                           <LabelList dataKey="ap" content={<CenterIntegerBarLabel />} />
+                        </Bar>
+                        <Bar dataKey="pr" stackId="negotiation" name="PR" fill="#8b5cf6" radius={[0, 0, 0, 0]}>
+                          <LabelList dataKey="pr" content={<CenterIntegerBarLabel />} />
                         </Bar>
                         <Bar dataKey="cf" stackId="negotiation" name="CF" fill="#22c55e" radius={[0, 0, 0, 0]}>
                           <LabelList dataKey="cf" content={<CenterIntegerBarLabel />} />
                         </Bar>
+                        <Bar dataKey="cp" stackId="negotiation" name="CP" fill="#16a34a" radius={[0, 0, 0, 0]}>
+                          <LabelList dataKey="cp" content={<CenterIntegerBarLabel />} />
+                        </Bar>
                         <Bar dataKey="undefinedStatus" stackId="negotiation" name="Sin definir" fill="#cbd5e1" radius={[4, 4, 0, 0]}>
                           <LabelList dataKey="undefinedStatus" content={<CenterIntegerBarLabel />} />
                         </Bar>
-                        <Line type="monotone" dataKey="scheduled" name="SCHEDULED total" stroke="#0f172a" strokeWidth={2} />
+                        <Line type="monotone" dataKey="scheduled" name="OS total" stroke="#0f172a" strokeWidth={2} />
                       </ComposedChart>
                     </ResponsiveContainer>
                   </div>
 
-                  <div className="grid grid-cols-2 md:grid-cols-6 gap-3 text-sm">
+                  <div className="grid grid-cols-2 md:grid-cols-5 xl:grid-cols-10 gap-3 text-sm">
                     <div className="rounded-md border p-3">
-                      <div className="text-neutral-500">SCHEDULED</div>
+                      <div className="text-neutral-500">OS total</div>
                       <div className="text-lg font-semibold">{scheduledNegotiationTotals.scheduled}</div>
+                    </div>
+                    <div className="rounded-md border p-3">
+                      <div className="text-neutral-500">NG</div>
+                      <div className="text-lg font-semibold">{scheduledNegotiationTotals.ng}</div>
+                      <div className="text-xs text-neutral-500">{pctOfScheduled(scheduledNegotiationTotals.ng, scheduledNegotiationTotals.scheduled)}%</div>
                     </div>
                     <div className="rounded-md border p-3">
                       <div className="text-neutral-500">PC</div>
@@ -907,14 +948,29 @@ export default function Dashboard() {
                       <div className="text-xs text-neutral-500">{pctOfScheduled(scheduledNegotiationTotals.pa, scheduledNegotiationTotals.scheduled)}%</div>
                     </div>
                     <div className="rounded-md border p-3">
+                      <div className="text-neutral-500">NA</div>
+                      <div className="text-lg font-semibold">{scheduledNegotiationTotals.na}</div>
+                      <div className="text-xs text-neutral-500">{pctOfScheduled(scheduledNegotiationTotals.na, scheduledNegotiationTotals.scheduled)}%</div>
+                    </div>
+                    <div className="rounded-md border p-3">
                       <div className="text-neutral-500">AP</div>
                       <div className="text-lg font-semibold">{scheduledNegotiationTotals.ap}</div>
                       <div className="text-xs text-neutral-500">{pctOfScheduled(scheduledNegotiationTotals.ap, scheduledNegotiationTotals.scheduled)}%</div>
                     </div>
                     <div className="rounded-md border p-3">
+                      <div className="text-neutral-500">PR</div>
+                      <div className="text-lg font-semibold">{scheduledNegotiationTotals.pr}</div>
+                      <div className="text-xs text-neutral-500">{pctOfScheduled(scheduledNegotiationTotals.pr, scheduledNegotiationTotals.scheduled)}%</div>
+                    </div>
+                    <div className="rounded-md border p-3">
                       <div className="text-neutral-500">CF</div>
                       <div className="text-lg font-semibold">{scheduledNegotiationTotals.cf}</div>
                       <div className="text-xs text-neutral-500">{pctOfScheduled(scheduledNegotiationTotals.cf, scheduledNegotiationTotals.scheduled)}%</div>
+                    </div>
+                    <div className="rounded-md border p-3">
+                      <div className="text-neutral-500">CP</div>
+                      <div className="text-lg font-semibold">{scheduledNegotiationTotals.cp}</div>
+                      <div className="text-xs text-neutral-500">{pctOfScheduled(scheduledNegotiationTotals.cp, scheduledNegotiationTotals.scheduled)}%</div>
                     </div>
                     <div className="rounded-md border p-3">
                       <div className="text-neutral-500">Sin definir</div>

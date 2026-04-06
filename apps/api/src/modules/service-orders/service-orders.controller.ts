@@ -12,6 +12,7 @@ import { CreateServiceOrderReportDto } from './dto/create-report.dto';
 import { UpdateServiceOrderWorkLogDto } from './dto/update-worklog.dto';
 import { CreateServiceOrderHourmeterReadingDto } from './dto/meter-reading.dto';
 import { CreateServiceOrderQuoteDto } from './dto/create-quote.dto';
+import { CreateServiceOrderCommercialNoteDto } from './dto/commercial-note.dto';
 import { ListServiceOrdersQuery } from './dto/list-service-orders.query';
 import { ListServiceOrderIssuesQuery } from './dto/list-issues.query';
 import { UpsertServiceOrderIssueDto, CreateCorrectiveFromIssueDto } from './dto/issue.dto';
@@ -74,6 +75,21 @@ export class ServiceOrdersController {
   @Get(':id')
   get(@Param('id') id: string) {
     return this.svc.get(id);
+  }
+
+  @Get(':id/commercial-notes')
+  getCommercialNotes(@Param('id') id: string) {
+    return this.svc.getCommercialNotes(id);
+  }
+
+  @Post(':id/commercial-notes')
+  addCommercialNote(@Param('id') id: string, @Body() dto: CreateServiceOrderCommercialNoteDto) {
+    return this.svc.addCommercialNote(id, dto ?? {});
+  }
+
+  @Delete(':id/commercial-notes/:noteId')
+  deleteCommercialNote(@Param('id') id: string, @Param('noteId') noteId: string) {
+    return this.svc.deleteCommercialNote(id, noteId);
   }
 
   @Get(':id/issue')
