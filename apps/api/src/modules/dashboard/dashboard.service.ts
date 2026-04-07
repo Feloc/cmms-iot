@@ -112,7 +112,10 @@ export class DashboardService {
         FROM "WorkOrder"
         WHERE "tenantId" = ${tenantId}
           AND "kind" = 'SERVICE_ORDER'
-          AND "status" IN ('SCHEDULED', 'COMPLETED')
+          AND (
+            "status" = 'SCHEDULED'
+            OR ("status" = 'COMPLETED' AND "serviceOrderType" = 'PREVENTIVO')
+          )
           AND "dueDate" IS NOT NULL
           ${rangeFilter}
         GROUP BY 1

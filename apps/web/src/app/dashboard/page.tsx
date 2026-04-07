@@ -857,8 +857,8 @@ export default function Dashboard() {
           <Card>
             <CardHeader className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
               <CardTitle className="text-base flex items-center">
-                Negociación de OS programadas y completadas por mes
-                <HelpTip text='Cuenta todas las órdenes de servicio en estado SCHEDULED o COMPLETED con fecha programada y las desglosa por estado comercial, sin depender del rango principal del dashboard.' />
+                Negociación de OS programadas y preventivos completados por mes
+                <HelpTip text='Cuenta todas las órdenes de servicio en estado SCHEDULED y además las COMPLETED solo cuando son de tipo PREVENTIVO, desglosadas por estado comercial, sin depender del rango principal del dashboard.' />
               </CardTitle>
               <Select value={selectedNegotiationMonth} onValueChange={setSelectedNegotiationMonth}>
                 <SelectTrigger className="w-full md:w-[220px]">
@@ -881,9 +881,9 @@ export default function Dashboard() {
                 </div>
               ) : !visibleScheduledNegotiationChart.length ? (
                 isNegotiationMonthsLoading ? (
-                  <div className="text-sm text-neutral-500">Cargando meses con OS programadas y completadas...</div>
+                  <div className="text-sm text-neutral-500">Cargando meses con OS programadas y preventivos completados...</div>
                 ) : (
-                  <div className="text-sm text-neutral-500">Sin meses con OS programadas o completadas</div>
+                  <div className="text-sm text-neutral-500">Sin meses con OS programadas o preventivos completados</div>
                 )
               ) : (
                 <>
