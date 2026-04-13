@@ -396,6 +396,39 @@ export class DashboardService {
 
     const scheduledNegotiationByMonth = await this.scheduledNegotiationMonths({ tenantId, from, to });
 
+    const monthlyServiceOrderTypeRows = await this.prisma.$queryRaw<
+      Array<{ month: string; serviceType: string; count: number }>
+    >(
+      Prisma.sql`
+        SELECT
+          date_trunc('month', "createdAt")::date::text AS "month",
+          COALESCE("serviceOrderType"::text, 'UNSPECIFIED') AS "serviceType",
+          COUNT(*)::int AS "count"
+        FROM "WorkOrder"
+        WHERE "tenantId" = ${tenantId}
+          AND "kind" = 'SERVICE_ORDER'
+        GROUP BY "month", "serviceType"
+        ORDER BY "month" DESC, "count" DESC, "serviceType" ASC;
+      `
+    );
+
+    const monthlyServiceOrderTypeSummary = Array.from(
+      monthlyServiceOrderTypeRows.reduce((map, row) => {
+        const current = map.get(row.month) ?? {
+          month: row.month,
+          total: 0,
+          byServiceType: [] as Array<{ serviceType: string; count: number }>,
+        };
+        current.total += row.count;
+        current.byServiceType.push({
+          serviceType: row.serviceType,
+          count: row.count,
+        });
+        map.set(row.month, current);
+        return map;
+      }, new Map<string, { month: string; total: number; byServiceType: Array<{ serviceType: string; count: number }> }>())
+    ).map(([, value]) => value);
+
     // Workload por técnico (asignaciones activas en backlog)
     const assignments = await this.prisma.wOAssignment.groupBy({
       by: ['userId'],
@@ -1584,6 +1617,7 @@ const workTimeByServiceOrderType = typeEffPauseRows.map(r => {
         trendCreated,
         trendClosed,
         scheduledNegotiationByMonth,
+        monthlyServiceOrderTypeSummary,
         technicianWorkload,
         technicianPerformance,
         technicianWeeklyProductivity,

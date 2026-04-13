@@ -28,6 +28,9 @@ type ServiceOrder = {
     state: string;
     user?: { id: string; name: string } | null;
   }> | null;
+  _count?: {
+    commercialNotes?: number;
+  } | null;
 };
 
 type Paginated<T> = { items: T[]; total: number; page: number; size: number; statusCounts?: Record<string, number> };
@@ -661,15 +664,26 @@ export default function ServiceOrdersPage() {
             {items.map((so) => {
               const row = edits[so.id] || { dueLocal: '', technicianId: '' };
               const commercial = commercialStatusMeta(so.commercialStatus);
+              const commercialNotesCount = Number(so._count?.commercialNotes ?? 0);
               const canEditCommercialStatus = isAdmin && String(so.status || '').toUpperCase() === 'SCHEDULED';
               const isSavingCommercial = savingCommercialId === so.id;
               return (
                 <tr key={so.id} className="hover:bg-gray-50">
                   <td className="p-2 border-b whitespace-nowrap">{fmt(so.createdAt)}</td>
                   <td className="p-2 border-b">
-                    <Link className="font-medium underline" href={`/service-orders/${so.id}`}>
-                      {so.assetCode}
-                    </Link>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <Link className="font-medium underline" href={`/service-orders/${so.id}`}>
+                        {so.assetCode}
+                      </Link>
+                      {commercialNotesCount > 0 ? (
+                        <span
+                          className="inline-flex items-center rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[11px] font-medium text-sky-800"
+                          title={`${commercialNotesCount} registro${commercialNotesCount === 1 ? '' : 's'} de seguimiento comercial`}
+                        >
+                          SC {commercialNotesCount}
+                        </span>
+                      ) : null}
+                    </div>
                     <div className="text-xs text-gray-600">{so.title}</div>
                   </td>
                   <td className="p-2 border-b">

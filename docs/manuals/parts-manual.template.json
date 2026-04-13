@@ -1,0 +1,30 @@
+{
+  "tenantSlug": "acme",
+  "brand": "HELI",
+  "equipmentModel": "MODEL-EXAMPLE",
+  "variant": null,
+  "name": "Manual de partes MODEL-EXAMPLE",
+  "sourcePdfUrl": "/manuals/model-example/manual.pdf",
+  "replaceExisting": true,
+  "pages": [
+    {
+      "pageNumber": 1,
+      "title": "Vista general",
+      "imageUrl": "/manuals/model-example/page-001.png",
+      "hotspots": [
+        {
+          "itemNo": "1",
+          "label": "Assembly example",
+          "oemPartNo": "OEM-0001",
+          "inventoryItemSku": "SKU-0001",
+          "x": 18.5,
+          "y": 24.3,
+          "width": 11.4,
+          "height": 8.2,
+          "qtyHint": 1,
+          "notes": "Notas opcionales para el tecnico"
+        }
+      ]
+    }
+  ]
+}

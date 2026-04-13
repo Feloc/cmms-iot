@@ -115,6 +115,11 @@ type Summary = {
     trendCreated: Array<{ day: string; count: number }>;
     trendClosed: Array<{ day: string; count: number }>;
     scheduledNegotiationByMonth: ScheduledNegotiationMonthRow[];
+    monthlyServiceOrderTypeSummary?: Array<{
+      month: string;
+      total: number;
+      byServiceType: Array<{ serviceType: string; count: number }>;
+    }>;
 
     technicianWorkload: Array<{ userId: string; name: string; openAssigned: number }>;
 
@@ -553,6 +558,38 @@ export default function Dashboard() {
   );
 
   const closedSummary = data?.service.closedOrdersSummary;
+  const monthlyServiceOrderTypeSummary = data?.service.monthlyServiceOrderTypeSummary ?? [];
+
+  const monthlyServiceOrderTypeColumns = useMemo(() => {
+    const keys = new Set<string>();
+    for (const month of monthlyServiceOrderTypeSummary) {
+      for (const row of month.byServiceType ?? []) {
+        keys.add(serviceTypeLabel(row.serviceType));
+      }
+    }
+    return Array.from(keys).sort((a, b) => a.localeCompare(b));
+  }, [monthlyServiceOrderTypeSummary]);
+
+  const monthlyServiceOrderTypeRows = useMemo(
+    () =>
+      monthlyServiceOrderTypeSummary.map((month) => {
+        const counts = (month.byServiceType ?? []).reduce<Record<string, number>>((acc, row) => {
+          acc[serviceTypeLabel(row.serviceType)] = row.count;
+          return acc;
+        }, {});
+        const parsed = new Date(month.month);
+        const label = Number.isNaN(parsed.getTime())
+          ? month.month
+          : new Intl.DateTimeFormat('es-CO', { month: 'long', year: 'numeric' }).format(parsed);
+        return {
+          month: month.month,
+          monthLabel: label.charAt(0).toUpperCase() + label.slice(1),
+          total: month.total,
+          counts,
+        };
+      }),
+    [monthlyServiceOrderTypeSummary]
+  );
 
   const closedByTechnicianChart = useMemo(
     () =>
@@ -1001,6 +1038,57 @@ export default function Dashboard() {
             <StatCard title="Cerradas en rango" value={isLoading ? '—' : data?.service.closedInRange ?? 0} />
             <StatCard title="MTTR (horas)" value={isLoading ? '—' : (data?.service.mttrHours ?? '—')} hint="Promedio cierre (rango)" />
           </div>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Resumen mensual por tipo de OS</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {isLoading ? (
+                <div className="text-sm text-neutral-500">Cargando...</div>
+              ) : monthlyServiceOrderTypeRows.length === 0 ? (
+                <div className="text-sm text-neutral-500">Sin datos</div>
+              ) : (
+                <>
+                  <div className="rounded-md border p-4">
+                    <div className="text-sm font-medium text-neutral-900">Histórico mensual de OS creadas</div>
+                    <div className="text-xs text-neutral-500">
+                      Este bloque no depende del rango principal del dashboard y muestra todos los meses con datos.
+                    </div>
+                  </div>
+
+                  <div className="rounded-md border">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Mes</TableHead>
+                          {monthlyServiceOrderTypeColumns.map((column) => (
+                            <TableHead key={column} className="text-right">{column}</TableHead>
+                          ))}
+                          <TableHead className="text-right">Total</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {monthlyServiceOrderTypeRows.map((row) => (
+                          <TableRow key={row.month}>
+                            <TableCell className="font-medium">{row.monthLabel}</TableCell>
+                            {monthlyServiceOrderTypeColumns.map((column) => (
+                              <TableCell key={`${row.month}:${column}`} className="text-right">
+                                <Badge variant="secondary">{row.counts[column] ?? 0}</Badge>
+                              </TableCell>
+                            ))}
+                            <TableCell className="text-right">
+                              <Badge>{row.total}</Badge>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </>
+              )}
+            </CardContent>
+          </Card>
 
           <Card>
             <CardHeader>

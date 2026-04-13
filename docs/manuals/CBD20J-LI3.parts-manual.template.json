@@ -1,0 +1,36 @@
+{
+  "tenantSlug": "acme",
+  "brand": "HELI",
+  "equipmentModel": "CBD20J-LI3",
+  "variant": null,
+  "name": "Manual de partes CBD20J-LI3",
+  "sourcePdfUrl": "/manuals/cbd20j-li3/CBD20J-LI3.pdf",
+  "replaceExisting": true,
+  "pages": [
+    {
+      "pageNumber": 1,
+      "title": "Portada o indice",
+      "imageUrl": "/manuals/cbd20j-li3/page-001.png",
+      "hotspots": []
+    },
+    {
+      "pageNumber": 2,
+      "title": "Despiece principal",
+      "imageUrl": "/manuals/cbd20j-li3/page-002.png",
+      "hotspots": [
+        {
+          "itemNo": "1",
+          "label": "Pendiente identificar",
+          "oemPartNo": null,
+          "inventoryItemSku": null,
+          "x": 10,
+          "y": 10,
+          "width": 8,
+          "height": 8,
+          "qtyHint": 1,
+          "notes": "Reemplazar con coordenadas reales del manual"
+        }
+      ]
+    }
+  ]
+}

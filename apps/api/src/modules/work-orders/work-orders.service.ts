@@ -10,11 +10,15 @@ import { UpsertResolutionDto } from './dto/resolution.dto';
 import { CreatePartDto, UpdatePartDto } from './dto/part.dto';
 import { CreateMeasurementDto, UpdateMeasurementDto } from './dto/measurement.dto';
 import { CreateNoteDto } from './dto/note.dto';
+import { InventoryLedgerService } from '../inventory/inventory-ledger.service';
 
 
 @Injectable()
 export class WorkOrdersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly inventoryLedger: InventoryLedgerService,
+  ) {}
 
   private getTenantId(): string {
     const t = tenantStorage.getStore();
@@ -364,41 +368,110 @@ async addPart(woId: string, dto: CreatePartDto) {
   const userId = this.getUserId();
   await this.ensureWO(woId, tenantId);
   const totalCost = dto.unitCost != null ? dto.unitCost * dto.qty : null;
-  return this.prisma.workOrderPartUsed.create({
-    data: {
-      tenantId, workOrderId: woId,
-      inventoryItemId: dto.inventoryItemId,
-      freeText: dto.freeText,
-      qty: dto.qty,
-      unitCost: dto.unitCost ?? undefined,
-      totalCost: totalCost ?? undefined,
-      createdByUserId: userId,
-    },
+  return this.prisma.$transaction(async (tx) => {
+    const created = await tx.workOrderPartUsed.create({
+      data: {
+        tenantId, workOrderId: woId,
+        inventoryItemId: dto.inventoryItemId,
+        freeText: dto.freeText,
+        qty: dto.qty,
+        unitCost: dto.unitCost ?? undefined,
+        totalCost: totalCost ?? undefined,
+        createdByUserId: userId,
+      },
+    });
+
+    if (created.inventoryItemId) {
+      await this.inventoryLedger.consumeInventory(tx, {
+        tenantId,
+        inventoryItemId: created.inventoryItemId,
+        qty: created.qty,
+        source: 'WORK_ORDER',
+        referenceType: 'WORK_ORDER_PART_USED',
+        referenceId: created.id,
+        referenceLabel: `WO:${woId}`,
+        note: created.freeText ?? 'Consumo de repuesto desde OT',
+        unitCost: created.unitCost ?? undefined,
+        createdByUserId: userId,
+      });
+    }
+
+    return created;
   });
 }
 async updatePart(woId: string, partId: string, dto: UpdatePartDto) {
   const tenantId = this.getTenantId();
+  const userId = this.getUserId();
   await this.ensureWO(woId, tenantId);
   const part = await this.prisma.workOrderPartUsed.findFirstOrThrow({ where: { id: partId, tenantId, workOrderId: woId } });
+  const nextInventoryItemId = dto.inventoryItemId !== undefined ? dto.inventoryItemId : part.inventoryItemId ?? undefined;
+  const nextFreeText = dto.freeText !== undefined ? dto.freeText : part.freeText ?? undefined;
   const unitCost = dto.unitCost ?? part.unitCost ?? null;
   const qty = dto.qty ?? part.qty;
+  const stockRelevantChange = dto.inventoryItemId !== undefined || dto.qty !== undefined;
   const totalCost = unitCost != null ? unitCost * qty : null;
-  return this.prisma.workOrderPartUsed.update({
-    where: { id: partId },
-    data: {
-      ...(dto.inventoryItemId !== undefined ? { inventoryItemId: dto.inventoryItemId } : {}),
-      ...(dto.freeText !== undefined ? { freeText: dto.freeText } : {}),
-      ...(dto.qty !== undefined ? { qty: dto.qty } : {}),
-      ...(dto.unitCost !== undefined ? { unitCost: dto.unitCost } : {}),
-      ...(totalCost != null ? { totalCost } : { totalCost: null }),
-    },
+  return this.prisma.$transaction(async (tx) => {
+    if (part.inventoryItemId && stockRelevantChange) {
+      await this.inventoryLedger.reverseOutstandingForReference(tx, {
+        tenantId,
+        referenceType: 'WORK_ORDER_PART_USED',
+        referenceId: partId,
+        referenceLabel: `WO:${woId}`,
+        source: 'WORK_ORDER',
+        note: 'Reversion por ajuste de repuesto en OT',
+        createdByUserId: userId,
+      });
+    }
+
+    const updated = await tx.workOrderPartUsed.update({
+      where: { id: partId },
+      data: {
+        ...(dto.inventoryItemId !== undefined ? { inventoryItemId: dto.inventoryItemId } : {}),
+        ...(dto.freeText !== undefined ? { freeText: dto.freeText } : {}),
+        ...(dto.qty !== undefined ? { qty: dto.qty } : {}),
+        ...(dto.unitCost !== undefined ? { unitCost: dto.unitCost } : {}),
+        ...(totalCost != null ? { totalCost } : { totalCost: null }),
+      },
+    });
+
+    if (nextInventoryItemId && stockRelevantChange) {
+      await this.inventoryLedger.consumeInventory(tx, {
+        tenantId,
+        inventoryItemId: nextInventoryItemId,
+        qty,
+        source: 'WORK_ORDER',
+        referenceType: 'WORK_ORDER_PART_USED',
+        referenceId: updated.id,
+        referenceLabel: `WO:${woId}`,
+        note: nextFreeText ?? 'Consumo de repuesto desde OT',
+        unitCost: unitCost ?? undefined,
+        createdByUserId: userId,
+      });
+    }
+
+    return updated;
   });
 }
 async deletePart(woId: string, partId: string) {
   const tenantId = this.getTenantId();
+  const userId = this.getUserId();
   await this.ensureWO(woId, tenantId);
-  await this.prisma.workOrderPartUsed.findFirstOrThrow({ where: { id: partId, tenantId, workOrderId: woId } });
-  await this.prisma.workOrderPartUsed.delete({ where: { id: partId } });
+  const part = await this.prisma.workOrderPartUsed.findFirstOrThrow({ where: { id: partId, tenantId, workOrderId: woId } });
+  await this.prisma.$transaction(async (tx) => {
+    if (part.inventoryItemId) {
+      await this.inventoryLedger.reverseOutstandingForReference(tx, {
+        tenantId,
+        referenceType: 'WORK_ORDER_PART_USED',
+        referenceId: partId,
+        referenceLabel: `WO:${woId}`,
+        source: 'WORK_ORDER',
+        note: 'Reversion por eliminacion de repuesto en OT',
+        createdByUserId: userId,
+      });
+    }
+
+    await tx.workOrderPartUsed.delete({ where: { id: partId } });
+  });
   return { ok: true };
 }
 

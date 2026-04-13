@@ -4,8 +4,10 @@ import { mkdir } from 'fs/promises';
 import { ServiceOrdersController } from './service-orders.controller';
 import { ServiceOrdersService } from './service-orders.service';
 import { PrismaService } from '../../prisma.service';
+import { InventoryModule } from '../inventory/inventory.module';
 
 @Module({
+  imports: [InventoryModule],
   controllers: [ServiceOrdersController],
   providers: [ServiceOrdersService, PrismaService],
 })

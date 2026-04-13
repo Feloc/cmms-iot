@@ -4,8 +4,10 @@ import { WorkOrdersController } from './work-orders.controller';
 import { PrismaService } from '../../prisma.service';
 import { AttachmentsService } from '../attachments/attachments.service';
 import { WorkOrderAttachmentsController } from './work-orders.attachments.controller';
+import { InventoryModule } from '../inventory/inventory.module';
 
 @Module({
+  imports: [InventoryModule],
   controllers: [WorkOrdersController, WorkOrderAttachmentsController],
   providers: [WorkOrdersService, PrismaService, AttachmentsService],
   exports: [WorkOrdersService],

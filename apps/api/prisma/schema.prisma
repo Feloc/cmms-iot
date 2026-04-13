@@ -35,6 +35,47 @@ enum ServiceOrderPartStage {
   REPLACED
 }
 
+enum PartType {
+  PART
+  ASSEMBLY
+  KIT
+  CONSUMABLE
+}
+
+enum PartStatus {
+  ACTIVE
+  OBSOLETE
+  DISCONTINUED
+}
+
+enum PartCriticality {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum InventoryMovementType {
+  ENTRY
+  EXIT
+  ADJUSTMENT
+  RESERVATION
+  RELEASE
+  CONSUMPTION
+  RETURN
+  TRANSFER_IN
+  TRANSFER_OUT
+}
+
+enum InventoryMovementSource {
+  MANUAL
+  IMPORT
+  WORK_ORDER
+  SERVICE_ORDER
+  ADJUSTMENT
+  SYSTEM
+}
+
 model Tenant {
   id         String   @id @default(cuid())
   slug       String   @unique
@@ -58,6 +99,12 @@ model Tenant {
   serviceOrderParts ServiceOrderPart[]
   workLog    WorkLog[]
   inventory  InventoryItem[]
+  inventoryApplicabilities InventoryItemApplicability[]
+  inventoryStocks InventoryStock[]
+  inventoryMovements InventoryMovement[]
+  partsManuals PartsManual[]
+  partsManualPages PartsManualPage[]
+  partsManualHotspots PartsManualHotspot[]
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
@@ -486,19 +533,205 @@ enum WorkLogSource {
 }
 
 model InventoryItem {
-  id        String   @id @default(cuid())
-  tenantId  String
-  tenant    Tenant   @relation(fields: [tenantId], references: [id])
-  sku       String
-  name      String
-  qty       Int      @default(0)
-  unitPrice Float?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id                  String          @id @default(cuid())
+  tenantId            String
+  tenant              Tenant          @relation(fields: [tenantId], references: [id])
+  sku                 String
+  oemPartNo           String?
+  supplierPartNo      String?
+  name                String
+  description         String?
+  partType            PartType        @default(PART)
+  uom                 String          @default("UND")
+  systemGroup         String?
+  sectionCode         String?
+  sectionName         String?
+  itemNo              String?
+  parentOemPartNo     String?
+  preferredSupplier   String?
+  leadTimeDays        Int?
+  criticality         PartCriticality @default(MEDIUM)
+  status              PartStatus      @default(ACTIVE)
+  interchangeableWith String?
+  notes               String?
+  qty                 Int             @default(0)
+  unitPrice           Float?
+  lastCost            Float?
+  avgCost             Float?
+  currency            String?
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
 
   serviceOrderParts ServiceOrderPart[]
+  applicability     InventoryItemApplicability[]
+  stocks            InventoryStock[]
+  movements         InventoryMovement[]
+  manualHotspots    PartsManualHotspot[]
 
   @@unique([tenantId, sku])
+  @@index([tenantId, name])
+  @@index([tenantId, oemPartNo])
+  @@index([tenantId, supplierPartNo])
+  @@index([tenantId, status])
+  @@index([tenantId, systemGroup, sectionCode])
+}
+
+model InventoryItemApplicability {
+  id              String        @id @default(cuid())
+  tenantId        String
+  tenant          Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  inventoryItemId String
+  inventoryItem   InventoryItem @relation(fields: [inventoryItemId], references: [id], onDelete: Cascade)
+
+  equipmentModel  String?
+  variant         String?
+  serialFrom      String?
+  serialTo        String?
+  appliedDateFrom DateTime?
+  appliedDateTo   DateTime?
+  itemNo          String?
+  qtyPerEquipment Float?
+  isOptional      Boolean       @default(false)
+  manualRemark    String?
+  manualPageRef   String?
+
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@index([tenantId, inventoryItemId])
+  @@index([tenantId, equipmentModel, variant])
+  @@index([tenantId, itemNo])
+}
+
+model InventoryStock {
+  id              String        @id @default(cuid())
+  tenantId        String
+  tenant          Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  inventoryItemId String
+  inventoryItem   InventoryItem @relation(fields: [inventoryItemId], references: [id], onDelete: Cascade)
+
+  warehouse       String?
+  binLocation     String?
+  stockOnHand     Float         @default(0)
+  stockReserved   Float?
+  stockMin        Float?
+  stockMax        Float?
+  reorderPoint    Float?
+  reorderQty      Float?
+
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  movements       InventoryMovement[]
+
+  @@index([tenantId, inventoryItemId])
+  @@index([tenantId, warehouse, binLocation])
+}
+
+model InventoryMovement {
+  id              String                  @id @default(cuid())
+  tenantId        String
+  tenant          Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  inventoryItemId String
+  inventoryItem   InventoryItem           @relation(fields: [inventoryItemId], references: [id], onDelete: Cascade)
+
+  inventoryStockId String?
+  inventoryStock   InventoryStock?        @relation(fields: [inventoryStockId], references: [id], onDelete: SetNull)
+
+  movementType    InventoryMovementType
+  source          InventoryMovementSource
+  qty             Float
+  stockDelta      Float
+  balanceAfter    Float?
+  warehouse       String?
+  binLocation     String?
+  unitCost        Float?
+
+  referenceType   String?
+  referenceId     String?
+  referenceLabel  String?
+  note            String?
+  createdByUserId String?
+  createdAt       DateTime                @default(now())
+
+  @@index([tenantId, inventoryItemId, createdAt(sort: Desc)])
+  @@index([tenantId, movementType, createdAt(sort: Desc)])
+  @@index([tenantId, source, createdAt(sort: Desc)])
+  @@index([tenantId, referenceType, referenceId])
+  @@index([tenantId, inventoryStockId, createdAt(sort: Desc)])
+}
+
+model PartsManual {
+  id             String   @id @default(cuid())
+  tenantId       String
+  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  brand          String?
+  equipmentModel String
+  variant        String?
+  name           String
+  sourcePdfUrl   String?
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  pages          PartsManualPage[]
+
+  @@index([tenantId, brand, equipmentModel])
+  @@index([tenantId, equipmentModel, variant])
+}
+
+model PartsManualPage {
+  id          String      @id @default(cuid())
+  tenantId    String
+  tenant      Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  manualId    String
+  manual      PartsManual @relation(fields: [manualId], references: [id], onDelete: Cascade)
+
+  pageNumber  Int
+  title       String?
+  imageUrl    String
+
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  hotspots    PartsManualHotspot[]
+
+  @@index([tenantId, manualId, pageNumber])
+}
+
+model PartsManualHotspot {
+  id              String        @id @default(cuid())
+  tenantId        String
+  tenant          Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  manualPageId    String
+  manualPage      PartsManualPage @relation(fields: [manualPageId], references: [id], onDelete: Cascade)
+
+  inventoryItemId String?
+  inventoryItem   InventoryItem? @relation(fields: [inventoryItemId], references: [id], onDelete: SetNull)
+
+  itemNo          String
+  label           String?
+  oemPartNo       String?
+  x               Float
+  y               Float
+  width           Float
+  height          Float
+  qtyHint         Float?
+  notes           String?
+
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@index([tenantId, manualPageId])
+  @@index([tenantId, itemNo])
+  @@index([tenantId, oemPartNo])
+  @@index([tenantId, inventoryItemId])
 }
 
 

@@ -5,7 +5,8 @@
   "scripts": {
     "start": "node dist/main.js",
     "start:dev": "NODE_ENV=development ts-node-dev --respawn --transpile-only src/main.ts",
-    "build": "tsc -p tsconfig.build.json"
+    "build": "tsc -p tsconfig.build.json",
+    "parts-manual:import": "ts-node prisma/import-parts-manual.ts"
   },
   "dependencies": {
     "@nestjs/common": "^10.0.0",

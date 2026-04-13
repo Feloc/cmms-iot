@@ -11,9 +11,23 @@ import { ServiceOrderImagesGallery } from '@/components/ServiceOrderImagesGaller
 import { ServiceOrderFilesSection } from '@/components/ServiceOrderFilesSection';
 import { ServiceOrderChecklistSection } from '@/components/ServiceOrderChecklistSection';
 import { AssetSearchSelect } from '@/components/AssetSearchSelect';
+import {
+  PartsManualSelector,
+  type PartsManual,
+  type PartsManualHotspotUsage,
+} from '@/components/PartsManualSelector';
 
 type User = { id: string; name: string; email: string; role: string };
-type InventoryItem = { id: string; sku: string; name: string; model?: string | null };
+type InventoryItem = {
+  id: string;
+  sku: string;
+  name: string;
+  oemPartNo?: string | null;
+  itemNo?: string | null;
+  systemGroup?: string | null;
+  description?: string | null;
+  qty?: number | null;
+};
 type Part = {
   id: string;
   qty: number;
@@ -157,7 +171,14 @@ type ServiceOrder = {
   dueDate?: string | null;
   hasIssue: boolean;
   assetCode: string;
-  asset?: { customer?: string | null; name?: string | null; brand?: string | null; model?: string | null; serialNumber?: string | null } | null;
+  asset?: {
+    customer?: string | null;
+    name?: string | null;
+    brand?: string | null;
+    model?: string | null;
+    variant?: string | null;
+    serialNumber?: string | null;
+  } | null;
   assignments?: Array<{ id: string; userId: string; user?: User | null; role: string; state: string }>;
   pmPlan?: { id: string; name: string; checklist?: any };
   formData?: any;
@@ -355,6 +376,7 @@ export default function ServiceOrderDetailPage() {
   const role = (session as any)?.user?.role as string | undefined;
   const isAdmin = role === 'ADMIN';
   const isTech = role === 'TECH';
+  const canViewCommercialTracking = !isTech;
   const currentUserId = (session as any)?.user?.id as string | undefined;
 
   const [busy, setBusy] = useState(false);
@@ -416,7 +438,7 @@ export default function ServiceOrderDetailPage() {
     auth.tenantSlug,
   );
   const { data: commercialNotesData, mutate: mutateCommercialNotes } = useApiSWR<CommercialNote[]>(
-    id ? `/service-orders/${id}/commercial-notes` : null,
+    id && canViewCommercialTracking ? `/service-orders/${id}/commercial-notes` : null,
     auth.token,
     auth.tenantSlug,
   );
@@ -703,6 +725,71 @@ const invPath = useMemo(() => {
     return `/inventory/search?${qs.toString()}`;
   }, [partQ, isAdmin, isTech]);
   const { data: invMatches } = useApiSWR<InventoryItem[]>(invPath, auth.token, auth.tenantSlug);
+  const diagnosticAssetBrand = String(data?.asset?.brand || '').trim();
+  const diagnosticAssetModel = String(data?.asset?.model || '').trim();
+  const diagnosticAssetVariant = String(data?.asset?.variant || '').trim();
+  const partsManualPath = useMemo(() => {
+    if (String(data?.serviceOrderType || '').toUpperCase() !== 'DIAGNOSTICO') return null;
+    const model = diagnosticAssetModel;
+    if (!model) return null;
+    const qs = new URLSearchParams({ model });
+    if (diagnosticAssetBrand) qs.set('brand', diagnosticAssetBrand);
+    if (diagnosticAssetVariant) qs.set('variant', diagnosticAssetVariant);
+    return `/inventory/manuals/by-model?${qs.toString()}`;
+  }, [data?.serviceOrderType, diagnosticAssetBrand, diagnosticAssetModel, diagnosticAssetVariant]);
+  const { data: partsManual, isLoading: partsManualLoading } = useApiSWR<PartsManual | null>(
+    partsManualPath,
+    auth.token,
+    auth.tenantSlug,
+  );
+  const requiredParts = (data?.serviceOrderParts ?? []).filter((p) => (p as any).stage !== 'REPLACED');
+  const replacedParts = (data?.serviceOrderParts ?? []).filter((p) => (p as any).stage === 'REPLACED');
+  const manualHotspotUsageById = useMemo<Record<string, PartsManualHotspotUsage>>(() => {
+    if (!partsManual) return {};
+
+    const normalizeText = (value: unknown) => String(value ?? '').trim().toLowerCase();
+    const usageById: Record<string, PartsManualHotspotUsage> = {};
+
+    for (const page of partsManual.pages ?? []) {
+      for (const hotspot of page.hotspots ?? []) {
+        let requiredQty = 0;
+        let replacedQty = 0;
+
+        for (const part of requiredParts) {
+          const inventoryMatch =
+            !!part.inventoryItem?.id && (hotspot.matches ?? []).some((match) => String(match.id) === String(part.inventoryItem?.id));
+          const freeTextMatch =
+            !part.inventoryItem?.id &&
+            !!part.freeText &&
+            normalizeText(part.freeText) === normalizeText(hotspot.freeText);
+          if (inventoryMatch || freeTextMatch) {
+            requiredQty += Number(part.qty ?? 0) || 0;
+          }
+        }
+
+        for (const part of replacedParts) {
+          const inventoryMatch =
+            !!part.inventoryItem?.id && (hotspot.matches ?? []).some((match) => String(match.id) === String(part.inventoryItem?.id));
+          const freeTextMatch =
+            !part.inventoryItem?.id &&
+            !!part.freeText &&
+            normalizeText(part.freeText) === normalizeText(hotspot.freeText);
+          if (inventoryMatch || freeTextMatch) {
+            replacedQty += Number(part.qty ?? 0) || 0;
+          }
+        }
+
+        if (requiredQty > 0 || replacedQty > 0) {
+          usageById[hotspot.id] = {
+            requiredQty,
+            replacedQty,
+          };
+        }
+      }
+    }
+
+    return usageById;
+  }, [partsManual, requiredParts, replacedParts]);
 
   if (!auth.token || !auth.tenantSlug) return <div className="p-6">Inicia sesión.</div>;
   if (isLoading) return <div className="p-6">Cargando...</div>;
@@ -714,6 +801,9 @@ const invPath = useMemo(() => {
 const myUserId = (session as any)?.user?.id as string | undefined;
 const isAssignedTech = !!myUserId && (data.assignments ?? []).some((a) => a.role === 'TECHNICIAN' && a.state === 'ACTIVE' && a.userId === myUserId);
 const canChangeStatus = isAdmin || (role === 'TECH' && isAssignedTech);
+  const isDiagnostic = String(data.serviceOrderType || '').toUpperCase() === 'DIAGNOSTICO';
+  const partsManualHotspotCount = (partsManual?.pages ?? []).reduce((sum, page) => sum + page.hotspots.length, 0);
+  const manualLookupLabel = [diagnosticAssetBrand, diagnosticAssetModel, diagnosticAssetVariant].filter(Boolean).join(' · ');
   const commercialMeta = commercialStatusMeta(data.commercialStatus);
   const canEditCommercialStatus = isAdmin && !['OPEN', 'CANCELED'].includes(String(data.status || '').toUpperCase());
   const commercialNotes = commercialNotesData ?? [];
@@ -982,14 +1072,24 @@ async function setTimestamp(key: TsKey, localValue: string) {
 }
 
 
-  async function addPart(item?: InventoryItem) {
+  async function submitPart(options: {
+    inventoryItem?: Pick<InventoryItem, 'id'> | null;
+    freeText?: string;
+    qty?: number;
+    resetSearch?: boolean;
+  }) {
     if (techBlocked) {
       setUiInfo('Tienes un WorkLog abierto en otra OS. Debes cerrarlo antes de modificar esta OS.');
       return;
     }
-    const qty = Number(partQty ?? 1);
+    const qty = Number(options.qty ?? 1);
     if (!isFinite(qty) || qty <= 0) {
       setUiErr('La cantidad debe ser mayor a 0');
+      return;
+    }
+    const freeText = String(options.freeText || '').trim();
+    if (!options.inventoryItem && !freeText) {
+      setUiErr('Selecciona un repuesto o escribe un texto libre');
       return;
     }
     try {
@@ -997,10 +1097,12 @@ async function setTimestamp(key: TsKey, localValue: string) {
     method: 'POST',
     token: auth.token!,
     tenantSlug: auth.tenantSlug!,
-    body: item ? { inventoryItemId: item.id, qty } : { freeText: partQ.trim(), qty },
+    body: options.inventoryItem ? { inventoryItemId: options.inventoryItem.id, qty } : { freeText, qty },
   });
-  setPartQ('');
-  setPartQty(1);
+  if (options.resetSearch) {
+    setPartQ('');
+    setPartQty(1);
+  }
   mutate();
 } catch (e: any) {
   const parsed = parseApiError(e);
@@ -1008,6 +1110,15 @@ async function setTimestamp(key: TsKey, localValue: string) {
   if (parsed.status === 403 || parsed.status === 409) setUiInfo(parsed.message);
   else setUiErr(parsed.message || 'Error agregando repuesto');
 }
+  }
+
+  async function addPart(item?: InventoryItem) {
+    return submitPart({
+      inventoryItem: item ?? null,
+      freeText: item ? undefined : partQ.trim(),
+      qty: Number(partQty ?? 1),
+      resetSearch: true,
+    });
   }
 
   async function markPartReplaced(part: Part) {
@@ -1229,8 +1340,6 @@ async function setTimestamp(key: TsKey, localValue: string) {
   const visitMode = getVisitModeFromFormData(fd);
   const isFollowUpVisit = visitMode === 'FOLLOW_UP';
   const showChecklist = data.serviceOrderType === 'ALISTAMIENTO' || data.serviceOrderType === 'PREVENTIVO';
-  const requiredParts = (data.serviceOrderParts ?? []).filter((p) => (p as any).stage !== 'REPLACED');
-  const replacedParts = (data.serviceOrderParts ?? []).filter((p) => (p as any).stage === 'REPLACED');
   const hourmeterLatest = hourmeterData?.latest ?? null;
   const hourmeterByOrder = hourmeterData?.byOrder ?? [];
   const hourmeterRecent = hourmeterData?.recent ?? [];
@@ -1276,7 +1385,7 @@ async function setTimestamp(key: TsKey, localValue: string) {
               </button>
             ) : null}
             <span className={`px-2 py-1 text-xs border rounded ${statusPillClass(data.status)}`}>{data.status}</span>
-            {commercialMeta ? (
+            {canViewCommercialTracking && commercialMeta ? (
               <span className={`px-2 py-1 text-xs border rounded ${commercialMeta.className}`} title={commercialMeta.label}>
                 {commercialMeta.code}
               </span>
@@ -1378,7 +1487,8 @@ async function setTimestamp(key: TsKey, localValue: string) {
       <option value="">(seleccionar)</option>
       {(pmPlans ?? []).map((p) => (
         <option key={p.id} value={p.id}>
-          {p.intervalHours ? `PM ${p.intervalHours}h` : p.name}
+          {p.name}
+          {p.intervalHours ? ` (${p.intervalHours}h)` : ''}
         </option>
       ))}
     </select>
@@ -1470,7 +1580,7 @@ async function setTimestamp(key: TsKey, localValue: string) {
       {/* Programación */}
       <section className="border rounded p-4 space-y-3">
         <h2 className="font-semibold">Programación</h2>
-        <div className="grid grid-cols-1 md:grid-cols-5 gap-2">
+        <div className={`grid grid-cols-1 ${canViewCommercialTracking ? 'md:grid-cols-5' : 'md:grid-cols-4'} gap-2`}>
           <div>
             <label className="text-sm font-medium">Tipo</label>
             <div className="text-sm">{data.serviceOrderType ?? '-'}</div>
@@ -1492,42 +1602,44 @@ async function setTimestamp(key: TsKey, localValue: string) {
             </select>
             <p className="text-xs text-gray-500">El calendario colorea eventos por estado.</p>
           </div>
-          <div>
-            <label className="text-sm font-medium">Estado negociación</label>
-            {isAdmin ? (
-              <>
-                <select
-                  className="border rounded px-3 py-2 w-full"
-                  value={data.commercialStatus ?? ''}
-                  disabled={busy || !canEditCommercialStatus}
-                  onChange={(e) => patch(`/service-orders/${id}`, { commercialStatus: e.target.value || null })}
-                >
-                  <option value="">(sin definir)</option>
-                  <option value="NO_MANAGEMENT">NG · No gestión</option>
-                  <option value="PENDING_QUOTE">PC · Pendiente cotizar</option>
-                  <option value="PENDING_APPROVAL">PA · Pendiente aprobación</option>
-                  <option value="NOT_APPROVED">NA · No aprobado</option>
-                  <option value="APPROVED">AP · Aprobado</option>
-                  <option value="PROGRAMMED">PR · Programado</option>
-                  <option value="CONFIRMED">CF · Confirmado</option>
-                  <option value="COMPLETED">CP · Completado</option>
-                </select>
-                <p className="text-xs text-gray-500">
-                  {!canEditCommercialStatus ? 'Disponible cuando la OS está programada o en ejecución.' : 'Seguimiento comercial con el cliente.'}
-                </p>
-              </>
-            ) : (
-              <div className="pt-2">
-                {commercialMeta ? (
-                  <span className={`px-2 py-1 text-xs border rounded ${commercialMeta.className}`} title={commercialMeta.label}>
-                    {commercialMeta.code} · {commercialMeta.label}
-                  </span>
-                ) : (
-                  <span className="text-sm text-gray-500">—</span>
-                )}
-              </div>
-            )}
-          </div>
+          {canViewCommercialTracking ? (
+            <div>
+              <label className="text-sm font-medium">Estado negociación</label>
+              {isAdmin ? (
+                <>
+                  <select
+                    className="border rounded px-3 py-2 w-full"
+                    value={data.commercialStatus ?? ''}
+                    disabled={busy || !canEditCommercialStatus}
+                    onChange={(e) => patch(`/service-orders/${id}`, { commercialStatus: e.target.value || null })}
+                  >
+                    <option value="">(sin definir)</option>
+                    <option value="NO_MANAGEMENT">NG · No gestión</option>
+                    <option value="PENDING_QUOTE">PC · Pendiente cotizar</option>
+                    <option value="PENDING_APPROVAL">PA · Pendiente aprobación</option>
+                    <option value="NOT_APPROVED">NA · No aprobado</option>
+                    <option value="APPROVED">AP · Aprobado</option>
+                    <option value="PROGRAMMED">PR · Programado</option>
+                    <option value="CONFIRMED">CF · Confirmado</option>
+                    <option value="COMPLETED">CP · Completado</option>
+                  </select>
+                  <p className="text-xs text-gray-500">
+                    {!canEditCommercialStatus ? 'Disponible cuando la OS está programada o en ejecución.' : 'Seguimiento comercial con el cliente.'}
+                  </p>
+                </>
+              ) : (
+                <div className="pt-2">
+                  {commercialMeta ? (
+                    <span className={`px-2 py-1 text-xs border rounded ${commercialMeta.className}`} title={commercialMeta.label}>
+                      {commercialMeta.code} · {commercialMeta.label}
+                    </span>
+                  ) : (
+                    <span className="text-sm text-gray-500">—</span>
+                  )}
+                </div>
+              )}
+            </div>
+          ) : null}
 
           <div>
             <label className="text-sm font-medium">Fecha/hora ejecución</label>
@@ -1557,101 +1669,103 @@ async function setTimestamp(key: TsKey, localValue: string) {
         </div>
       </section>
 
-      <section className="border rounded p-4 space-y-3">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <h2 className="font-semibold">Seguimiento comercial</h2>
-            <p className="text-xs text-gray-500">
-              Registra fecha y comentario del proceso comercial. Cada entrada conserva el estado de negociación vigente al momento del registro.
-            </p>
+      {canViewCommercialTracking ? (
+        <section className="border rounded p-4 space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h2 className="font-semibold">Seguimiento comercial</h2>
+              <p className="text-xs text-gray-500">
+                Registra fecha y comentario del proceso comercial. Cada entrada conserva el estado de negociación vigente al momento del registro.
+              </p>
+            </div>
+            <div className="text-sm">
+              {commercialMeta ? (
+                <span className={`px-2 py-1 text-xs border rounded ${commercialMeta.className}`} title={commercialMeta.label}>
+                  Estado actual: {commercialMeta.code} · {commercialMeta.label}
+                </span>
+              ) : (
+                <span className="text-gray-500">Estado actual: Sin definir</span>
+              )}
+            </div>
           </div>
-          <div className="text-sm">
-            {commercialMeta ? (
-              <span className={`px-2 py-1 text-xs border rounded ${commercialMeta.className}`} title={commercialMeta.label}>
-                Estado actual: {commercialMeta.code} · {commercialMeta.label}
-              </span>
-            ) : (
-              <span className="text-gray-500">Estado actual: Sin definir</span>
-            )}
-          </div>
-        </div>
 
-        {isAdmin ? (
-          <div className="grid grid-cols-1 md:grid-cols-[220px,1fr,auto] gap-2 items-start">
-            <div className="space-y-1">
-              <label className="text-sm font-medium">Fecha seguimiento</label>
-              <input
-                type="datetime-local"
-                className="border rounded px-3 py-2 w-full"
-                value={commercialNoteAt}
-                disabled={commercialNoteBusy}
-                onChange={(e) => setCommercialNoteAt(e.target.value)}
-              />
-            </div>
-            <div className="space-y-1">
-              <label className="text-sm font-medium">Comentario</label>
-              <textarea
-                className="border rounded px-3 py-2 w-full min-h-[88px]"
-                placeholder="Ej. Se envió cotización, cliente pidió ajuste, quedó pendiente aprobación..."
-                value={commercialNoteComment}
-                disabled={commercialNoteBusy}
-                onChange={(e) => setCommercialNoteComment(e.target.value)}
-              />
-            </div>
-            <div className="pt-6">
-              <button
-                type="button"
-                className="px-3 py-2 rounded bg-black text-white text-sm disabled:opacity-50"
-                disabled={commercialNoteBusy}
-                onClick={addCommercialNote}
-              >
-                Agregar
-              </button>
-            </div>
-          </div>
-        ) : null}
-
-        <div className="space-y-2">
-          {commercialNotes.map((note) => {
-            const noteMeta = commercialStatusMeta(note.commercialStatus);
-            return (
-              <div key={note.id} className="border rounded p-3 space-y-2">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="space-y-1">
-                    <div className="flex flex-wrap items-center gap-2 text-sm">
-                      <span className="font-medium">{fmtDateTime(note.eventAt)}</span>
-                      {noteMeta ? (
-                        <span className={`px-2 py-0.5 text-xs border rounded ${noteMeta.className}`} title={noteMeta.label}>
-                          {noteMeta.code} · {noteMeta.label}
-                        </span>
-                      ) : (
-                        <span className="text-xs text-gray-500">Sin estado definido</span>
-                      )}
-                    </div>
-                    <div className="text-xs text-gray-500">
-                      Registrado por {note.user?.name || note.addedByUserId || 'usuario'}{note.createdAt ? ` · ${fmtDateTime(note.createdAt)}` : ''}
-                    </div>
-                  </div>
-                  {isAdmin ? (
-                    <button
-                      type="button"
-                      className="px-2 py-1 border rounded text-sm disabled:opacity-50"
-                      disabled={commercialNoteBusy}
-                      onClick={() => removeCommercialNote(note.id)}
-                    >
-                      Eliminar
-                    </button>
-                  ) : null}
-                </div>
-                <div className="text-sm whitespace-pre-wrap text-gray-700">{note.comment}</div>
+          {isAdmin ? (
+            <div className="grid grid-cols-1 md:grid-cols-[220px,1fr,auto] gap-2 items-start">
+              <div className="space-y-1">
+                <label className="text-sm font-medium">Fecha seguimiento</label>
+                <input
+                  type="datetime-local"
+                  className="border rounded px-3 py-2 w-full"
+                  value={commercialNoteAt}
+                  disabled={commercialNoteBusy}
+                  onChange={(e) => setCommercialNoteAt(e.target.value)}
+                />
               </div>
-            );
-          })}
-          {commercialNotes.length === 0 ? (
-            <div className="text-sm text-gray-500">Aún no hay seguimientos comerciales registrados.</div>
+              <div className="space-y-1">
+                <label className="text-sm font-medium">Comentario</label>
+                <textarea
+                  className="border rounded px-3 py-2 w-full min-h-[88px]"
+                  placeholder="Ej. Se envió cotización, cliente pidió ajuste, quedó pendiente aprobación..."
+                  value={commercialNoteComment}
+                  disabled={commercialNoteBusy}
+                  onChange={(e) => setCommercialNoteComment(e.target.value)}
+                />
+              </div>
+              <div className="pt-6">
+                <button
+                  type="button"
+                  className="px-3 py-2 rounded bg-black text-white text-sm disabled:opacity-50"
+                  disabled={commercialNoteBusy}
+                  onClick={addCommercialNote}
+                >
+                  Agregar
+                </button>
+              </div>
+            </div>
           ) : null}
-        </div>
-      </section>
+
+          <div className="space-y-2">
+            {commercialNotes.map((note) => {
+              const noteMeta = commercialStatusMeta(note.commercialStatus);
+              return (
+                <div key={note.id} className="border rounded p-3 space-y-2">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="space-y-1">
+                      <div className="flex flex-wrap items-center gap-2 text-sm">
+                        <span className="font-medium">{fmtDateTime(note.eventAt)}</span>
+                        {noteMeta ? (
+                          <span className={`px-2 py-0.5 text-xs border rounded ${noteMeta.className}`} title={noteMeta.label}>
+                            {noteMeta.code} · {noteMeta.label}
+                          </span>
+                        ) : (
+                          <span className="text-xs text-gray-500">Sin estado definido</span>
+                        )}
+                      </div>
+                      <div className="text-xs text-gray-500">
+                        Registrado por {note.user?.name || note.addedByUserId || 'usuario'}{note.createdAt ? ` · ${fmtDateTime(note.createdAt)}` : ''}
+                      </div>
+                    </div>
+                    {isAdmin ? (
+                      <button
+                        type="button"
+                        className="px-2 py-1 border rounded text-sm disabled:opacity-50"
+                        disabled={commercialNoteBusy}
+                        onClick={() => removeCommercialNote(note.id)}
+                      >
+                        Eliminar
+                      </button>
+                    ) : null}
+                  </div>
+                  <div className="text-sm whitespace-pre-wrap text-gray-700">{note.comment}</div>
+                </div>
+              );
+            })}
+            {commercialNotes.length === 0 ? (
+              <div className="text-sm text-gray-500">Aún no hay seguimientos comerciales registrados.</div>
+            ) : null}
+          </div>
+        </section>
+      ) : null}
 
       {/* Timestamps */}
       <section className="border rounded p-4 space-y-3">
@@ -2258,6 +2372,44 @@ async function setTimestamp(key: TsKey, localValue: string) {
               </div>
             ) : null}
 
+            {isDiagnostic ? (
+              data.asset?.model ? (
+                <div className="space-y-3">
+                  <div className="rounded border bg-slate-50 px-4 py-3">
+                    <div className="text-sm font-medium">Resolución del manual de partes</div>
+                    <div className="text-xs text-gray-600 mt-1">
+                      Búsqueda actual: {manualLookupLabel || diagnosticAssetModel}
+                    </div>
+                    {partsManualLoading ? (
+                      <div className="text-sm text-gray-600 mt-2">Buscando manual configurado para este activo...</div>
+                    ) : partsManual ? (
+                      <div className="text-sm text-emerald-700 mt-2">
+                        Manual encontrado: {partsManual.name} · {partsManual.pages.length} pág. · {partsManualHotspotCount} hotspot(s)
+                      </div>
+                    ) : (
+                      <div className="text-sm text-amber-700 mt-2">
+                        No hay un manual configurado para {manualLookupLabel || diagnosticAssetModel}.
+                      </div>
+                    )}
+                  </div>
+
+                  <PartsManualSelector
+                    manual={partsManual}
+                    loading={!!partsManualPath && partsManualLoading}
+                    modelLabel={data.asset?.model}
+                    disabled={busy || techBlocked || (!isAdmin && !isTech)}
+                    hotspotUsageById={manualHotspotUsageById}
+                    onAddInventoryItem={(item, qty) => submitPart({ inventoryItem: item, qty })}
+                    onAddFreeText={(freeText, qty) => submitPart({ freeText, qty })}
+                  />
+                </div>
+              ) : (
+                <div className="rounded border border-dashed px-4 py-4 text-sm text-gray-600 bg-white">
+                  Esta OS es de diagnóstico, pero el activo no tiene modelo configurado. Agrega el modelo al activo para poder cargar su manual de partes.
+                </div>
+              )
+            ) : null}
+
             <div className="space-y-1">
               <label className="text-sm font-medium">Buscar repuesto (sku / nombre / modelo)</label>
 	              <div className="flex gap-2 items-center">
@@ -2287,7 +2439,9 @@ async function setTimestamp(key: TsKey, localValue: string) {
                       onClick={() => addPart(it)}
                     >
                       <div className="font-medium">{it.sku} — {it.name}</div>
-                      <div className="text-xs text-gray-600">{it.model ?? ''}</div>
+                      <div className="text-xs text-gray-600">
+                        {[it.oemPartNo, it.systemGroup].filter(Boolean).join(' · ') || it.description || ''}
+                      </div>
                     </button>
                   ))}
                 </div>

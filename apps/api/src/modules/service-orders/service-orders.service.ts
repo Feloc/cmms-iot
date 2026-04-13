@@ -27,12 +27,16 @@ import * as os from 'os';
 import { spawn } from 'child_process';
 import { pathToFileURL } from 'url';
 import * as XLSX from 'xlsx';
+import { InventoryLedgerService } from '../inventory/inventory-ledger.service';
 
 type Unit = 'DAY' | 'MONTH' | 'YEAR';
 
 @Injectable()
 export class ServiceOrdersService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private inventoryLedger: InventoryLedgerService,
+  ) {}
 
   private getTenantId(): string {
     const t = tenantStorage.getStore();
@@ -1554,6 +1558,7 @@ private async assertTechCanMutateServiceOrder(
           assignments: { where: { state: 'ACTIVE' }, include: { user: true } },
           pmPlan: true,
           serviceOrderIssue: true,
+          _count: { select: { commercialNotes: true } },
         },
         skip,
         take: size,
@@ -2866,6 +2871,20 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
       });
 
       const itemLabel = created.inventoryItemId ? `inventoryItem:${created.inventoryItemId}` : `freeText:${created.freeText ?? ''}`;
+      if (created.inventoryItemId && String((created as any).stage || 'REQUIRED') === 'REPLACED') {
+        await this.inventoryLedger.consumeInventory(tx, {
+          tenantId,
+          inventoryItemId: created.inventoryItemId,
+          qty: created.qty,
+          source: 'SERVICE_ORDER',
+          referenceType: 'SERVICE_ORDER_PART',
+          referenceId: created.id,
+          referenceLabel: `SO:${id}`,
+          note: created.notes ?? 'Repuesto cambiado en OS',
+          createdByUserId: actorUserId,
+        });
+      }
+
       await this.appendAuditMany(tx, tenantId, id, [
         this.buildAuditEntry(actorUserId, 'parts', 'add', null, { id: created.id, qty: created.qty, stage: (created as any).stage, item: itemLabel }),
       ]);
@@ -2935,6 +2954,20 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
           include: { inventoryItem: true },
         });
 
+        if (updated.inventoryItemId) {
+          await this.inventoryLedger.consumeInventory(tx, {
+            tenantId,
+            inventoryItemId: updated.inventoryItemId,
+            qty: qtyReplaced,
+            source: 'SERVICE_ORDER',
+            referenceType: 'SERVICE_ORDER_PART',
+            referenceId: updated.id,
+            referenceLabel: `SO:${id}`,
+            note: updated.notes ?? 'Repuesto cambiado en OS',
+            createdByUserId: actorUserId,
+          });
+        }
+
         await this.appendAuditMany(tx, tenantId, id, [
           this.buildAuditEntry(actorUserId, 'parts', 'markReplaced', { id: partId, stage: 'REQUIRED', qty: curQty }, { id: partId, stage: 'REPLACED', qty: qtyReplaced }),
         ]);
@@ -2960,6 +2993,20 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
         include: { inventoryItem: true },
       });
 
+      if (created.inventoryItemId) {
+        await this.inventoryLedger.consumeInventory(tx, {
+          tenantId,
+          inventoryItemId: created.inventoryItemId,
+          qty: qtyReplaced,
+          source: 'SERVICE_ORDER',
+          referenceType: 'SERVICE_ORDER_PART',
+          referenceId: created.id,
+          referenceLabel: `SO:${id}`,
+          note: created.notes ?? 'Repuesto cambiado en OS',
+          createdByUserId: actorUserId,
+        });
+      }
+
       await this.appendAuditMany(tx, tenantId, id, [
         this.buildAuditEntry(actorUserId, 'parts', 'markReplaced:split', { id: partId, stage: 'REQUIRED', qty: curQty }, { requiredRemaining: remaining, replacedCreatedId: created.id, replacedQty: qtyReplaced }),
       ]);
@@ -2976,10 +3023,20 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
       const part = await tx.serviceOrderPart.findFirst({ where: { id: partId, tenantId, workOrderId: id } });
       if (!part) throw new NotFoundException('Part not found');
 
-      await tx.serviceOrderPart.delete
-
       const role = await this.getCurrentUserRole(tx, tenantId, actorUserId);
       await this.assertTechCanMutateServiceOrder(tx, tenantId, actorUserId, id, role);
+
+      if (part.inventoryItemId && String((part as any).stage || 'REQUIRED') === 'REPLACED') {
+        await this.inventoryLedger.reverseOutstandingForReference(tx, {
+          tenantId,
+          referenceType: 'SERVICE_ORDER_PART',
+          referenceId: partId,
+          referenceLabel: `SO:${id}`,
+          source: 'SERVICE_ORDER',
+          note: 'Reversion por eliminacion de repuesto en OS',
+          createdByUserId: actorUserId,
+        });
+      }
 
       await tx.serviceOrderPart.delete({ where: { id: partId } });
       await this.appendAuditMany(tx, tenantId, id, [
@@ -3327,7 +3384,10 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
       include: {
         serviceOrderParts: {
           orderBy: [{ stage: 'asc' }, { createdAt: 'asc' }],
-          include: { inventoryItem: true, replacedByUser: { select: { id: true, name: true, email: true, role: true } } },
+          include: {
+            inventoryItem: { include: { applicability: true } },
+            replacedByUser: { select: { id: true, name: true, email: true, role: true } },
+          },
         },
         workLogs: { orderBy: { startedAt: 'asc' } },
       },
@@ -3395,7 +3455,23 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
             qty: p.qty,
             notes: p.notes ?? null,
             freeText: p.freeText ?? null,
-            inventoryItem: p.inventoryItem ? { id: p.inventoryItem.id, sku: p.inventoryItem.sku, name: p.inventoryItem.name, model: p.inventoryItem.model ?? null } : null,
+            inventoryItem: p.inventoryItem
+              ? {
+                  id: p.inventoryItem.id,
+                  sku: p.inventoryItem.sku,
+                  name: p.inventoryItem.name,
+                  model: p.inventoryItem.model ?? null,
+                  itemNo: p.inventoryItem.itemNo ?? null,
+                  oemPartNo: p.inventoryItem.oemPartNo ?? null,
+                  applicability: Array.isArray(p.inventoryItem.applicability)
+                    ? p.inventoryItem.applicability.map((row: any) => ({
+                        equipmentModel: row.equipmentModel ?? null,
+                        variant: row.variant ?? null,
+                        itemNo: row.itemNo ?? null,
+                      }))
+                    : [],
+                }
+              : null,
           })),
         replaced: liveParts
           .filter((p) => String(p.stage || 'REQUIRED') === 'REPLACED')
@@ -3406,7 +3482,23 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
             freeText: p.freeText ?? null,
             replacedAt: p.replacedAt ?? null,
             replacedByUser: p.replacedByUser ? { id: p.replacedByUser.id, name: p.replacedByUser.name, email: p.replacedByUser.email, role: p.replacedByUser.role } : null,
-            inventoryItem: p.inventoryItem ? { id: p.inventoryItem.id, sku: p.inventoryItem.sku, name: p.inventoryItem.name, model: p.inventoryItem.model ?? null } : null,
+            inventoryItem: p.inventoryItem
+              ? {
+                  id: p.inventoryItem.id,
+                  sku: p.inventoryItem.sku,
+                  name: p.inventoryItem.name,
+                  model: p.inventoryItem.model ?? null,
+                  itemNo: p.inventoryItem.itemNo ?? null,
+                  oemPartNo: p.inventoryItem.oemPartNo ?? null,
+                  applicability: Array.isArray(p.inventoryItem.applicability)
+                    ? p.inventoryItem.applicability.map((row: any) => ({
+                        equipmentModel: row.equipmentModel ?? null,
+                        variant: row.variant ?? null,
+                        itemNo: row.itemNo ?? null,
+                      }))
+                    : [],
+                }
+              : null,
           })),
       };
     }
@@ -3431,8 +3523,24 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
     }
     imageNames = Array.from(new Set(imageNames));
     const photos = await this.loadReportPhotoDataUris(serviceOrderId, imageNames);
+    const reportAudience = String(rep.audience || 'CUSTOMER').toUpperCase();
+    if (
+      reportAudience === 'CUSTOMER' &&
+      (!snapshot.partsManual || !Array.isArray((snapshot.partsManual as any)?.pages) || (snapshot.partsManual as any).pages.length === 0)
+    ) {
+      const snapParts = snapshot.parts ?? { required: [], replaced: [] };
+      snapshot.partsManual = await this.buildRelevantManualPagesSnapshot(
+        tenantId,
+        (snapshot.asset as any) ?? assetLive ?? null,
+        Array.isArray(snapParts?.required) ? snapParts.required : [],
+        Array.isArray(snapParts?.replaced) ? snapParts.replaced : [],
+      );
+    }
+    const reportManualPages = await this.loadReportManualPageDataUris(
+      Array.isArray((snapshot.partsManual as any)?.pages) ? (snapshot.partsManual as any).pages : [],
+    );
 
-    const html = this.buildReportPdfHtml(rep, snapshot, photos);
+    const html = this.buildReportPdfHtml(rep, snapshot, photos, reportManualPages);
     const buffer = await this.renderReportPdfWithChromium(html);
 
     const audience = String(rep.audience || 'CUSTOMER').toLowerCase();
@@ -3457,7 +3565,10 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
         pmPlan: true,
         serviceOrderParts: {
           orderBy: [{ stage: 'asc' }, { createdAt: 'asc' }],
-          include: { inventoryItem: true, replacedByUser: { select: { id: true, name: true, email: true, role: true } } },
+          include: {
+            inventoryItem: { include: { applicability: true } },
+            replacedByUser: { select: { id: true, name: true, email: true, role: true } },
+          },
         },
         workLogs: { orderBy: { startedAt: 'asc' } },
       },
@@ -3568,7 +3679,23 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
           qty: p.qty,
           notes: p.notes ?? null,
           freeText: p.freeText ?? null,
-          inventoryItem: p.inventoryItem ? { id: p.inventoryItem.id, sku: p.inventoryItem.sku, name: p.inventoryItem.name, model: p.inventoryItem.model ?? null } : null,
+          inventoryItem: p.inventoryItem
+            ? {
+                id: p.inventoryItem.id,
+                sku: p.inventoryItem.sku,
+                name: p.inventoryItem.name,
+                model: p.inventoryItem.model ?? null,
+                itemNo: p.inventoryItem.itemNo ?? null,
+                oemPartNo: p.inventoryItem.oemPartNo ?? null,
+                applicability: Array.isArray(p.inventoryItem.applicability)
+                  ? p.inventoryItem.applicability.map((row: any) => ({
+                      equipmentModel: row.equipmentModel ?? null,
+                      variant: row.variant ?? null,
+                      itemNo: row.itemNo ?? null,
+                    }))
+                  : [],
+              }
+            : null,
         })),
         replaced: replacedParts.map((p: any) => ({
           id: p.id,
@@ -3577,7 +3704,23 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
           freeText: p.freeText ?? null,
           replacedAt: p.replacedAt ?? null,
           replacedByUser: p.replacedByUser ? { id: p.replacedByUser.id, name: p.replacedByUser.name, email: p.replacedByUser.email, role: p.replacedByUser.role } : null,
-          inventoryItem: p.inventoryItem ? { id: p.inventoryItem.id, sku: p.inventoryItem.sku, name: p.inventoryItem.name, model: p.inventoryItem.model ?? null } : null,
+          inventoryItem: p.inventoryItem
+            ? {
+                id: p.inventoryItem.id,
+                sku: p.inventoryItem.sku,
+                name: p.inventoryItem.name,
+                model: p.inventoryItem.model ?? null,
+                itemNo: p.inventoryItem.itemNo ?? null,
+                oemPartNo: p.inventoryItem.oemPartNo ?? null,
+                applicability: Array.isArray(p.inventoryItem.applicability)
+                  ? p.inventoryItem.applicability.map((row: any) => ({
+                      equipmentModel: row.equipmentModel ?? null,
+                      variant: row.variant ?? null,
+                      itemNo: row.itemNo ?? null,
+                    }))
+                  : [],
+              }
+            : null,
         })),
       },
       hourmeter: {
@@ -3601,6 +3744,10 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
     };
 
     payload.workLogs = enrichedLogs;
+    payload.partsManual =
+      audience === 'CUSTOMER'
+        ? await this.buildRelevantManualPagesSnapshot(tenantId, asset, requiredParts, replacedParts)
+        : null;
 
     // Adjuntos: snapshot de fotos (filenames). El reporte las carga luego vía /attachments/IMAGE/:filename
     const imagesResp = await this.listAttachments(serviceOrderId, 'IMAGE');
@@ -3683,6 +3830,239 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
     return this.reportEscapeHtml(value).replace(/\r?\n/g, '<br/>');
   }
 
+  private reportSameText(a?: any, b?: any) {
+    return String(a ?? '').trim().toLowerCase() === String(b ?? '').trim().toLowerCase();
+  }
+
+  private reportNormalizeAssetPath(value: any): string | null {
+    const normalized = String(value ?? '')
+      .trim()
+      .replace(/\\/g, '/');
+    if (!normalized) return null;
+    if (/^(https?:|data:|blob:)/i.test(normalized)) return normalized;
+    if (normalized.startsWith('/')) return normalized;
+    const sanitized = normalized.replace(/^(\.\/)+/, '').replace(/^(\.\.\/)+/, '');
+    return `/${sanitized}`;
+  }
+
+  private reportResolveAssetCandidates(assetPath: string): string[] {
+    const normalized = this.reportNormalizeAssetPath(assetPath);
+    if (!normalized || /^(https?:|data:|blob:)/i.test(normalized)) return [];
+    const relative = normalized.replace(/^\/+/, '');
+    return Array.from(
+      new Set([
+        path.join(process.cwd(), 'apps', 'web', 'public', relative),
+        path.join(process.cwd(), 'public', relative),
+        path.join(process.cwd(), '..', 'web', 'public', relative),
+        path.join(process.cwd(), '..', '..', 'apps', 'web', 'public', relative),
+        path.resolve(__dirname, '../../../../web/public', relative),
+        path.resolve(__dirname, '../../../../../web/public', relative),
+        path.resolve(__dirname, '../../../../../../apps/web/public', relative),
+        path.resolve(__dirname, '../../../../../apps/web/public', relative),
+        path.join(process.cwd(), relative),
+      ]),
+    );
+  }
+
+  private reportResolveAssetHttpCandidates(assetPath: string): string[] {
+    const normalized = this.reportNormalizeAssetPath(assetPath);
+    if (!normalized) return [];
+    if (/^(https?:|data:|blob:)/i.test(normalized)) return [normalized];
+
+    const bases = Array.from(
+      new Set(
+        [
+          process.env.PUBLIC_API_BASE_URL,
+          process.env.NEXT_PUBLIC_API_URL,
+          process.env.NEXTAUTH_URL,
+          process.env.API_INTERNAL_URL,
+          'http://web:3000',
+          'http://api:3001',
+          'http://localhost:3000',
+          'http://localhost:3001',
+        ]
+          .map((value) => String(value ?? '').trim().replace(/\/$/, ''))
+          .filter(Boolean),
+      ),
+    );
+
+    return bases.map((base) => `${base}${normalized.startsWith('/') ? normalized : `/${normalized}`}`);
+  }
+
+  private async loadReportAssetDataUri(assetPath: string) {
+    const normalized = this.reportNormalizeAssetPath(assetPath);
+    if (!normalized) return null;
+    if (/^data:/i.test(normalized)) return normalized;
+    if (/^https?:/i.test(normalized)) return normalized;
+
+    for (const candidate of this.reportResolveAssetCandidates(normalized)) {
+      try {
+        const buf = await fs.readFile(candidate);
+        const mime = this.reportImageMime(candidate);
+        return `data:${mime};base64,${buf.toString('base64')}`;
+      } catch {
+        // try next candidate
+      }
+    }
+
+    for (const url of this.reportResolveAssetHttpCandidates(normalized)) {
+      try {
+        const res = await fetch(url);
+        if (!res.ok) continue;
+        const contentType = String(res.headers.get('content-type') || '').trim();
+        const arr = await res.arrayBuffer();
+        const buf = Buffer.from(arr);
+        if (!buf.length) continue;
+        const mime = contentType || this.reportImageMime(url);
+        return `data:${mime};base64,${buf.toString('base64')}`;
+      } catch {
+        // try next URL
+      }
+    }
+
+    return null;
+  }
+
+  private reportManualScore(
+    manual: { brand?: string | null; equipmentModel?: string | null },
+    asset: { brand?: string | null; model?: string | null },
+  ) {
+    if (!this.reportSameText(manual.equipmentModel, asset.model)) return -1;
+    let score = 100;
+    if (asset.brand) {
+      if (manual.brand && this.reportSameText(manual.brand, asset.brand)) score += 20;
+      else if (!manual.brand) score += 10;
+    } else if (!manual.brand) {
+      score += 1;
+    }
+    return score;
+  }
+
+  private async reportResolvePartsManualForAsset(tenantId: string, asset: { brand?: string | null; model?: string | null }) {
+    const model = String(asset?.model ?? '').trim();
+    if (!model) return null;
+
+    const manuals = await this.prisma.partsManual.findMany({
+      where: {
+        tenantId,
+        equipmentModel: { equals: model, mode: 'insensitive' },
+      },
+      include: {
+        pages: {
+          orderBy: { pageNumber: 'asc' },
+          include: {
+            hotspots: {
+              orderBy: [{ itemNo: 'asc' }, { createdAt: 'asc' }],
+            },
+          },
+        },
+      },
+    });
+
+    if (!manuals.length) return null;
+
+    return manuals
+      .map((entry) => ({ entry, score: this.reportManualScore(entry, asset) }))
+      .sort(
+        (a, b) =>
+          b.score - a.score ||
+          b.entry.updatedAt.getTime() - a.entry.updatedAt.getTime() ||
+          b.entry.createdAt.getTime() - a.entry.createdAt.getTime() ||
+          a.entry.name.localeCompare(b.entry.name) ||
+          a.entry.id.localeCompare(b.entry.id),
+      )[0]?.entry ?? null;
+  }
+
+  private reportPartMatchesHotspot(part: any, hotspot: any) {
+    const inventoryItem = part?.inventoryItem ?? null;
+    if (inventoryItem?.id) {
+      if (hotspot?.inventoryItemId && String(hotspot.inventoryItemId) === String(inventoryItem.id)) return true;
+      if (hotspot?.oemPartNo && inventoryItem?.oemPartNo && this.reportSameText(hotspot.oemPartNo, inventoryItem.oemPartNo)) return true;
+      if (hotspot?.itemNo && inventoryItem?.itemNo && this.reportSameText(hotspot.itemNo, inventoryItem.itemNo)) return true;
+      if (
+        hotspot?.itemNo &&
+        Array.isArray(inventoryItem?.applicability) &&
+        inventoryItem.applicability.some((row: any) => this.reportSameText(row?.itemNo, hotspot.itemNo))
+      ) {
+        return true;
+      }
+    }
+
+    if (!inventoryItem?.id && part?.freeText) {
+      return this.reportSameText(part.freeText, hotspot?.freeText);
+    }
+
+    return false;
+  }
+
+  private async buildRelevantManualPagesSnapshot(
+    tenantId: string,
+    asset: { brand?: string | null; model?: string | null } | null | undefined,
+    requiredParts: any[],
+    replacedParts: any[],
+  ) {
+    if (!asset?.model) return null;
+    const manual = await this.reportResolvePartsManualForAsset(tenantId, asset);
+    if (!manual) return null;
+
+    const pages = (manual.pages ?? [])
+      .map((page: any) => {
+        const matchedHotspots = (page.hotspots ?? [])
+          .map((hotspot: any) => {
+            let requiredQty = 0;
+            let replacedQty = 0;
+
+            for (const part of requiredParts ?? []) {
+              if (this.reportPartMatchesHotspot(part, hotspot)) {
+                requiredQty += Number(part?.qty ?? 0) || 0;
+              }
+            }
+
+            for (const part of replacedParts ?? []) {
+              if (this.reportPartMatchesHotspot(part, hotspot)) {
+                replacedQty += Number(part?.qty ?? 0) || 0;
+              }
+            }
+
+            if (requiredQty <= 0 && replacedQty <= 0) return null;
+            return {
+              itemNo: hotspot.itemNo,
+              label: hotspot.label ?? null,
+              oemPartNo: hotspot.oemPartNo ?? null,
+              x: hotspot.x,
+              y: hotspot.y,
+              width: hotspot.width,
+              height: hotspot.height,
+              freeText: [hotspot.itemNo ? `Item ${hotspot.itemNo}` : null, hotspot.label, hotspot.oemPartNo]
+                .filter(Boolean)
+                .join(' · '),
+              requiredQty,
+              replacedQty,
+            };
+          })
+          .filter(Boolean);
+
+        if (matchedHotspots.length === 0) return null;
+        return {
+          pageNumber: page.pageNumber,
+          title: page.title ?? null,
+          imageUrl: this.reportNormalizeAssetPath(page.imageUrl),
+          hotspots: matchedHotspots,
+        };
+      })
+      .filter(Boolean);
+
+    if (!pages.length) return null;
+
+    return {
+      id: manual.id,
+      name: manual.name,
+      brand: manual.brand ?? null,
+      equipmentModel: manual.equipmentModel,
+      pages,
+    };
+  }
+
   private reportResolveChecklist(formData: any, soTypeKey: string) {
     const byType = (formData?.checklists && typeof formData.checklists === 'object') ? formData.checklists : {};
     let selected: any = null;
@@ -3749,7 +4129,63 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
     return out;
   }
 
-  private buildReportPdfHtml(rep: any, snap: any, photos: Array<{ filename: string; dataUri: string }>) {
+  private async loadReportManualPageDataUris(pages: any[]) {
+    const out: Array<{
+      pageNumber: number;
+      title?: string | null;
+      imageDataUri?: string | null;
+      imagePath?: string | null;
+      hotspots: Array<{
+        itemNo: string;
+        label?: string | null;
+        oemPartNo?: string | null;
+        x?: number;
+        y?: number;
+        width?: number;
+        height?: number;
+        freeText?: string | null;
+        requiredQty?: number;
+        replacedQty?: number;
+      }>;
+    }> = [];
+
+    for (const page of pages ?? []) {
+      const imageDataUri = await this.loadReportAssetDataUri(String(page?.imageUrl ?? ''));
+      out.push({
+        pageNumber: Number(page?.pageNumber ?? 0) || 0,
+        title: page?.title ?? null,
+        imageDataUri: imageDataUri ?? null,
+        imagePath: String(page?.imageUrl ?? ''),
+        hotspots: Array.isArray(page?.hotspots) ? page.hotspots : [],
+      });
+    }
+
+    return out;
+  }
+
+  private buildReportPdfHtml(
+    rep: any,
+    snap: any,
+    photos: Array<{ filename: string; dataUri: string }>,
+    manualPages: Array<{
+      pageNumber: number;
+      title?: string | null;
+      imageDataUri?: string | null;
+      imagePath?: string | null;
+      hotspots: Array<{
+        itemNo: string;
+        label?: string | null;
+        oemPartNo?: string | null;
+        x?: number;
+        y?: number;
+        width?: number;
+        height?: number;
+        freeText?: string | null;
+        requiredQty?: number;
+        replacedQty?: number;
+      }>;
+    }>,
+  ) {
     const tenant = snap?.tenant ?? {};
     const so = snap?.serviceOrder ?? {};
     const asset = snap?.asset ?? {};
@@ -3860,6 +4296,57 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
       </section>`
       : '';
 
+    const manualPagesBlock = manualPages.length > 0
+      ? `
+      <section class="card">
+        <div class="title">Repuestos diagnosticados</div>
+        <div class="manual-pages">
+          ${manualPages
+            .map((page) => {
+              const overlays = page.hotspots
+                .map((hotspot) => {
+                  const isReplaced = Number(hotspot.replacedQty ?? 0) > 0;
+                  const toneClass = isReplaced ? 'manual-hotspot replaced' : 'manual-hotspot required';
+                  const badgeClass = isReplaced ? 'manual-hotspot-badge replaced' : 'manual-hotspot-badge required';
+                  return `
+                  <div
+                    class="${toneClass}"
+                    style="left:${Number(hotspot.x ?? 0)}%;top:${Number(hotspot.y ?? 0)}%;width:${Number(hotspot.width ?? 0)}%;height:${Number(hotspot.height ?? 0)}%;"
+                  >
+                    <div class="${badgeClass}">${this.reportEscapeHtml(hotspot.itemNo)}</div>
+                  </div>`;
+                })
+                .join('');
+              const hotspotSummary = page.hotspots
+                .map((hotspot) => {
+                  const status =
+                    Number(hotspot.replacedQty ?? 0) > 0
+                      ? `Cambiado x${this.reportEscapeHtml(hotspot.replacedQty)}`
+                      : `Agregado x${this.reportEscapeHtml(hotspot.requiredQty ?? 0)}`;
+                  const label = hotspot.label || hotspot.oemPartNo || hotspot.freeText || `Item ${hotspot.itemNo}`;
+                  return `<li><b>Item ${this.reportEscapeHtml(hotspot.itemNo)}</b> · ${this.reportEscapeHtml(label)} <span class="muted">· ${status}</span></li>`;
+                })
+                .join('');
+
+              return `
+              <figure class="manual-page-card">
+                <div class="subtitle">Pág. ${this.reportEscapeHtml(page.pageNumber)}${page.title ? ` · ${this.reportEscapeHtml(page.title)}` : ''}</div>
+                <div class="manual-image-frame">
+                  ${page.imageDataUri
+                    ? `<img src="${page.imageDataUri}" alt="Página ${this.reportEscapeHtml(page.pageNumber)}" />${overlays}`
+                    : `<div class="manual-image-missing">No se pudo cargar la imagen de esta página del manual.${page.imagePath ? ` Ruta: ${this.reportEscapeHtml(page.imagePath)}` : ''}</div>`}
+                </div>
+                <figcaption>
+                  <div class="muted">Repuestos referenciados en esta página:</div>
+                  <ul>${hotspotSummary}</ul>
+                </figcaption>
+              </figure>`;
+            })
+            .join('')}
+        </div>
+      </section>`
+      : '';
+
     const photosBlock = photos.length > 0
       ? `
       <div class="photo-grid">
@@ -3910,12 +4397,26 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
     .photo-card { border: 1px solid var(--line); border-radius: 6px; padding: 6px; margin: 0; }
     .photo-card img { width: 100%; height: 160px; object-fit: cover; border-radius: 4px; display: block; }
     .photo-card figcaption { margin-top: 4px; font-size: 10px; color: var(--muted); word-break: break-all; }
+    .manual-pages { display: grid; gap: 12px; }
+    .manual-page-card { border: 1px solid var(--line); border-radius: 8px; padding: 8px; margin: 0; }
+    .manual-image-frame { position: relative; width: 100%; }
+    .manual-page-card img { width: 100%; max-height: 520px; object-fit: contain; border-radius: 6px; display: block; background: #fff; }
+    .manual-image-missing { min-height: 180px; border: 1px dashed var(--line); border-radius: 6px; display: flex; align-items: center; justify-content: center; padding: 16px; color: var(--muted); background: #fafafa; text-align: center; }
+    .manual-hotspot { position: absolute; border: 2px solid; border-radius: 8px; box-sizing: border-box; }
+    .manual-hotspot.required { border-color: #84cc16; background: rgba(132, 204, 22, 0.16); box-shadow: 0 0 0 2px rgba(132, 204, 22, 0.12); }
+    .manual-hotspot.replaced { border-color: #059669; background: rgba(5, 150, 105, 0.18); box-shadow: 0 0 0 2px rgba(5, 150, 105, 0.14); }
+    .manual-hotspot-badge { position: absolute; top: -12px; left: 0; border-radius: 999px; padding: 2px 8px; font-size: 10px; font-weight: 700; color: #fff; }
+    .manual-hotspot-badge.required { background: #65a30d; }
+    .manual-hotspot-badge.replaced { background: #047857; }
+    .manual-page-card figcaption { margin-top: 8px; font-size: 11px; }
+    .manual-page-card ul { margin-top: 6px; }
     .brand { display: flex; gap: 12px; align-items: center; }
     .brand img { max-height: 48px; max-width: 220px; object-fit: contain; }
     @media print {
       .page { padding: 0; }
       .card { break-inside: avoid; }
       .photo-card { break-inside: avoid; }
+      .manual-page-card { break-inside: avoid; }
     }
   </style>
 </head>
@@ -4008,6 +4509,8 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
     </section>
 
     ${partsBlock}
+
+    ${manualPagesBlock}
 
     <section class="card">
       <div class="title">Fotos</div>
