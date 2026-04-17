@@ -84,19 +84,17 @@ echo "[restore] Reset DB before restore: $([ "$RESET_DB" -eq 1 ] && echo yes || 
 
 if [ "$RESET_DB" -eq 1 ]; then
   echo "[restore] Dropping and recreating target DB..."
-  docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" exec -T db sh -lc '
-    psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d postgres \
-      -v db_name="$POSTGRES_DB" \
-      -v db_user="$POSTGRES_USER" <<'"'"'SQL'"'"'
+  docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" exec -T db sh -lc "
+    psql -v ON_ERROR_STOP=1 -U \"\$POSTGRES_USER\" -d postgres <<SQL
 SELECT pg_terminate_backend(pid)
 FROM pg_stat_activity
-WHERE datname = :'db_name'
+WHERE datname = '\$POSTGRES_DB'
   AND pid <> pg_backend_pid();
 
-DROP DATABASE IF EXISTS :"db_name" WITH (FORCE);
-CREATE DATABASE :"db_name" OWNER :"db_user";
+DROP DATABASE IF EXISTS \"\$POSTGRES_DB\" WITH (FORCE);
+CREATE DATABASE \"\$POSTGRES_DB\" OWNER \"\$POSTGRES_USER\";
 SQL
-  '
+  "
 fi
 
 echo "[restore] Restoring... (this may take a while)"
