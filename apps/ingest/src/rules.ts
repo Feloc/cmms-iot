@@ -1,7 +1,7 @@
 import { Pool } from 'pg';
 import pino from 'pino';
 import { createId } from '@paralleldrive/cuid2';
-import { withTenant } from './db';
+import { withTenant } from './db.js';
 
 const log = pino({ name: 'ingest-rules', level: process.env.LOG_LEVEL || 'info' });
 

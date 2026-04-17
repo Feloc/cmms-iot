@@ -1,13 +1,13 @@
 import 'dotenv/config';
 import mqtt from 'mqtt';
 import pino from 'pino';
-import { createPool, withTenant } from './db';
-import { parseTopic } from './mqtt-topics';
-import { normalizeTelemetryTimestamp, isSuspicious1970 } from './time';
-import { TelemetryPayload, toRows } from './telemetry';
-import { insertTelemetry } from './db-timescale';
-import { loadRules, evalRulesForMetric, upsertRuleStateAndEvent, Rule } from './rules';
-import { CHANNEL_STATE, CHANNEL_TELEMETRY, DEFAULT_SUBSCRIPTIONS } from './constants';
+import { createPool, withTenant } from './db.js';
+import { parseTopic } from './mqtt-topics.js';
+import { normalizeTelemetryTimestamp, isSuspicious1970 } from './time.js';
+import { TelemetryPayload, toRows } from './telemetry.js';
+import { insertTelemetry } from './db-timescale.js';
+import { loadRules, evalRulesForMetric, upsertRuleStateAndEvent, type Rule } from './rules.js';
+import { CHANNEL_STATE, CHANNEL_TELEMETRY, DEFAULT_SUBSCRIPTIONS } from './constants.js';
 
 const log = pino({ name: 'ingest', level: process.env.LOG_LEVEL || 'info' });
 const pool = createPool();

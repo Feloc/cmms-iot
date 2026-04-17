@@ -1,5 +1,5 @@
 import { Pool } from 'pg';
-import { withTenant } from './db';
+import { withTenant } from './db.js';
 
 export type TelemetryRow = {
   tenantId: string;

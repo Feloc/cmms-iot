@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { TelemetryRow } from './db-timescale';
+import type { TelemetryRow } from './db-timescale.js';
 
 export const TelemetryPayload = z.object({
   ts: z.number().or(z.string()).optional(),
