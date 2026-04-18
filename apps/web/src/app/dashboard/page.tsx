@@ -273,6 +273,7 @@ function createBarValueLabel(props: { placement: 'top' | 'center' | 'end'; digit
 
 const TopIntegerBarLabel = createBarValueLabel({ placement: 'top', digits: 0 });
 const EndIntegerBarLabel = createBarValueLabel({ placement: 'end', digits: 0 });
+const EndDecimalBarLabel = createBarValueLabel({ placement: 'end', digits: 2 });
 const CenterIntegerBarLabel = createBarValueLabel({ placement: 'center', digits: 0, fill: '#ffffff' });
 const CenterDecimalBarLabel = createBarValueLabel({ placement: 'center', digits: 2, fill: '#ffffff' });
 
@@ -1051,9 +1052,9 @@ export default function Dashboard() {
               ) : (
                 <>
                   <div className="rounded-md border p-4">
-                    <div className="text-sm font-medium text-neutral-900">Histórico mensual de OS creadas</div>
+                    <div className="text-sm font-medium text-neutral-900">Histórico mensual de OS completadas</div>
                     <div className="text-xs text-neutral-500">
-                      Este bloque no depende del rango principal del dashboard y muestra todos los meses con datos.
+                      Este bloque no depende del rango principal del dashboard y muestra solo OS completadas/cerradas, agrupadas por mes de cierre.
                     </div>
                   </div>
 
@@ -1304,6 +1305,27 @@ export default function Dashboard() {
                   </div>
 
                   <div className="rounded-md border p-3">
+                    <div className="text-sm font-medium mb-2">Promedio diario total por técnico</div>
+                    <div style={{ height: technicianTypeAverageChartHeight }}>
+                      <ResponsiveContainer width="100%" height="100%">
+                        <ComposedChart
+                          data={technicianTypeAverageChart}
+                          layout="vertical"
+                          margin={{ top: 6, right: 26, left: 16, bottom: 6 }}
+                        >
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis type="number" tickLine={false} axisLine={false} />
+                          <YAxis type="category" dataKey="name" width={150} interval={0} tickLine={false} axisLine={false} />
+                          <Tooltip formatter={(value: any) => [fmtFixed(value, 2), 'Promedio diario total']} />
+                          <Bar dataKey="dailyTotal" name="Promedio diario total" fill="#0f766e" radius={[0, 4, 4, 0]}>
+                            <LabelList dataKey="dailyTotal" content={<EndDecimalBarLabel />} />
+                          </Bar>
+                        </ComposedChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+
+                  <div className="rounded-md border p-3">
                     <div className="text-sm font-medium mb-2">Promedio semanal por técnico</div>
                     <div style={{ height: technicianTypeAverageChartHeight }}>
                       <ResponsiveContainer width="100%" height="100%">
@@ -1325,6 +1347,27 @@ export default function Dashboard() {
                           </Bar>
                           <Bar dataKey="weeklyDiagnostic" stackId="weekly" name="Diagnósticos" fill="#2563eb" radius={[0, 4, 4, 0]}>
                             <LabelList dataKey="weeklyDiagnostic" content={<CenterDecimalBarLabel />} />
+                          </Bar>
+                        </ComposedChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+
+                  <div className="rounded-md border p-3">
+                    <div className="text-sm font-medium mb-2">Promedio semanal total por técnico</div>
+                    <div style={{ height: technicianTypeAverageChartHeight }}>
+                      <ResponsiveContainer width="100%" height="100%">
+                        <ComposedChart
+                          data={technicianTypeAverageChart}
+                          layout="vertical"
+                          margin={{ top: 6, right: 26, left: 16, bottom: 6 }}
+                        >
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis type="number" tickLine={false} axisLine={false} />
+                          <YAxis type="category" dataKey="name" width={150} interval={0} tickLine={false} axisLine={false} />
+                          <Tooltip formatter={(value: any) => [fmtFixed(value, 2), 'Promedio semanal total']} />
+                          <Bar dataKey="weeklyTotal" name="Promedio semanal total" fill="#7c3aed" radius={[0, 4, 4, 0]}>
+                            <LabelList dataKey="weeklyTotal" content={<EndDecimalBarLabel />} />
                           </Bar>
                         </ComposedChart>
                       </ResponsiveContainer>

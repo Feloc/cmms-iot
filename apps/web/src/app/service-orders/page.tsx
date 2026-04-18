@@ -93,6 +93,22 @@ function monthToRange(value: string) {
   return { start: start.toISOString(), end: end.toISOString() };
 }
 
+function dateInputToStartIso(value: string) {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  const dt = new Date(`${raw}T00:00:00`);
+  if (Number.isNaN(dt.getTime())) return null;
+  return dt.toISOString();
+}
+
+function dateInputToEndIso(value: string) {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  const dt = new Date(`${raw}T23:59:59.999`);
+  if (Number.isNaN(dt.getTime())) return null;
+  return dt.toISOString();
+}
+
 function commercialStatusMeta(status?: string | null) {
   switch (String(status || '').toUpperCase()) {
     case 'NO_MANAGEMENT':
@@ -123,6 +139,7 @@ export default function ServiceOrdersPage() {
   const isAdmin = role === 'ADMIN';
 
   const [filters, setFilters] = useState<Filter[]>([{ id: 'f-q', field: 'q', value: '' }]);
+  const [dateRange, setDateRange] = useState<{ start: string; end: string }>({ start: '', end: '' });
   const [edits, setEdits] = useState<Record<string, EditRow>>({});
   const [listTab, setListTab] = useState<ListTab>('ALL');
   const [statusTab, setStatusTab] = useState<StatusTab>('ALL');
@@ -154,13 +171,17 @@ export default function ServiceOrdersPage() {
       }
       qs.append(f.field, v);
     }
+    const rangeStart = dateInputToStartIso(dateRange.start);
+    const rangeEnd = dateInputToEndIso(dateRange.end);
+    if (rangeStart) qs.set('start', rangeStart);
+    if (rangeEnd) qs.set('end', rangeEnd);
     if (listTab === 'ISSUES') qs.set('hasIssue', 'true');
     if (statusTab !== 'ALL') qs.append('status', statusTab);
     qs.set('page', String(page));
     qs.set('size', String(PAGE_SIZE));
 
     return `/service-orders?${qs.toString()}`;
-  }, [auth.token, auth.tenantSlug, filters, listTab, statusTab, page]);
+  }, [auth.token, auth.tenantSlug, filters, dateRange.end, dateRange.start, listTab, statusTab, page]);
 
   const exportPath = useMemo(() => {
     if (!auth.token || !auth.tenantSlug) return null;
@@ -179,11 +200,15 @@ export default function ServiceOrdersPage() {
       }
       qs.append(f.field, v);
     }
+    const rangeStart = dateInputToStartIso(dateRange.start);
+    const rangeEnd = dateInputToEndIso(dateRange.end);
+    if (rangeStart) qs.set('start', rangeStart);
+    if (rangeEnd) qs.set('end', rangeEnd);
     if (listTab === 'ISSUES') qs.set('hasIssue', 'true');
     if (statusTab !== 'ALL') qs.append('status', statusTab);
 
     return `/service-orders/export?${qs.toString()}`;
-  }, [auth.token, auth.tenantSlug, filters, listTab, statusTab]);
+  }, [auth.token, auth.tenantSlug, filters, dateRange.end, dateRange.start, listTab, statusTab]);
 
   const exportReportPath = useMemo(() => {
     if (!auth.token || !auth.tenantSlug) return null;
@@ -202,11 +227,15 @@ export default function ServiceOrdersPage() {
       }
       qs.append(f.field, v);
     }
+    const rangeStart = dateInputToStartIso(dateRange.start);
+    const rangeEnd = dateInputToEndIso(dateRange.end);
+    if (rangeStart) qs.set('start', rangeStart);
+    if (rangeEnd) qs.set('end', rangeEnd);
     if (listTab === 'ISSUES') qs.set('hasIssue', 'true');
     if (statusTab !== 'ALL') qs.append('status', statusTab);
 
     return `/service-orders/export-report?${qs.toString()}`;
-  }, [auth.token, auth.tenantSlug, filters, listTab, statusTab]);
+  }, [auth.token, auth.tenantSlug, filters, dateRange.end, dateRange.start, listTab, statusTab]);
 
   const items = data?.items ?? EMPTY_ITEMS;
   const statusCounts = data?.statusCounts ?? {};
@@ -223,7 +252,7 @@ export default function ServiceOrdersPage() {
 
   useEffect(() => {
     setPage(1);
-  }, [filters, listTab, statusTab]);
+  }, [filters, dateRange.end, dateRange.start, listTab, statusTab]);
 
   // Cargar técnicos una vez (y refrescar si cambia auth)
   useEffect(() => {
@@ -503,6 +532,38 @@ export default function ServiceOrdersPage() {
           </div>
         </div>
 
+        <div className="flex items-end gap-2 flex-wrap">
+          <div className="flex flex-col gap-1">
+            <label className="text-xs text-gray-600">Fecha programada desde</label>
+            <input
+              type="date"
+              className="border rounded px-3 py-2 text-sm"
+              value={dateRange.start}
+              onChange={(e) => setDateRange((prev) => ({ ...prev, start: e.target.value }))}
+            />
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <label className="text-xs text-gray-600">Fecha programada hasta</label>
+            <input
+              type="date"
+              className="border rounded px-3 py-2 text-sm"
+              value={dateRange.end}
+              onChange={(e) => setDateRange((prev) => ({ ...prev, end: e.target.value }))}
+            />
+          </div>
+
+          {(dateRange.start || dateRange.end) ? (
+            <button
+              className="px-2 py-2 border rounded text-sm text-gray-700"
+              type="button"
+              onClick={() => setDateRange({ start: '', end: '' })}
+            >
+              Limpiar rango
+            </button>
+          ) : null}
+        </div>
+
         <div className="grid gap-2">
           {filters.map((f) => (
             <div key={f.id} className="flex items-center gap-2 flex-wrap">
@@ -611,7 +672,7 @@ export default function ServiceOrdersPage() {
         </div>
 
         <div className="text-xs text-gray-500">
-          Tip: puedes agregar varios filtros. El filtro "Mes" usa la fecha programada. Las novedades se consultan desde la pestaña "Equipos con novedad".
+          Tip: puedes agregar varios filtros. El filtro "Mes" y el rango de fechas usan la fecha programada. Las novedades se consultan desde la pestaña "Equipos con novedad".
         </div>
       </div>
 

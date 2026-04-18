@@ -401,12 +401,14 @@ export class DashboardService {
     >(
       Prisma.sql`
         SELECT
-          date_trunc('month', "createdAt")::date::text AS "month",
+          date_trunc('month', COALESCE("deliveredAt","completedAt","updatedAt"))::date::text AS "month",
           COALESCE("serviceOrderType"::text, 'UNSPECIFIED') AS "serviceType",
           COUNT(*)::int AS "count"
         FROM "WorkOrder"
         WHERE "tenantId" = ${tenantId}
           AND "kind" = 'SERVICE_ORDER'
+          AND "status" IN ('COMPLETED','CLOSED')
+          AND COALESCE("deliveredAt","completedAt","updatedAt") IS NOT NULL
         GROUP BY "month", "serviceType"
         ORDER BY "month" DESC, "count" DESC, "serviceType" ASC;
       `
