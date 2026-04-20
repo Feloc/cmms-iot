@@ -860,6 +860,10 @@ export class DashboardService {
       dashboardWorkSchedule.daysByWeekday,
       dashboardWorkSchedule.nonWorkingDates,
     );
+    const configuredWeeklyBusinessHours = Array.from(dashboardWorkSchedule.daysByWeekday.values()).reduce(
+      (total, day) => total + (day.enabled ? day.hours : 0),
+      0,
+    );
 
 
     const technicianPerformance = techPerfRows.map(r => {
@@ -967,6 +971,16 @@ export class DashboardService {
 
     const rangeCalendarDays = Math.max(1, (to.getTime() - from.getTime()) / (24 * 60 * 60 * 1000));
     const rangeCalendarWeeks = Math.max(rangeCalendarDays / 7, 1 / 7);
+    const rangeEquivalentWorkDays =
+      dashboardWorkSchedule.averageHoursPerDay > 0
+        ? rangeBusinessHours / dashboardWorkSchedule.averageHoursPerDay
+        : 0;
+    const rangeEquivalentWorkWeeks =
+      configuredWeeklyBusinessHours > 0
+        ? rangeBusinessHours / configuredWeeklyBusinessHours
+        : 0;
+    const averageRangeDays = rangeEquivalentWorkDays > 0 ? rangeEquivalentWorkDays : rangeCalendarDays;
+    const averageRangeWeeks = rangeEquivalentWorkWeeks > 0 ? rangeEquivalentWorkWeeks : rangeCalendarWeeks;
     const technicianTypeAveragesMap = new Map<
       string,
       {
@@ -997,12 +1011,12 @@ export class DashboardService {
 
     const technicianTypeAverages = Array.from(technicianTypeAveragesMap.values())
       .map((row) => {
-        const dailyPreventive = round(row.preventiveCount / rangeCalendarDays, 2);
-        const dailyCorrective = round(row.correctiveCount / rangeCalendarDays, 2);
-        const dailyDiagnostic = round(row.diagnosticCount / rangeCalendarDays, 2);
-        const weeklyPreventive = round(row.preventiveCount / rangeCalendarWeeks, 2);
-        const weeklyCorrective = round(row.correctiveCount / rangeCalendarWeeks, 2);
-        const weeklyDiagnostic = round(row.diagnosticCount / rangeCalendarWeeks, 2);
+        const dailyPreventive = round(row.preventiveCount / averageRangeDays, 2);
+        const dailyCorrective = round(row.correctiveCount / averageRangeDays, 2);
+        const dailyDiagnostic = round(row.diagnosticCount / averageRangeDays, 2);
+        const weeklyPreventive = round(row.preventiveCount / averageRangeWeeks, 2);
+        const weeklyCorrective = round(row.correctiveCount / averageRangeWeeks, 2);
+        const weeklyDiagnostic = round(row.diagnosticCount / averageRangeWeeks, 2);
         return {
           userId: row.userId,
           name: row.name,

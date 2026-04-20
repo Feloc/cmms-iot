@@ -1378,7 +1378,7 @@ export default function Dashboard() {
             <CardHeader>
               <CardTitle className="text-base flex items-center">
                 Promedio diario y semanal por técnico
-                <HelpTip text="Calculado sobre OS cerradas en el rango. Las barras separan PREVENTIVO, CORRECTIVO y DIAGNOSTICO, divididos por la duración real del rango seleccionado." />
+                <HelpTip text="Calculado sobre OS cerradas en el rango. Las barras separan PREVENTIVO, CORRECTIVO y DIAGNOSTICO, divididos por la jornada laborable disponible del rango seleccionado según la configuración del dashboard y las fechas no laboradas descontadas." />
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
