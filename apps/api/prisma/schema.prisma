@@ -89,6 +89,37 @@ model Tenant {
   email      String?
   website    String?
   logoUrl    String?
+  dashboardWorkHoursPerDay Float   @default(8)
+  dashboardWorkMonday      Boolean @default(true)
+  dashboardWorkMondayStartTime String @default("08:00")
+  dashboardWorkMondayEndTime String @default("17:00")
+  dashboardWorkMondayMealBreakMinutes Int @default(60)
+  dashboardWorkTuesday     Boolean @default(true)
+  dashboardWorkTuesdayStartTime String @default("08:00")
+  dashboardWorkTuesdayEndTime String @default("17:00")
+  dashboardWorkTuesdayMealBreakMinutes Int @default(60)
+  dashboardWorkWednesday   Boolean @default(true)
+  dashboardWorkWednesdayStartTime String @default("08:00")
+  dashboardWorkWednesdayEndTime String @default("17:00")
+  dashboardWorkWednesdayMealBreakMinutes Int @default(60)
+  dashboardWorkThursday    Boolean @default(true)
+  dashboardWorkThursdayStartTime String @default("08:00")
+  dashboardWorkThursdayEndTime String @default("17:00")
+  dashboardWorkThursdayMealBreakMinutes Int @default(60)
+  dashboardWorkFriday      Boolean @default(true)
+  dashboardWorkFridayStartTime String @default("08:00")
+  dashboardWorkFridayEndTime String @default("17:00")
+  dashboardWorkFridayMealBreakMinutes Int @default(60)
+  dashboardWorkSaturday    Boolean @default(false)
+  dashboardWorkSaturdayStartTime String @default("08:00")
+  dashboardWorkSaturdayEndTime String @default("17:00")
+  dashboardWorkSaturdayMealBreakMinutes Int @default(60)
+  dashboardWorkSunday      Boolean @default(false)
+  dashboardWorkSundayStartTime String @default("08:00")
+  dashboardWorkSundayEndTime String @default("17:00")
+  dashboardWorkSundayMealBreakMinutes Int @default(60)
+  dashboardExcludeNonWorkingDates Boolean @default(false)
+  dashboardNonWorkingDates        String[] @default([])
   users      User[]
   assets     Asset[]
   rules      Rule[]

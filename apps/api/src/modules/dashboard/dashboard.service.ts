@@ -9,6 +9,72 @@ type SummaryArgs = {
   to?: string;
 };
 
+const DASHBOARD_DAY_DEFS = [
+  {
+    key: 'monday',
+    dow: 1,
+    enabledField: 'dashboardWorkMonday',
+    startField: 'dashboardWorkMondayStartTime',
+    endField: 'dashboardWorkMondayEndTime',
+    mealField: 'dashboardWorkMondayMealBreakMinutes',
+  },
+  {
+    key: 'tuesday',
+    dow: 2,
+    enabledField: 'dashboardWorkTuesday',
+    startField: 'dashboardWorkTuesdayStartTime',
+    endField: 'dashboardWorkTuesdayEndTime',
+    mealField: 'dashboardWorkTuesdayMealBreakMinutes',
+  },
+  {
+    key: 'wednesday',
+    dow: 3,
+    enabledField: 'dashboardWorkWednesday',
+    startField: 'dashboardWorkWednesdayStartTime',
+    endField: 'dashboardWorkWednesdayEndTime',
+    mealField: 'dashboardWorkWednesdayMealBreakMinutes',
+  },
+  {
+    key: 'thursday',
+    dow: 4,
+    enabledField: 'dashboardWorkThursday',
+    startField: 'dashboardWorkThursdayStartTime',
+    endField: 'dashboardWorkThursdayEndTime',
+    mealField: 'dashboardWorkThursdayMealBreakMinutes',
+  },
+  {
+    key: 'friday',
+    dow: 5,
+    enabledField: 'dashboardWorkFriday',
+    startField: 'dashboardWorkFridayStartTime',
+    endField: 'dashboardWorkFridayEndTime',
+    mealField: 'dashboardWorkFridayMealBreakMinutes',
+  },
+  {
+    key: 'saturday',
+    dow: 6,
+    enabledField: 'dashboardWorkSaturday',
+    startField: 'dashboardWorkSaturdayStartTime',
+    endField: 'dashboardWorkSaturdayEndTime',
+    mealField: 'dashboardWorkSaturdayMealBreakMinutes',
+  },
+  {
+    key: 'sunday',
+    dow: 0,
+    enabledField: 'dashboardWorkSunday',
+    startField: 'dashboardWorkSundayStartTime',
+    endField: 'dashboardWorkSundayEndTime',
+    mealField: 'dashboardWorkSundayMealBreakMinutes',
+  },
+] as const;
+
+type DashboardWorkSchedule = {
+  averageHoursPerDay: number;
+  daysByWeekday: Map<number, { enabled: boolean; startTime: string; endTime: string; mealBreakMinutes: number; hours: number }>;
+  excludeNonWorkingDates: boolean;
+  nonWorkingDates: Set<string>;
+};
+
 const FINAL_STATUSES: WorkOrderStatus[] = ['COMPLETED', 'CLOSED', 'CANCELED'];
 
 function startOfDayUTC(d: Date) {
@@ -21,8 +87,25 @@ function addDaysUTC(d: Date, days: number) {
   return nd;
 }
 
-/** Count business days (Mon-Fri) in [from, to) using UTC dates */
-function businessDaysBetweenUTC(from: Date, to: Date) {
+function startOfMonthUTC(d: Date) {
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1, 0, 0, 0, 0));
+}
+
+function addMonthsUTC(d: Date, months: number) {
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + months, 1, 0, 0, 0, 0));
+}
+
+function toDateKeyUTC(d: Date) {
+  return d.toISOString().slice(0, 10);
+}
+
+/** Count configured work days in [from, to) using UTC dates */
+function businessDaysBetweenUTC(
+  from: Date,
+  to: Date,
+  daysByWeekday: Map<number, { enabled: boolean }>,
+  nonWorkingDates?: Set<string>,
+) {
   const a = startOfDayUTC(from);
   const b = startOfDayUTC(to);
   if (a.getTime() >= b.getTime()) return 0;
@@ -30,18 +113,142 @@ function businessDaysBetweenUTC(from: Date, to: Date) {
   let count = 0;
   for (let cur = a; cur.getTime() < b.getTime(); cur = addDaysUTC(cur, 1)) {
     const dow = cur.getUTCDay(); // 0 Sun ... 6 Sat
-    if (dow >= 1 && dow <= 5) count++;
+    if (nonWorkingDates?.has(toDateKeyUTC(cur))) continue;
+    if (daysByWeekday.get(dow)?.enabled) count++;
   }
   return count;
 }
 
-function businessHoursBetweenUTC(from: Date, to: Date, hoursPerDay = 8) {
-  return businessDaysBetweenUTC(from, to) * hoursPerDay;
+function businessHoursBetweenUTC(
+  from: Date,
+  to: Date,
+  daysByWeekday: Map<number, { enabled: boolean; hours: number }>,
+  nonWorkingDates?: Set<string>,
+) {
+  const a = startOfDayUTC(from);
+  const b = startOfDayUTC(to);
+  if (a.getTime() >= b.getTime()) return 0;
+
+  let total = 0;
+  for (let cur = a; cur.getTime() < b.getTime(); cur = addDaysUTC(cur, 1)) {
+    if (nonWorkingDates?.has(toDateKeyUTC(cur))) continue;
+    const day = daysByWeekday.get(cur.getUTCDay());
+    if (day?.enabled) total += day.hours;
+  }
+  return total;
 }
 
 function round(n: number, digits = 1) {
   const p = Math.pow(10, digits);
   return Math.round(n * p) / p;
+}
+
+function normalizeClock(value: unknown) {
+  const s = String(value ?? '').trim();
+  const match = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(s);
+  if (!match) return null;
+  return `${match[1]}:${match[2]}`;
+}
+
+function clockToMinutes(value: string) {
+  const [hours, minutes] = value.split(':').map(Number);
+  return hours * 60 + minutes;
+}
+
+function resolveDashboardWorkSchedule(tenant: {
+  dashboardWorkHoursPerDay?: number | null;
+  dashboardWorkMonday?: boolean | null;
+  dashboardWorkMondayStartTime?: string | null;
+  dashboardWorkMondayEndTime?: string | null;
+  dashboardWorkMondayMealBreakMinutes?: number | null;
+  dashboardWorkTuesday?: boolean | null;
+  dashboardWorkTuesdayStartTime?: string | null;
+  dashboardWorkTuesdayEndTime?: string | null;
+  dashboardWorkTuesdayMealBreakMinutes?: number | null;
+  dashboardWorkWednesday?: boolean | null;
+  dashboardWorkWednesdayStartTime?: string | null;
+  dashboardWorkWednesdayEndTime?: string | null;
+  dashboardWorkWednesdayMealBreakMinutes?: number | null;
+  dashboardWorkThursday?: boolean | null;
+  dashboardWorkThursdayStartTime?: string | null;
+  dashboardWorkThursdayEndTime?: string | null;
+  dashboardWorkThursdayMealBreakMinutes?: number | null;
+  dashboardWorkFriday?: boolean | null;
+  dashboardWorkFridayStartTime?: string | null;
+  dashboardWorkFridayEndTime?: string | null;
+  dashboardWorkFridayMealBreakMinutes?: number | null;
+  dashboardWorkSaturday?: boolean | null;
+  dashboardWorkSaturdayStartTime?: string | null;
+  dashboardWorkSaturdayEndTime?: string | null;
+  dashboardWorkSaturdayMealBreakMinutes?: number | null;
+  dashboardWorkSunday?: boolean | null;
+  dashboardWorkSundayStartTime?: string | null;
+  dashboardWorkSundayEndTime?: string | null;
+  dashboardWorkSundayMealBreakMinutes?: number | null;
+  dashboardExcludeNonWorkingDates?: boolean | null;
+  dashboardNonWorkingDates?: string[] | null;
+} | null | undefined): DashboardWorkSchedule {
+  const fallbackHoursPerDayRaw = Number(tenant?.dashboardWorkHoursPerDay ?? 8);
+  const fallbackHoursPerDay = Number.isFinite(fallbackHoursPerDayRaw) && fallbackHoursPerDayRaw > 0 ? fallbackHoursPerDayRaw : 8;
+  const daysByWeekday = new Map<number, { enabled: boolean; startTime: string; endTime: string; mealBreakMinutes: number; hours: number }>();
+
+  let activeDays = 0;
+  let totalActiveHours = 0;
+
+  for (const day of DASHBOARD_DAY_DEFS) {
+    const enabled = Boolean((tenant as any)?.[day.enabledField]);
+    const startTime = normalizeClock((tenant as any)?.[day.startField]) ?? '08:00';
+    const endTime = normalizeClock((tenant as any)?.[day.endField]) ?? '17:00';
+    const mealBreakMinutesRaw = Number((tenant as any)?.[day.mealField] ?? 60);
+    const mealBreakMinutes = Number.isFinite(mealBreakMinutesRaw) && mealBreakMinutesRaw >= 0 ? Math.trunc(mealBreakMinutesRaw) : 60;
+    const workingMinutes = clockToMinutes(endTime) - clockToMinutes(startTime) - mealBreakMinutes;
+    const hours = enabled && workingMinutes > 0 ? workingMinutes / 60 : 0;
+
+    if (enabled && hours > 0) {
+      activeDays += 1;
+      totalActiveHours += hours;
+    }
+
+    daysByWeekday.set(day.dow, {
+      enabled: enabled && hours > 0,
+      startTime,
+      endTime,
+      mealBreakMinutes,
+      hours: hours > 0 ? hours : 0,
+    });
+  }
+
+  // Compatibilidad con tenants que aun no tengan la nueva configuracion diaria completa.
+  if (!activeDays) {
+    for (const day of DASHBOARD_DAY_DEFS) {
+      const enabled = [1, 2, 3, 4, 5].includes(day.dow);
+      daysByWeekday.set(day.dow, {
+        enabled,
+        startTime: '08:00',
+        endTime: '17:00',
+        mealBreakMinutes: 60,
+        hours: enabled ? fallbackHoursPerDay : 0,
+      });
+    }
+    activeDays = 5;
+    totalActiveHours = fallbackHoursPerDay * activeDays;
+  }
+
+  const excludeNonWorkingDates = Boolean(tenant?.dashboardExcludeNonWorkingDates);
+  const nonWorkingDates = new Set(
+    Array.isArray(tenant?.dashboardNonWorkingDates)
+      ? tenant!.dashboardNonWorkingDates
+          .map((value) => String(value ?? '').trim())
+          .filter((value) => /^\d{4}-\d{2}-\d{2}$/.test(value))
+      : [],
+  );
+
+  return {
+    averageHoursPerDay: activeDays ? totalActiveHours / activeDays : fallbackHoursPerDay,
+    daysByWeekday,
+    excludeNonWorkingDates,
+    nonWorkingDates: excludeNonWorkingDates ? nonWorkingDates : new Set<string>(),
+  };
 }
 
 
@@ -136,6 +343,7 @@ export class DashboardService {
 
     // --- Assets ---
     const [
+      tenantSettings,
       assetsTotal,
       assetsByStatusRows,
       assetsByCritRows,
@@ -145,6 +353,42 @@ export class DashboardService {
       [{ count: forkliftsInWarranty } = { count: 0 }],
       assetsInWarrantyByNameRows,
     ] = await Promise.all([
+      this.prisma.tenant.findUnique({
+        where: { id: tenantId },
+        select: {
+          dashboardWorkHoursPerDay: true,
+          dashboardWorkMonday: true,
+          dashboardWorkMondayStartTime: true,
+          dashboardWorkMondayEndTime: true,
+          dashboardWorkMondayMealBreakMinutes: true,
+          dashboardWorkTuesday: true,
+          dashboardWorkTuesdayStartTime: true,
+          dashboardWorkTuesdayEndTime: true,
+          dashboardWorkTuesdayMealBreakMinutes: true,
+          dashboardWorkWednesday: true,
+          dashboardWorkWednesdayStartTime: true,
+          dashboardWorkWednesdayEndTime: true,
+          dashboardWorkWednesdayMealBreakMinutes: true,
+          dashboardWorkThursday: true,
+          dashboardWorkThursdayStartTime: true,
+          dashboardWorkThursdayEndTime: true,
+          dashboardWorkThursdayMealBreakMinutes: true,
+          dashboardWorkFriday: true,
+          dashboardWorkFridayStartTime: true,
+          dashboardWorkFridayEndTime: true,
+          dashboardWorkFridayMealBreakMinutes: true,
+          dashboardWorkSaturday: true,
+          dashboardWorkSaturdayStartTime: true,
+          dashboardWorkSaturdayEndTime: true,
+          dashboardWorkSaturdayMealBreakMinutes: true,
+          dashboardWorkSunday: true,
+          dashboardWorkSundayStartTime: true,
+          dashboardWorkSundayEndTime: true,
+          dashboardWorkSundayMealBreakMinutes: true,
+          dashboardExcludeNonWorkingDates: true,
+          dashboardNonWorkingDates: true,
+        },
+      }),
       this.prisma.asset.count({ where: assetSummaryWhere }),
       this.prisma.asset.groupBy({ by: ['status'], where: assetSummaryWhere, _count: { id: true } }),
       this.prisma.asset.groupBy({ by: ['criticality'], where: assetSummaryWhere, _count: { id: true } }),
@@ -224,6 +468,8 @@ export class DashboardService {
         `
       ),
     ]);
+
+    const dashboardWorkSchedule = resolveDashboardWorkSchedule(tenantSettings);
 
     const assetsByStatus: Record<string, number> = {};
     for (const r of assetsByStatusRows) assetsByStatus[r.status] = r._count.id;
@@ -431,6 +677,55 @@ export class DashboardService {
       }, new Map<string, { month: string; total: number; byServiceType: Array<{ serviceType: string; count: number }> }>())
     ).map(([, value]) => value);
 
+    const technicianCount = await this.prisma.user.count({
+      where: {
+        tenantId,
+        role: 'TECH',
+      },
+    });
+
+    const currentMonth = startOfMonthUTC(to);
+    const availableHoursMonths = Array.from(
+      new Set([
+        ...monthlyServiceOrderTypeSummary.map((row) => row.month),
+        toDateKeyUTC(currentMonth),
+      ]),
+    ).sort((a, b) => b.localeCompare(a));
+
+    const monthlyAvailableHoursSummary = availableHoursMonths
+      .map((month) => {
+        const monthDate = new Date(`${month}T00:00:00.000Z`);
+        if (Number.isNaN(monthDate.getTime())) return null;
+        const monthStart = startOfMonthUTC(monthDate);
+        const monthEnd = addMonthsUTC(monthStart, 1);
+        const workingDays = businessDaysBetweenUTC(
+          monthStart,
+          monthEnd,
+          dashboardWorkSchedule.daysByWeekday,
+          dashboardWorkSchedule.nonWorkingDates,
+        );
+        const availableHoursPerTech = businessHoursBetweenUTC(
+          monthStart,
+          monthEnd,
+          dashboardWorkSchedule.daysByWeekday,
+          dashboardWorkSchedule.nonWorkingDates,
+        );
+        const totalAvailableHours = availableHoursPerTech * technicianCount;
+        const excludedDates = dashboardWorkSchedule.excludeNonWorkingDates
+          ? Array.from(dashboardWorkSchedule.nonWorkingDates).filter((date) => date >= month && date < monthEnd.toISOString().slice(0, 10)).length
+          : 0;
+
+        return {
+          month,
+          workingDays,
+          availableHoursPerTech: round(availableHoursPerTech, 2),
+          technicianCount,
+          totalAvailableHours: round(totalAvailableHours, 2),
+          excludedDates,
+        };
+      })
+      .filter((row): row is NonNullable<typeof row> => Boolean(row));
+
     // Workload por técnico (asignaciones activas en backlog)
     const assignments = await this.prisma.wOAssignment.groupBy({
       by: ['userId'],
@@ -460,13 +755,7 @@ export class DashboardService {
       openAssigned: a._count.id,
     }));
 
-
     // Desempeño por técnico (órdenes cerradas en el rango + horas trabajadas)
-    const round = (n: number, digits = 1) => {
-      const f = Math.pow(10, digits);
-      return Math.round(n * f) / f;
-    };
-
     type TechPerfRow = {
       userId: string;
       name: string;
@@ -565,7 +854,12 @@ export class DashboardService {
 
     const openMap = new Map(technicianWorkload.map(t => [t.userId, t.openAssigned]));
     const overdueMap = new Map(overdueRows.map(r => [r.userId, r.overdueOpen]));
-    const rangeBusinessHours = businessHoursBetweenUTC(from, to, 8);
+    const rangeBusinessHours = businessHoursBetweenUTC(
+      from,
+      to,
+      dashboardWorkSchedule.daysByWeekday,
+      dashboardWorkSchedule.nonWorkingDates,
+    );
 
 
     const technicianPerformance = techPerfRows.map(r => {
@@ -800,7 +1094,12 @@ export class DashboardService {
       const we = addDaysUTC(ws, 7);
       const intFrom = from.getTime() > ws.getTime() ? from : ws;
       const intTo = to.getTime() < we.getTime() ? to : we;
-      const weekBusinessHours = businessHoursBetweenUTC(intFrom, intTo, 8);
+      const weekBusinessHours = businessHoursBetweenUTC(
+        intFrom,
+        intTo,
+        dashboardWorkSchedule.daysByWeekday,
+        dashboardWorkSchedule.nonWorkingDates,
+      );
       const workHours = round((r.workSeconds ?? 0) / 3600, 1);
       const utilizationPct = weekBusinessHours ? round((workHours / weekBusinessHours) * 100, 0) : null;
 
@@ -1620,6 +1919,7 @@ const workTimeByServiceOrderType = typeEffPauseRows.map(r => {
         trendClosed,
         scheduledNegotiationByMonth,
         monthlyServiceOrderTypeSummary,
+        monthlyAvailableHoursSummary,
         technicianWorkload,
         technicianPerformance,
         technicianWeeklyProductivity,
@@ -1630,6 +1930,32 @@ const workTimeByServiceOrderType = typeEffPauseRows.map(r => {
           byTechnician: closedByTechnician,
           byServiceType: closedByTypeRows,
           byTechnicianAndServiceType: closedByTechTypeRows,
+        },
+        dashboardWorkSchedule: {
+          averageHoursPerDay: round(dashboardWorkSchedule.averageHoursPerDay, 2),
+          excludeNonWorkingDates: dashboardWorkSchedule.excludeNonWorkingDates,
+          businessDaysPerWeek: businessDaysBetweenUTC(
+            new Date('2026-01-04T00:00:00.000Z'),
+            new Date('2026-01-11T00:00:00.000Z'),
+            dashboardWorkSchedule.daysByWeekday,
+            dashboardWorkSchedule.nonWorkingDates,
+          ),
+          nonWorkingDates: Array.from(dashboardWorkSchedule.nonWorkingDates).sort(),
+          weekdays: Object.fromEntries(
+            DASHBOARD_DAY_DEFS.map((day) => {
+              const config = dashboardWorkSchedule.daysByWeekday.get(day.dow)!;
+              return [
+                day.key,
+                {
+                  enabled: config.enabled,
+                  startTime: config.startTime,
+                  endTime: config.endTime,
+                  mealBreakMinutes: config.mealBreakMinutes,
+                  hours: round(config.hours, 2),
+                },
+              ];
+            }),
+          ),
         },
         operationalTimes,
         operationalTimesComparisons,

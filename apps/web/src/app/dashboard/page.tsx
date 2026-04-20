@@ -120,6 +120,14 @@ type Summary = {
       total: number;
       byServiceType: Array<{ serviceType: string; count: number }>;
     }>;
+    monthlyAvailableHoursSummary?: Array<{
+      month: string;
+      workingDays: number;
+      availableHoursPerTech: number;
+      technicianCount: number;
+      totalAvailableHours: number;
+      excludedDates: number;
+    }>;
 
     technicianWorkload: Array<{ userId: string; name: string; openAssigned: number }>;
 
@@ -216,6 +224,19 @@ function monthKeyFromValue(value: string | null | undefined) {
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
 }
 
+function formatMonthYearLabel(value: string | null | undefined) {
+  const monthKey = monthKeyFromValue(value);
+  if (!monthKey) return String(value ?? '');
+  const [year, month] = monthKey.split('-').map(Number);
+  const parsed = new Date(Date.UTC(year, (month || 1) - 1, 15, 12, 0, 0));
+  const label = new Intl.DateTimeFormat('es-CO', {
+    month: 'long',
+    year: 'numeric',
+    timeZone: 'UTC',
+  }).format(parsed);
+  return label.charAt(0).toUpperCase() + label.slice(1);
+}
+
 function pctOfScheduled(value: number, scheduled: number) {
   if (!scheduled || !Number.isFinite(value) || !Number.isFinite(scheduled)) return 0;
   return Math.round((value / scheduled) * 100);
@@ -272,6 +293,7 @@ function createBarValueLabel(props: { placement: 'top' | 'center' | 'end'; digit
 }
 
 const TopIntegerBarLabel = createBarValueLabel({ placement: 'top', digits: 0 });
+const TopDecimalBarLabel = createBarValueLabel({ placement: 'top', digits: 2 });
 const EndIntegerBarLabel = createBarValueLabel({ placement: 'end', digits: 0 });
 const EndDecimalBarLabel = createBarValueLabel({ placement: 'end', digits: 2 });
 const CenterIntegerBarLabel = createBarValueLabel({ placement: 'center', digits: 0, fill: '#ffffff' });
@@ -560,6 +582,7 @@ export default function Dashboard() {
 
   const closedSummary = data?.service.closedOrdersSummary;
   const monthlyServiceOrderTypeSummary = data?.service.monthlyServiceOrderTypeSummary ?? [];
+  const monthlyAvailableHoursSummary = data?.service.monthlyAvailableHoursSummary ?? [];
 
   const monthlyServiceOrderTypeColumns = useMemo(() => {
     const keys = new Set<string>();
@@ -578,18 +601,25 @@ export default function Dashboard() {
           acc[serviceTypeLabel(row.serviceType)] = row.count;
           return acc;
         }, {});
-        const parsed = new Date(month.month);
-        const label = Number.isNaN(parsed.getTime())
-          ? month.month
-          : new Intl.DateTimeFormat('es-CO', { month: 'long', year: 'numeric' }).format(parsed);
         return {
           month: month.month,
-          monthLabel: label.charAt(0).toUpperCase() + label.slice(1),
+          monthLabel: formatMonthYearLabel(month.month),
           total: month.total,
           counts,
         };
       }),
     [monthlyServiceOrderTypeSummary]
+  );
+
+  const monthlyAvailableHoursRows = useMemo(
+    () =>
+      monthlyAvailableHoursSummary.map((row) => {
+        return {
+          ...row,
+          monthLabel: formatMonthYearLabel(row.month),
+        };
+      }),
+    [monthlyAvailableHoursSummary]
   );
 
   const closedByTechnicianChart = useMemo(
@@ -1039,6 +1069,86 @@ export default function Dashboard() {
             <StatCard title="Cerradas en rango" value={isLoading ? '—' : data?.service.closedInRange ?? 0} />
             <StatCard title="MTTR (horas)" value={isLoading ? '—' : (data?.service.mttrHours ?? '—')} hint="Promedio cierre (rango)" />
           </div>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Resumen mensual de horas disponibles</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {isLoading ? (
+                <div className="text-sm text-neutral-500">Cargando...</div>
+              ) : monthlyAvailableHoursRows.length === 0 ? (
+                <div className="text-sm text-neutral-500">Sin datos</div>
+              ) : (
+                <>
+                  <div className="rounded-md border p-4">
+                    <div className="text-sm font-medium text-neutral-900">Histórico mensual de horas disponibles</div>
+                    <div className="text-xs text-neutral-500">
+                      Calculado con la jornada configurada del dashboard. Incluye horas por técnico y total del equipo usando la cantidad actual de técnicos del tenant.
+                    </div>
+                  </div>
+
+                  <div className="h-[320px]">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <ComposedChart data={[...monthlyAvailableHoursRows].reverse()} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis dataKey="monthLabel" />
+                        <YAxis yAxisId="left" tickLine={false} axisLine={false} />
+                        <YAxis yAxisId="right" orientation="right" tickLine={false} axisLine={false} allowDecimals={false} />
+                        <Tooltip
+                          formatter={(value: any, name: any) => {
+                            if (name === 'Días laborables') return [value, name];
+                            return [fmtFixed(value, 2), name];
+                          }}
+                        />
+                        <Legend />
+                        <Bar yAxisId="left" dataKey="totalAvailableHours" name="Horas totales disponibles" fill="#0f766e" radius={[4, 4, 0, 0]}>
+                          <LabelList dataKey="totalAvailableHours" content={<TopDecimalBarLabel />} />
+                        </Bar>
+                        <Line yAxisId="left" type="monotone" dataKey="availableHoursPerTech" name="Horas por técnico" stroke="#2563eb" strokeWidth={2} />
+                        <Line yAxisId="right" type="monotone" dataKey="workingDays" name="Días laborables" stroke="#ea580c" strokeWidth={2} />
+                      </ComposedChart>
+                    </ResponsiveContainer>
+                  </div>
+
+                  <div className="rounded-md border">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Mes</TableHead>
+                          <TableHead className="text-right">Días laborables</TableHead>
+                          <TableHead className="text-right">Horas por técnico</TableHead>
+                          <TableHead className="text-right">Técnicos</TableHead>
+                          <TableHead className="text-right">Horas totales</TableHead>
+                          <TableHead className="text-right">Fechas descontadas</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {monthlyAvailableHoursRows.map((row) => (
+                          <TableRow key={row.month}>
+                            <TableCell className="font-medium">{row.monthLabel}</TableCell>
+                            <TableCell className="text-right">
+                              <Badge variant="secondary">{row.workingDays}</Badge>
+                            </TableCell>
+                            <TableCell className="text-right">{fmtFixed(row.availableHoursPerTech, 2)}</TableCell>
+                            <TableCell className="text-right">
+                              <Badge variant="secondary">{row.technicianCount}</Badge>
+                            </TableCell>
+                            <TableCell className="text-right">
+                              <Badge>{fmtFixed(row.totalAvailableHours, 2)}</Badge>
+                            </TableCell>
+                            <TableCell className="text-right">
+                              <Badge variant="outline">{row.excludedDates}</Badge>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </>
+              )}
+            </CardContent>
+          </Card>
 
           <Card>
             <CardHeader>
