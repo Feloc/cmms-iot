@@ -2417,14 +2417,15 @@ const workTimeByServiceOrderType = typeEffPauseRows.map(r => {
         </tr>
       `;
     }).join('');
-    const weeklyTotals = selectedWeeklyRows.reduce<{ closed: number; hours: number; available: number }>(
-      (acc, row: any) => {
+    const weeklyTotalsSeed: { closed: number; hours: number; available: number } = { closed: 0, hours: 0, available: 0 };
+    const weeklyTotals = selectedWeeklyRows.reduce(
+      (acc: { closed: number; hours: number; available: number }, row: any) => {
         acc.closed += Number(row.closedCount ?? 0);
         acc.hours += Number(row.workHours ?? 0);
         acc.available += Number(row.availableHours ?? 0);
         return acc;
       },
-      { closed: 0, hours: 0, available: 0 },
+      weeklyTotalsSeed,
     );
     const weeklyUtilization = weeklyTotals.available > 0 ? (weeklyTotals.hours / weeklyTotals.available) * 100 : null;
     const weeklyHoursPerClosed = weeklyTotals.closed > 0 ? weeklyTotals.hours / weeklyTotals.closed : null;
