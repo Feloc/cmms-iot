@@ -4,7 +4,7 @@ import Link from 'next/link';
 import useSWR from 'swr';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useSession } from 'next-auth/react';
-import { apiFetch } from '@/lib/api';
+import { apiBase, apiFetch } from '@/lib/api';
 import { format } from 'date-fns';
 
 import {
@@ -26,6 +26,14 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 
 type OperationalTimeRow = {
   key: 'travel' | 'intake' | 'handover' | 'onsite' | 'wrapup' | 'total';
@@ -88,6 +96,11 @@ type ScheduledNegotiationChartRow = {
 };
 
 type Summary = {
+  tenant?: {
+    name?: string | null;
+    legalName?: string | null;
+    logoUrl?: string | null;
+  };
   range: { from: string; to: string; days: number };
 
   assets: {
@@ -172,6 +185,12 @@ type Summary = {
       dailyTotal: number;
       weeklyTotal: number;
     }>;
+    technicianTypeAveragesBasis?: {
+      availableHoursInRange: number;
+      equivalentWorkDays: number;
+      equivalentWorkWeeks: number;
+      configuredWeeklyHours: number;
+    };
 
     closedOrdersSummary?: {
       byTechnician: Array<{ userId: string; name: string; closedCount: number }>;
@@ -183,6 +202,32 @@ type Summary = {
     operationalTimesComparisons?: OperationalTimesComparisons;
   };
 };
+
+const DASHBOARD_PDF_SECTION_OPTIONS = {
+  assets: [
+    { id: 'asset-status-criticality', label: 'Estados y criticidad' },
+    { id: 'asset-top-open', label: 'Top activos con OS abiertas' },
+    { id: 'asset-warranty-by-name', label: 'Equipos en garantía por name' },
+    { id: 'asset-negotiation-summary', label: 'Resumen de negociación' },
+    { id: 'asset-negotiation-table', label: 'Tabla de negociación por mes' },
+  ],
+  service: [
+    { id: 'service-monthly-hours', label: 'Resumen mensual de horas disponibles' },
+    { id: 'service-monthly-types', label: 'Resumen mensual por tipo de OS' },
+    { id: 'service-backlog-workload', label: 'Backlog y carga por técnico' },
+    { id: 'service-closed-summary', label: 'Resumen de cierres por rango' },
+    { id: 'service-averages', label: 'Promedio diario y semanal por técnico' },
+    { id: 'service-operational-times', label: 'Tiempos operativos' },
+    { id: 'service-operational-comparisons', label: 'Comparativos por tramo' },
+    { id: 'service-performance', label: 'Desempeño por técnico' },
+    { id: 'service-weekly-productivity', label: 'Productividad semanal por técnico' },
+  ],
+} as const;
+
+const DEFAULT_DASHBOARD_PDF_SECTIONS = {
+  assets: DASHBOARD_PDF_SECTION_OPTIONS.assets.map((section) => section.id),
+  service: DASHBOARD_PDF_SECTION_OPTIONS.service.map((section) => section.id),
+} as const;
 
 
 function HelpTip(props: { text: string }) {
@@ -393,11 +438,18 @@ export default function Dashboard() {
   const [appliedRange, setAppliedRange] = useState<{ days?: string; from?: string; to?: string }>({ days: '30' });
   const [customFrom, setCustomFrom] = useState('');
   const [customTo, setCustomTo] = useState('');
+  const [activeTab, setActiveTab] = useState<'assets' | 'service'>('assets');
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
+  const [exportPdfError, setExportPdfError] = useState('');
   const [selectedTechId, setSelectedTechId] = useState<string>('');
   const [selectedNegotiationMonth, setSelectedNegotiationMonth] = useState<string>('all');
   const [opDim, setOpDim] = useState<'TECHNICIAN' | 'TYPE' | 'CUSTOMER' | 'LOCATION'>('TECHNICIAN');
   const [opMetric, setOpMetric] = useState<'avg' | 'p50' | 'p90'>('p90');
   const [opSegment, setOpSegment] = useState<'travel' | 'intake' | 'handover' | 'onsite' | 'wrapup' | 'total'>('total');
+  const [pdfSectionsByTab, setPdfSectionsByTab] = useState<Record<'assets' | 'service', string[]>>({
+    assets: [...DEFAULT_DASHBOARD_PDF_SECTIONS.assets],
+    service: [...DEFAULT_DASHBOARD_PDF_SECTIONS.service],
+  });
 
   type DashboardKey = readonly [string, string, string];
   type NegotiationMonthsKey = readonly [string, string, string];
@@ -579,6 +631,7 @@ export default function Dashboard() {
     () => Math.max(300, technicianTypeAverageChart.length * 52),
     [technicianTypeAverageChart.length]
   );
+  const technicianTypeAveragesBasis = data?.service.technicianTypeAveragesBasis;
 
   const closedSummary = data?.service.closedOrdersSummary;
   const monthlyServiceOrderTypeSummary = data?.service.monthlyServiceOrderTypeSummary ?? [];
@@ -746,6 +799,90 @@ export default function Dashboard() {
     [visibleScheduledNegotiationChart]
   );
 
+  const activePdfSectionOptions = DASHBOARD_PDF_SECTION_OPTIONS[activeTab];
+  const activePdfSections = pdfSectionsByTab[activeTab];
+  const allActivePdfSectionsSelected = activePdfSections.length === activePdfSectionOptions.length;
+
+  function togglePdfSection(tab: 'assets' | 'service', sectionId: string, checked: boolean) {
+    setPdfSectionsByTab((current) => {
+      const next = new Set(current[tab]);
+      if (checked) next.add(sectionId);
+      else next.delete(sectionId);
+      return {
+        ...current,
+        [tab]: DASHBOARD_PDF_SECTION_OPTIONS[tab]
+          .map((section) => section.id)
+          .filter((id) => next.has(id)),
+      };
+    });
+  }
+
+  function setAllPdfSections(tab: 'assets' | 'service', checked: boolean) {
+    setPdfSectionsByTab((current) => ({
+      ...current,
+      [tab]: checked ? [...DEFAULT_DASHBOARD_PDF_SECTIONS[tab]] : [],
+    }));
+  }
+
+  function handleExportPdf() {
+    if (typeof window === 'undefined' || !token || !tenantSlug) return;
+    if (!activePdfSections.length) {
+      setExportPdfError('Selecciona al menos una sección para exportar.');
+      return;
+    }
+
+    const qs = new URLSearchParams();
+    if (appliedRange.from && appliedRange.to) {
+      qs.set('from', appliedRange.from);
+      qs.set('to', appliedRange.to);
+    } else {
+      qs.set('days', appliedRange.days || '30');
+    }
+    qs.set('tab', activeTab);
+    qs.set('sections', activePdfSections.join(','));
+    if (selectedTechId) qs.set('selectedTechId', selectedTechId);
+    if (selectedNegotiationMonth) qs.set('selectedNegotiationMonth', selectedNegotiationMonth);
+    if (opDim) qs.set('opDim', opDim);
+    if (opMetric) qs.set('opMetric', opMetric);
+    if (opSegment) qs.set('opSegment', opSegment);
+
+    setIsExportingPdf(true);
+    setExportPdfError('');
+
+    fetch(`${apiBase}/dashboard/summary/pdf?${qs.toString()}`, {
+      method: 'GET',
+      headers: {
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(tenantSlug ? { 'x-tenant': tenantSlug } : {}),
+      },
+    })
+      .then(async (res) => {
+        if (!res.ok) {
+          const text = await res.text().catch(() => '');
+          throw new Error(text || `Error ${res.status} exportando PDF`);
+        }
+
+        const blob = await res.blob();
+        const disposition = res.headers.get('content-disposition') || '';
+        const filenameMatch = disposition.match(/filename=\"?([^\";]+)\"?/i);
+        const filename = filenameMatch?.[1] || `dashboard-${activeTab}.pdf`;
+        const blobUrl = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = blobUrl;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        window.URL.revokeObjectURL(blobUrl);
+      })
+      .catch((err: any) => {
+        setExportPdfError(err?.message || 'No se pudo exportar el PDF.');
+      })
+      .finally(() => {
+        setIsExportingPdf(false);
+      });
+  }
+
   return (
     <div className="p-6 space-y-6">
       <div className="flex items-start justify-between gap-4">
@@ -755,6 +892,39 @@ export default function Dashboard() {
         </div>
 
         <div className="flex items-center gap-3">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="sm">
+                Secciones PDF ({activePdfSections.length}/{activePdfSectionOptions.length})
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-[320px]">
+              <DropdownMenuLabel>Secciones a incluir</DropdownMenuLabel>
+              <div className="px-2 pb-2 text-xs text-neutral-500">
+                Aplica a la pestaña actual. Encabezado y parámetros del reporte siempre se incluyen.
+              </div>
+              <DropdownMenuSeparator />
+              <DropdownMenuCheckboxItem
+                checked={allActivePdfSectionsSelected}
+                onCheckedChange={(checked) => setAllPdfSections(activeTab, checked === true)}
+              >
+                Seleccionar todo
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuSeparator />
+              {activePdfSectionOptions.map((section) => (
+                <DropdownMenuCheckboxItem
+                  key={section.id}
+                  checked={activePdfSections.includes(section.id)}
+                  onCheckedChange={(checked) => togglePdfSection(activeTab, section.id, checked === true)}
+                >
+                  {section.label}
+                </DropdownMenuCheckboxItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <Button variant="outline" size="sm" onClick={handleExportPdf} disabled={isExportingPdf || !token || !tenantSlug || activePdfSections.length === 0}>
+            {isExportingPdf ? 'Exportando PDF…' : 'Exportar PDF'}
+          </Button>
           <div className="text-xs text-neutral-500">{rangeLabel}</div>
           <Select value={rangePreset} onValueChange={(v: any) => onPresetChange(v)}>
             <SelectTrigger className="w-[220px]">
@@ -796,6 +966,14 @@ export default function Dashboard() {
         </div>
       </div>
 
+      {exportPdfError ? (
+        <Card>
+          <CardContent className="p-4 text-sm text-red-600">
+            Error exportando PDF: {exportPdfError}
+          </CardContent>
+        </Card>
+      ) : null}
+
       {rangePreset === 'custom' && customRangeError ? (
         <Card>
           <CardContent className="p-3 text-sm text-amber-700">{customRangeError}</CardContent>
@@ -810,7 +988,7 @@ export default function Dashboard() {
         </Card>
       ) : null}
 
-      <Tabs defaultValue="assets" className="space-y-4">
+      <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as 'assets' | 'service')} className="space-y-4">
         <TabsList>
           <TabsTrigger value="assets">Gestión de activos</TabsTrigger>
           <TabsTrigger value="service">Gestión de servicio técnico</TabsTrigger>
@@ -1382,6 +1560,25 @@ export default function Dashboard() {
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
+              {technicianTypeAveragesBasis ? (
+                <div className="rounded-md border p-4">
+                  <div className="text-sm font-medium text-neutral-900">Base usada para el cálculo</div>
+                  <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-3">
+                    <div className="rounded-md border bg-white px-3 py-2">
+                      <div className="text-xs text-neutral-500">Horas disponibles del rango</div>
+                      <div className="text-lg font-semibold text-neutral-900">{fmtFixed(technicianTypeAveragesBasis.availableHoursInRange, 2)} h</div>
+                    </div>
+                    <div className="rounded-md border bg-white px-3 py-2">
+                      <div className="text-xs text-neutral-500">Equivalente en días laborables</div>
+                      <div className="text-lg font-semibold text-neutral-900">{fmtFixed(technicianTypeAveragesBasis.equivalentWorkDays, 2)}</div>
+                    </div>
+                    <div className="rounded-md border bg-white px-3 py-2">
+                      <div className="text-xs text-neutral-500">Equivalente en semanas laborables</div>
+                      <div className="text-lg font-semibold text-neutral-900">{fmtFixed(technicianTypeAveragesBasis.equivalentWorkWeeks, 2)}</div>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
               {!technicianTypeAverageChart.length ? (
                 <div className="text-sm text-neutral-500">Sin datos</div>
               ) : (

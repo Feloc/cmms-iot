@@ -1,6 +1,7 @@
-import { Controller, Get, Query } from '@nestjs/common';
+import { Controller, Get, Query, Res } from '@nestjs/common';
 import { DashboardService } from './dashboard.service';
 import { getTenant } from '../../common/tenant-context';
+import type { Response } from 'express';
 
 @Controller('dashboard')
 export class DashboardController {
@@ -36,5 +37,44 @@ export class DashboardController {
       from,
       to,
     });
+  }
+
+  @Get('summary/pdf')
+  async summaryPdf(
+    @Query('days') days: string | undefined,
+    @Query('from') from: string | undefined,
+    @Query('to') to: string | undefined,
+    @Query('tab') tab: string | undefined,
+    @Query('sections') sections: string | undefined,
+    @Query('selectedTechId') selectedTechId: string | undefined,
+    @Query('selectedNegotiationMonth') selectedNegotiationMonth: string | undefined,
+    @Query('opDim') opDim: string | undefined,
+    @Query('opMetric') opMetric: string | undefined,
+    @Query('opSegment') opSegment: string | undefined,
+    @Res() res: Response,
+  ) {
+    const tenantId = getTenant();
+    if (!tenantId) {
+      res.status(400).send('No tenant in context');
+      return;
+    }
+
+    const parsedDays = days ? Number(days) : undefined;
+    const file = await this.svc.exportSummaryPdf({
+      tenantId,
+      days: Number.isFinite(parsedDays) ? parsedDays : undefined,
+      from,
+      to,
+      tab,
+      sections,
+      selectedTechId,
+      selectedNegotiationMonth,
+      opDim,
+      opMetric,
+      opSegment,
+    });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${file.filename}"`);
+    res.send(file.buffer);
   }
 }
