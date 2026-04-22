@@ -2417,7 +2417,7 @@ const workTimeByServiceOrderType = typeEffPauseRows.map(r => {
         </tr>
       `;
     }).join('');
-    const weeklyTotals = selectedWeeklyRows.reduce(
+    const weeklyTotals = selectedWeeklyRows.reduce<{ closed: number; hours: number; available: number }>(
       (acc, row: any) => {
         acc.closed += Number(row.closedCount ?? 0);
         acc.hours += Number(row.workHours ?? 0);
