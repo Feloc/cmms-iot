@@ -141,6 +141,14 @@ type Summary = {
       totalAvailableHours: number;
       excludedDates: number;
     }>;
+    pmPlanDurationAverages?: Array<{
+      pmPlanId: string;
+      name: string;
+      defaultDurationMin: number | null;
+      completedCount: number;
+      avgDurationMin: number | null;
+      p50DurationMin: number | null;
+    }>;
 
     technicianWorkload: Array<{ userId: string; name: string; openAssigned: number }>;
 
@@ -197,14 +205,18 @@ type Summary = {
       byServiceType: Array<{ serviceType: string; closedCount: number }>;
       byTechnicianAndServiceType: Array<{ userId: string; name: string; serviceType: string; closedCount: number }>;
     };
+    closedOrdersByEquipmentType?: Array<{ equipmentType: string; closedCount: number }>;
 
     operationalTimes: OperationalTimeRow[];
     operationalTimesComparisons?: OperationalTimesComparisons;
   };
 };
 
+type DashboardPdfChartImages = Record<string, string[]>;
+
 const DASHBOARD_PDF_SECTION_OPTIONS = {
   assets: [
+    { id: 'asset-summary-badges', label: 'Indicadores superiores' },
     { id: 'asset-status-criticality', label: 'Estados y criticidad' },
     { id: 'asset-top-open', label: 'Top activos con OS abiertas' },
     { id: 'asset-warranty-by-name', label: 'Equipos en garantía por name' },
@@ -212,10 +224,13 @@ const DASHBOARD_PDF_SECTION_OPTIONS = {
     { id: 'asset-negotiation-table', label: 'Tabla de negociación por mes' },
   ],
   service: [
+    { id: 'service-summary-badges', label: 'Indicadores superiores' },
     { id: 'service-monthly-hours', label: 'Resumen mensual de horas disponibles' },
     { id: 'service-monthly-types', label: 'Resumen mensual por tipo de OS' },
+    { id: 'service-pm-plan-durations', label: 'Promedio histórico por PM Plan' },
     { id: 'service-backlog-workload', label: 'Backlog y carga por técnico' },
     { id: 'service-closed-summary', label: 'Resumen de cierres por rango' },
+    { id: 'service-equipment-types', label: 'OS completadas por tipo de equipo' },
     { id: 'service-averages', label: 'Promedio diario y semanal por técnico' },
     { id: 'service-operational-times', label: 'Tiempos operativos' },
     { id: 'service-operational-comparisons', label: 'Comparativos por tramo' },
@@ -245,6 +260,67 @@ function HelpTip(props: { text: string }) {
 function fmtHours(n: number | null | undefined) {
   if (n == null || Number.isNaN(n)) return '—';
   return n.toFixed(2);
+}
+
+function svgToPdfDataUrl(svg: SVGSVGElement) {
+  if (typeof window === 'undefined') return null;
+  const clone = svg.cloneNode(true);
+  if (!(clone instanceof SVGSVGElement)) return null;
+
+  const bounds = svg.getBoundingClientRect();
+  const width = Math.max(Math.round(bounds.width || Number(svg.getAttribute('width')) || 0), 1);
+  const height = Math.max(Math.round(bounds.height || Number(svg.getAttribute('height')) || 0), 1);
+
+  clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+  clone.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink');
+  clone.setAttribute('width', String(width));
+  clone.setAttribute('height', String(height));
+  if (!clone.getAttribute('viewBox')) {
+    clone.setAttribute('viewBox', `0 0 ${width} ${height}`);
+  }
+
+  const markup = new XMLSerializer().serializeToString(clone);
+  const bytes = new TextEncoder().encode(markup);
+  let binary = '';
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte);
+  });
+  return `data:image/svg+xml;base64,${window.btoa(binary)}`;
+}
+
+function collectDashboardPdfCharts(sectionIds: string[]): DashboardPdfChartImages {
+  if (typeof document === 'undefined') return {};
+  const selectedIds = new Set(sectionIds);
+  const chartImages: DashboardPdfChartImages = {};
+  const containers = Array.from(document.querySelectorAll<HTMLElement>('[data-pdf-section-ids]'));
+
+  containers.forEach((container) => {
+    const ids = String(container.dataset.pdfSectionIds ?? '')
+      .split(/\s+/)
+      .map((value) => value.trim())
+      .filter((value) => value && selectedIds.has(value));
+    if (!ids.length) return;
+
+    const images = Array.from(container.querySelectorAll<HTMLElement>('.recharts-wrapper'))
+      .map((wrapper) => {
+        const bounds = wrapper.getBoundingClientRect();
+        if (bounds.width < 160 || bounds.height < 120) return null;
+
+        const svg = Array.from(wrapper.children).find((child): child is SVGSVGElement => (
+          child instanceof SVGSVGElement && child.classList.contains('recharts-surface')
+        ));
+        if (!svg) return null;
+        return svgToPdfDataUrl(svg);
+      })
+      .filter((value): value is string => Boolean(value));
+    if (!images.length) return;
+
+    ids.forEach((id) => {
+      chartImages[id] = Array.from(new Set(images));
+    });
+  });
+
+  return chartImages;
 }
 
 function fmtFixed(value: unknown, digits: number) {
@@ -634,8 +710,10 @@ export default function Dashboard() {
   const technicianTypeAveragesBasis = data?.service.technicianTypeAveragesBasis;
 
   const closedSummary = data?.service.closedOrdersSummary;
+  const closedByEquipmentTypeSummary = data?.service.closedOrdersByEquipmentType ?? [];
   const monthlyServiceOrderTypeSummary = data?.service.monthlyServiceOrderTypeSummary ?? [];
   const monthlyAvailableHoursSummary = data?.service.monthlyAvailableHoursSummary ?? [];
+  const pmPlanDurationAverages = data?.service.pmPlanDurationAverages ?? [];
 
   const monthlyServiceOrderTypeColumns = useMemo(() => {
     const keys = new Set<string>();
@@ -675,6 +753,17 @@ export default function Dashboard() {
     [monthlyAvailableHoursSummary]
   );
 
+  const pmPlanDurationRows = useMemo(
+    () =>
+      pmPlanDurationAverages.map((row) => ({
+        ...row,
+        avgDurationHours: row.avgDurationMin == null ? null : row.avgDurationMin / 60,
+        p50DurationHours: row.p50DurationMin == null ? null : row.p50DurationMin / 60,
+        defaultDurationHours: row.defaultDurationMin == null ? null : row.defaultDurationMin / 60,
+      })),
+    [pmPlanDurationAverages]
+  );
+
   const closedByTechnicianChart = useMemo(
     () =>
       (closedSummary?.byTechnician ?? [])
@@ -690,6 +779,15 @@ export default function Dashboard() {
         closed: r.closedCount,
       })),
     [closedSummary?.byServiceType]
+  );
+
+  const closedByEquipmentTypeChart = useMemo(
+    () =>
+      closedByEquipmentTypeSummary.map((row) => ({
+        equipmentType: row.equipmentType || '(sin tipo)',
+        closed: row.closedCount ?? 0,
+      })),
+    [closedByEquipmentTypeSummary]
   );
 
   const closedStackKeys = useMemo(() => {
@@ -824,63 +922,59 @@ export default function Dashboard() {
     }));
   }
 
-  function handleExportPdf() {
+  async function handleExportPdf() {
     if (typeof window === 'undefined' || !token || !tenantSlug) return;
     if (!activePdfSections.length) {
       setExportPdfError('Selecciona al menos una sección para exportar.');
       return;
     }
 
-    const qs = new URLSearchParams();
-    if (appliedRange.from && appliedRange.to) {
-      qs.set('from', appliedRange.from);
-      qs.set('to', appliedRange.to);
-    } else {
-      qs.set('days', appliedRange.days || '30');
-    }
-    qs.set('tab', activeTab);
-    qs.set('sections', activePdfSections.join(','));
-    if (selectedTechId) qs.set('selectedTechId', selectedTechId);
-    if (selectedNegotiationMonth) qs.set('selectedNegotiationMonth', selectedNegotiationMonth);
-    if (opDim) qs.set('opDim', opDim);
-    if (opMetric) qs.set('opMetric', opMetric);
-    if (opSegment) qs.set('opSegment', opSegment);
-
     setIsExportingPdf(true);
     setExportPdfError('');
-
-    fetch(`${apiBase}/dashboard/summary/pdf?${qs.toString()}`, {
-      method: 'GET',
-      headers: {
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        ...(tenantSlug ? { 'x-tenant': tenantSlug } : {}),
-      },
-    })
-      .then(async (res) => {
-        if (!res.ok) {
-          const text = await res.text().catch(() => '');
-          throw new Error(text || `Error ${res.status} exportando PDF`);
-        }
-
-        const blob = await res.blob();
-        const disposition = res.headers.get('content-disposition') || '';
-        const filenameMatch = disposition.match(/filename=\"?([^\";]+)\"?/i);
-        const filename = filenameMatch?.[1] || `dashboard-${activeTab}.pdf`;
-        const blobUrl = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = blobUrl;
-        a.download = filename;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        window.URL.revokeObjectURL(blobUrl);
-      })
-      .catch((err: any) => {
-        setExportPdfError(err?.message || 'No se pudo exportar el PDF.');
-      })
-      .finally(() => {
-        setIsExportingPdf(false);
+    try {
+      const res = await fetch(`${apiBase}/dashboard/summary/pdf`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          ...(tenantSlug ? { 'x-tenant': tenantSlug } : {}),
+        },
+        body: JSON.stringify({
+          ...(appliedRange.from && appliedRange.to
+            ? { from: appliedRange.from, to: appliedRange.to }
+            : { days: appliedRange.days || '30' }),
+          tab: activeTab,
+          sections: activePdfSections.join(','),
+          selectedTechId: selectedTechId || undefined,
+          selectedNegotiationMonth: selectedNegotiationMonth || undefined,
+          opDim: opDim || undefined,
+          opMetric: opMetric || undefined,
+          opSegment: opSegment || undefined,
+          chartImages: collectDashboardPdfCharts(activePdfSections),
+        }),
       });
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        throw new Error(text || `Error ${res.status} exportando PDF`);
+      }
+
+      const blob = await res.blob();
+      const disposition = res.headers.get('content-disposition') || '';
+      const filenameMatch = disposition.match(/filename=\"?([^\";]+)\"?/i);
+      const filename = filenameMatch?.[1] || `dashboard-${activeTab}.pdf`;
+      const blobUrl = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(blobUrl);
+    } catch (err: any) {
+      setExportPdfError(err?.message || 'No se pudo exportar el PDF.');
+    } finally {
+      setIsExportingPdf(false);
+    }
   }
 
   return (
@@ -1100,7 +1194,7 @@ export default function Dashboard() {
             </Card>
           </div>
 
-          <Card>
+          <Card data-pdf-section-ids="asset-negotiation-summary asset-negotiation-table">
             <CardHeader className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
               <CardTitle className="text-base flex items-center">
                 Negociación de OS programadas y preventivos completados por mes
@@ -1248,7 +1342,7 @@ export default function Dashboard() {
             <StatCard title="MTTR (horas)" value={isLoading ? '—' : (data?.service.mttrHours ?? '—')} hint="Promedio cierre (rango)" />
           </div>
 
-          <Card>
+          <Card data-pdf-section-ids="service-monthly-hours">
             <CardHeader>
               <CardTitle className="text-base">Resumen mensual de horas disponibles</CardTitle>
             </CardHeader>
@@ -1328,7 +1422,7 @@ export default function Dashboard() {
             </CardContent>
           </Card>
 
-          <Card>
+          <Card data-pdf-section-ids="service-monthly-types">
             <CardHeader>
               <CardTitle className="text-base">Resumen mensual por tipo de OS</CardTitle>
             </CardHeader>
@@ -1379,7 +1473,81 @@ export default function Dashboard() {
             </CardContent>
           </Card>
 
-          <Card>
+          <Card data-pdf-section-ids="service-pm-plan-durations">
+            <CardHeader>
+              <CardTitle className="text-base">Promedio histórico de duración por PM Plan</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {isLoading ? (
+                <div className="text-sm text-neutral-500">Cargando...</div>
+              ) : pmPlanDurationRows.length === 0 ? (
+                <div className="text-sm text-neutral-500">Sin datos</div>
+              ) : (
+                <>
+                  <div className="rounded-md border p-4">
+                    <div className="text-sm font-medium text-neutral-900">Todas las OS preventivas completadas, sin depender del rango</div>
+                    <div className="text-xs text-neutral-500">
+                      Promedio real por plan PM, priorizando el tiempo de ejecución entre inicio y fin de actividad. Si faltan esos timestamps, se usan otros datos de cierre disponibles.
+                    </div>
+                  </div>
+
+                  <div className="rounded-md border p-3">
+                    <div className="text-sm font-medium mb-2">Promedio real por PM Plan (horas)</div>
+                    <div style={{ height: Math.max(320, pmPlanDurationRows.length * 56) }}>
+                      <ResponsiveContainer width="100%" height="100%">
+                        <ComposedChart
+                          data={pmPlanDurationRows}
+                          layout="vertical"
+                          margin={{ top: 6, right: 18, left: 18, bottom: 6 }}
+                        >
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis type="number" tickLine={false} axisLine={false} />
+                          <YAxis type="category" dataKey="name" width={210} interval={0} tickLine={false} axisLine={false} />
+                          <Tooltip
+                            formatter={(value: any, name: any) => [fmtFixed(value, 2), name]}
+                          />
+                          <Legend />
+                          <Bar dataKey="avgDurationHours" name="Promedio real (h)" fill="#0f766e" radius={[0, 4, 4, 0]}>
+                            <LabelList dataKey="avgDurationHours" content={<EndDecimalBarLabel />} />
+                          </Bar>
+                          <Line type="monotone" dataKey="defaultDurationHours" name="Configurado (h)" stroke="#ea580c" strokeWidth={2} />
+                        </ComposedChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+
+                  <div className="rounded-md border">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>PM Plan</TableHead>
+                          <TableHead className="text-right">OS completadas</TableHead>
+                          <TableHead className="text-right">Promedio real (h)</TableHead>
+                          <TableHead className="text-right">Mediana (h)</TableHead>
+                          <TableHead className="text-right">Configurado (h)</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {pmPlanDurationRows.map((row) => (
+                          <TableRow key={row.pmPlanId}>
+                            <TableCell className="font-medium">{row.name}</TableCell>
+                            <TableCell className="text-right">
+                              <Badge variant="secondary">{row.completedCount}</Badge>
+                            </TableCell>
+                            <TableCell className="text-right">{fmtFixed(row.avgDurationHours, 2)}</TableCell>
+                            <TableCell className="text-right">{fmtFixed(row.p50DurationHours, 2)}</TableCell>
+                            <TableCell className="text-right">{fmtFixed(row.defaultDurationHours, 2)}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card data-pdf-section-ids="service-closed-summary">
             <CardHeader>
               <CardTitle className="text-base">Resumen de cierres por rango</CardTitle>
             </CardHeader>
@@ -1552,7 +1720,71 @@ export default function Dashboard() {
             </CardContent>
           </Card>
 
-          <Card>
+          <Card data-pdf-section-ids="service-equipment-types">
+            <CardHeader>
+              <CardTitle className="text-base">OS completadas por tipo de equipo</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {!closedByEquipmentTypeChart.length ? (
+                <div className="text-sm text-neutral-500">Sin datos</div>
+              ) : (
+                <>
+                  <div className="rounded-md border p-4">
+                    <div className="text-sm font-medium text-neutral-900">Órdenes completadas/cerradas en el rango por clase de equipo</div>
+                    <div className="text-xs text-neutral-500">
+                      Se agrupa usando el nombre, modelo y marca del activo para identificar montacargas, apiladores y estibadores.
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                    <div className="rounded-md border p-3">
+                      <div className="text-sm font-medium mb-2">Distribución por tipo de equipo</div>
+                      <div className="h-[320px]">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <ComposedChart
+                            data={closedByEquipmentTypeChart}
+                            layout="vertical"
+                            margin={{ top: 6, right: 14, left: 18, bottom: 6 }}
+                          >
+                            <CartesianGrid strokeDasharray="3 3" />
+                            <XAxis type="number" allowDecimals={false} />
+                            <YAxis type="category" dataKey="equipmentType" width={170} interval={0} />
+                            <Tooltip formatter={(v: any) => [v, 'Cerradas']} />
+                            <Bar dataKey="closed" name="Cerradas" fill="#0f766e" radius={[0, 4, 4, 0]}>
+                              <LabelList dataKey="closed" content={<EndIntegerBarLabel />} />
+                            </Bar>
+                          </ComposedChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </div>
+
+                    <div className="rounded-md border">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Tipo de equipo</TableHead>
+                            <TableHead className="text-right">OS cerradas</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {closedByEquipmentTypeSummary.map((row) => (
+                            <TableRow key={row.equipmentType}>
+                              <TableCell className="font-medium">{row.equipmentType || '(sin tipo)'}</TableCell>
+                              <TableCell className="text-right">
+                                <Badge variant="secondary">{row.closedCount}</Badge>
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  </div>
+                </>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card data-pdf-section-ids="service-averages">
             <CardHeader>
               <CardTitle className="text-base flex items-center">
                 Promedio diario y semanal por técnico
@@ -1740,7 +1972,7 @@ export default function Dashboard() {
             </Card>
           </div>
 
-          <Card>
+          <Card data-pdf-section-ids="service-weekly-productivity">
             <CardHeader>
               <CardTitle className="text-base flex items-center">Tiempos operativos<HelpTip text="Avg/Mediana/P90 por tramo usando timestamps de la OS. Sirve para medir demoras por etapa del servicio." /></CardTitle>
             </CardHeader>

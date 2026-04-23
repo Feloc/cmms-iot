@@ -2,6 +2,7 @@ import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import cookieParser from 'cookie-parser';
+import express from 'express';
 import { tenantStorage } from './common/tenant-context';
 import { PrismaService } from './prisma.service';
 import { seedPlatform } from './seed/platform.seed';
@@ -12,6 +13,8 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule, { cors: false });
   const prisma = app.get(PrismaService);
   await prisma.$connect();
+  app.use(express.json({ limit: '10mb' }));
+  app.use(express.urlencoded({ extended: true, limit: '10mb' }));
   
 // Seed automático (idempotente). Útil para bootstrap de platform tenant.
 // Activar con: AUTO_SEED=true

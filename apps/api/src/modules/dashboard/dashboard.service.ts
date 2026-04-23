@@ -19,6 +19,7 @@ type SummaryArgs = {
   opDim?: string;
   opMetric?: string;
   opSegment?: string;
+  chartImages?: Record<string, string[]>;
 };
 
 const DASHBOARD_DAY_DEFS = [
@@ -741,6 +742,56 @@ export class DashboardService {
       })
       .filter((row): row is NonNullable<typeof row> => Boolean(row));
 
+    const pmPlanDurationAverages = await this.prisma.$queryRaw<
+      Array<{
+        pmPlanId: string;
+        name: string;
+        defaultDurationMin: number | null;
+        completedCount: number;
+        avgDurationMin: number | null;
+        p50DurationMin: number | null;
+      }>
+    >(
+      Prisma.sql`
+        WITH completed_pm_orders AS (
+          SELECT
+            w."pmPlanId",
+            CASE
+              WHEN w."activityStartedAt" IS NOT NULL
+               AND w."activityFinishedAt" IS NOT NULL
+               AND w."activityFinishedAt" >= w."activityStartedAt"
+                THEN EXTRACT(EPOCH FROM (w."activityFinishedAt" - w."activityStartedAt")) / 60.0
+              WHEN w."startedAt" IS NOT NULL
+               AND COALESCE(w."deliveredAt", w."completedAt", w."updatedAt") IS NOT NULL
+               AND COALESCE(w."deliveredAt", w."completedAt", w."updatedAt") >= w."startedAt"
+                THEN EXTRACT(EPOCH FROM (COALESCE(w."deliveredAt", w."completedAt", w."updatedAt") - w."startedAt")) / 60.0
+              WHEN w."durationMin" IS NOT NULL AND w."durationMin" > 0
+                THEN w."durationMin"::float
+              ELSE NULL
+            END AS "durationMin"
+          FROM "WorkOrder" w
+          WHERE w."tenantId" = ${tenantId}
+            AND w."kind" = 'SERVICE_ORDER'
+            AND w."serviceOrderType" = 'PREVENTIVO'
+            AND w."pmPlanId" IS NOT NULL
+            AND w."status" IN ('COMPLETED','CLOSED')
+        )
+        SELECT
+          p."id" AS "pmPlanId",
+          p."name" AS "name",
+          p."defaultDurationMin" AS "defaultDurationMin",
+          COUNT(*)::int AS "completedCount",
+          AVG(c."durationMin")::float AS "avgDurationMin",
+          percentile_cont(0.5) WITHIN GROUP (ORDER BY c."durationMin") FILTER (WHERE c."durationMin" IS NOT NULL) AS "p50DurationMin"
+        FROM completed_pm_orders c
+        JOIN "PmPlan" p
+          ON p."id" = c."pmPlanId"
+         AND p."tenantId" = ${tenantId}
+        GROUP BY p."id", p."name", p."defaultDurationMin"
+        ORDER BY "completedCount" DESC, "avgDurationMin" DESC NULLS LAST, "name" ASC;
+      `
+    );
+
     // Workload por técnico (asignaciones activas en backlog)
     const assignments = await this.prisma.wOAssignment.groupBy({
       by: ['userId'],
@@ -911,6 +962,11 @@ export class DashboardService {
       closedCount: number;
     };
 
+    type ClosedByEquipmentTypeRow = {
+      equipmentType: string;
+      closedCount: number;
+    };
+
     type ClosedByTechTypeRow = {
       userId: string;
       name: string;
@@ -970,6 +1026,45 @@ export class DashboardService {
         LEFT JOIN "User" u ON u."id" = tp."userId" AND u."tenantId" = ${tenantId}
         GROUP BY tp."userId", u."name", u."email", c."serviceType"
         ORDER BY "closedCount" DESC, "name" ASC, "serviceType" ASC;
+      `
+    );
+
+    const closedByEquipmentTypeRows = await this.prisma.$queryRaw<ClosedByEquipmentTypeRow[]>(
+      Prisma.sql`
+        WITH closed_orders AS (
+          SELECT
+            w."id",
+            COALESCE(
+              NULLIF(BTRIM(a."name"), ''),
+              NULLIF(BTRIM(a."model"), ''),
+              NULLIF(BTRIM(a."brand"), ''),
+              '(sin tipo)'
+            ) AS source_text
+          FROM "WorkOrder" w
+          LEFT JOIN "Asset" a
+            ON a."tenantId" = w."tenantId"
+           AND a."code" = w."assetCode"
+          WHERE w."tenantId" = ${tenantId}
+            AND w."kind" = 'SERVICE_ORDER'
+            AND w."status" IN ('COMPLETED','CLOSED')
+            AND COALESCE(w."deliveredAt", w."completedAt", w."updatedAt") >= ${from}
+            AND COALESCE(w."deliveredAt", w."completedAt", w."updatedAt") < ${to}
+        )
+        SELECT
+          CASE
+            WHEN source_text ILIKE '%montacarga%' THEN 'MONTACARGAS'
+            WHEN source_text ILIKE '%apilador%' AND (source_text ILIKE '%electr%' OR source_text ILIKE '%eléctr%') THEN 'APILADOR ELECTRICO'
+            WHEN source_text ILIKE '%apilador%' AND source_text ILIKE '%manual%' THEN 'APILADOR MANUAL'
+            WHEN (source_text ILIKE '%estibador%' OR source_text ILIKE '%transpaleta%') AND (source_text ILIKE '%electr%' OR source_text ILIKE '%eléctr%') THEN 'ESTIBADOR ELECTRICO'
+            WHEN (source_text ILIKE '%estibador%' OR source_text ILIKE '%transpaleta%') AND source_text ILIKE '%manual%' THEN 'ESTIBADOR MANUAL'
+            WHEN source_text ILIKE '%apilador%' THEN 'APILADOR'
+            WHEN source_text ILIKE '%estibador%' OR source_text ILIKE '%transpaleta%' THEN 'ESTIBADOR'
+            ELSE UPPER(source_text)
+          END AS "equipmentType",
+          COUNT(*)::int AS "closedCount"
+        FROM closed_orders
+        GROUP BY 1
+        ORDER BY "closedCount" DESC, "equipmentType" ASC;
       `
     );
 
@@ -1960,6 +2055,7 @@ const workTimeByServiceOrderType = typeEffPauseRows.map(r => {
         scheduledNegotiationByMonth,
         monthlyServiceOrderTypeSummary,
         monthlyAvailableHoursSummary,
+        pmPlanDurationAverages,
         technicianWorkload,
         technicianPerformance,
         technicianWeeklyProductivity,
@@ -1967,6 +2063,7 @@ const workTimeByServiceOrderType = typeEffPauseRows.map(r => {
         technicianTypeAveragesBasis,
         technicianEffectiveVsPauses,
         workTimeByServiceOrderType,
+        closedOrdersByEquipmentType: closedByEquipmentTypeRows,
         closedOrdersSummary: {
           byTechnician: closedByTechnician,
           byServiceType: closedByTypeRows,
@@ -2021,6 +2118,7 @@ const workTimeByServiceOrderType = typeEffPauseRows.map(r => {
       opDim: args.opDim,
       opMetric: args.opMetric,
       opSegment: args.opSegment,
+      chartImages: args.chartImages,
     });
     const dateKey = new Date().toISOString().slice(0, 10);
     return {
@@ -2137,6 +2235,7 @@ const workTimeByServiceOrderType = typeEffPauseRows.map(r => {
     opDim?: string;
     opMetric?: string;
     opSegment?: string;
+    chartImages?: Record<string, string[]>;
   }) {
     const {
       summary,
@@ -2148,6 +2247,7 @@ const workTimeByServiceOrderType = typeEffPauseRows.map(r => {
       opDim = 'TECHNICIAN',
       opMetric = 'p90',
       opSegment = 'total',
+      chartImages = {},
     } = params;
     const tenant = summary?.tenant ?? {};
     const range = summary?.range ?? {};
@@ -2325,6 +2425,17 @@ const workTimeByServiceOrderType = typeEffPauseRows.map(r => {
           `;
         }).join('')
       : '';
+    const pmPlanDurationRows = Array.isArray(service?.pmPlanDurationAverages)
+      ? service.pmPlanDurationAverages.map((row: any) => `
+          <tr>
+            <td>${this.reportEscapeHtml(row.name)}</td>
+            <td class="right">${this.reportEscapeHtml(this.reportFmtNumber(row.completedCount))}</td>
+            <td class="right">${this.reportEscapeHtml(this.reportFmtNumber(row.avgDurationMin == null ? null : Number(row.avgDurationMin) / 60, 2))}</td>
+            <td class="right">${this.reportEscapeHtml(this.reportFmtNumber(row.p50DurationMin == null ? null : Number(row.p50DurationMin) / 60, 2))}</td>
+            <td class="right">${this.reportEscapeHtml(this.reportFmtNumber(row.defaultDurationMin == null ? null : Number(row.defaultDurationMin) / 60, 2))}</td>
+          </tr>
+        `).join('')
+      : '';
 
     const closedSummary = service?.closedOrdersSummary ?? {};
     const backlogStatusRows = Object.entries(service?.backlogByStatus ?? {})
@@ -2345,6 +2456,14 @@ const workTimeByServiceOrderType = typeEffPauseRows.map(r => {
           <tr>
             <td>${this.reportEscapeHtml(row.name)}</td>
             <td>${this.reportEscapeHtml(serviceTypeLabel(row.serviceType))}</td>
+            <td class="right">${this.reportEscapeHtml(this.reportFmtNumber(row.closedCount))}</td>
+          </tr>
+        `).join('')
+      : '';
+    const closedByEquipmentTypeRows = Array.isArray(service?.closedOrdersByEquipmentType)
+      ? service.closedOrdersByEquipmentType.map((row: any) => `
+          <tr>
+            <td>${this.reportEscapeHtml(row.equipmentType ?? '(sin tipo)')}</td>
             <td class="right">${this.reportEscapeHtml(this.reportFmtNumber(row.closedCount))}</td>
           </tr>
         `).join('')
@@ -2467,6 +2586,7 @@ const workTimeByServiceOrderType = typeEffPauseRows.map(r => {
       : '';
     const defaultSectionIds = tab === 'assets'
       ? [
+          'asset-summary-badges',
           'asset-status-criticality',
           'asset-top-open',
           'asset-warranty-by-name',
@@ -2474,18 +2594,55 @@ const workTimeByServiceOrderType = typeEffPauseRows.map(r => {
           'asset-negotiation-table',
         ]
       : [
-          'service-monthly-hours',
-          'service-monthly-types',
-          'service-backlog-workload',
-          'service-closed-summary',
-          'service-averages',
-          'service-operational-times',
-          'service-operational-comparisons',
-          'service-performance',
-          'service-weekly-productivity',
+        'service-summary-badges',
+        'service-monthly-hours',
+        'service-monthly-types',
+        'service-pm-plan-durations',
+        'service-backlog-workload',
+        'service-closed-summary',
+        'service-equipment-types',
+        'service-averages',
+        'service-operational-times',
+        'service-operational-comparisons',
+        'service-performance',
+        'service-weekly-productivity',
         ];
     const allowedSectionIds = new Set((sections.length ? sections : defaultSectionIds).map((value) => String(value).trim()).filter(Boolean));
     const includeSection = (id: string) => allowedSectionIds.has(id);
+    const chartImagesBySection = Object.fromEntries(
+      Object.entries(chartImages ?? {}).map(([sectionId, images]) => [
+        sectionId,
+        Array.isArray(images)
+          ? images
+              .filter((value): value is string => (
+                typeof value === 'string'
+                && value.startsWith('data:image/')
+                && value.includes(';base64,')
+              ))
+              .slice(0, 8)
+          : [],
+      ]),
+    ) as Record<string, string[]>;
+    const renderSectionCharts = (sectionId: string) => {
+      const images = chartImagesBySection[sectionId] ?? [];
+      if (!images.length) return '';
+      return `
+        <div class="charts">
+          ${images.map((src, index) => `
+            <figure class="chart-card">
+              <img src="${this.reportEscapeHtml(src)}" alt="Gráfico ${index + 1}" />
+              <figcaption>Gráfico ${index + 1}</figcaption>
+            </figure>
+          `).join('')}
+        </div>
+      `;
+    };
+    const renderChartTableBlock = (sectionId: string, content: string) => `
+      <div class="chart-table-block">
+        ${renderSectionCharts(sectionId)}
+        ${content}
+      </div>
+    `;
 
     const assetSections: string[] = [];
     if (includeSection('asset-status-criticality')) {
@@ -2534,6 +2691,7 @@ const workTimeByServiceOrderType = typeEffPauseRows.map(r => {
       assetSections.push(`
         <section class="card">
           <div class="subtitle">Resumen de negociación visible</div>
+          ${includeSection('asset-negotiation-table') ? '' : renderSectionCharts('asset-negotiation-summary')}
           <div class="summary">
             <div class="summary-box"><div class="k">OS total</div><div class="v">${this.reportEscapeHtml(this.reportFmtNumber(negotiationTotals.scheduled))}</div></div>
             <div class="summary-box"><div class="k">NG</div><div class="v">${this.reportEscapeHtml(this.reportFmtNumber(negotiationTotals.noManagement))}</div></div>
@@ -2553,24 +2711,26 @@ const workTimeByServiceOrderType = typeEffPauseRows.map(r => {
       assetSections.push(`
         <section class="card">
           <div class="subtitle">Negociación de OS programadas y preventivos completados por mes</div>
-          <table>
-            <thead>
-              <tr>
-                <th>Mes</th>
-                <th class="right">OS total</th>
-                <th class="right">NG</th>
-                <th class="right">PC</th>
-                <th class="right">PA</th>
-                <th class="right">NA</th>
-                <th class="right">AP</th>
-                <th class="right">PR</th>
-                <th class="right">CF</th>
-                <th class="right">CP</th>
-                <th class="right">Sin definir</th>
-              </tr>
-            </thead>
-            <tbody>${negotiationRows || `<tr><td colspan="11" class="muted">Sin datos.</td></tr>`}</tbody>
-          </table>
+          ${renderChartTableBlock('asset-negotiation-table', `
+            <table>
+              <thead>
+                <tr>
+                  <th>Mes</th>
+                  <th class="right">OS total</th>
+                  <th class="right">NG</th>
+                  <th class="right">PC</th>
+                  <th class="right">PA</th>
+                  <th class="right">NA</th>
+                  <th class="right">AP</th>
+                  <th class="right">PR</th>
+                  <th class="right">CF</th>
+                  <th class="right">CP</th>
+                  <th class="right">Sin definir</th>
+                </tr>
+              </thead>
+              <tbody>${negotiationRows || `<tr><td colspan="11" class="muted">Sin datos.</td></tr>`}</tbody>
+            </table>
+          `)}
         </section>
       `);
     }
@@ -2580,19 +2740,21 @@ const workTimeByServiceOrderType = typeEffPauseRows.map(r => {
       serviceSections.push(`
         <section class="card">
           <div class="subtitle">Resumen mensual de horas disponibles</div>
-          <table>
-            <thead>
-              <tr>
-                <th>Mes</th>
-                <th class="right">Días</th>
-                <th class="right">Horas técnico</th>
-                <th class="right">Técnicos</th>
-                <th class="right">Horas totales</th>
-                <th class="right">Fechas descontadas</th>
-              </tr>
-            </thead>
-            <tbody>${monthlyHoursRows || `<tr><td colspan="6" class="muted">Sin datos.</td></tr>`}</tbody>
-          </table>
+          ${renderChartTableBlock('service-monthly-hours', `
+            <table>
+              <thead>
+                <tr>
+                  <th>Mes</th>
+                  <th class="right">Días</th>
+                  <th class="right">Horas técnico</th>
+                  <th class="right">Técnicos</th>
+                  <th class="right">Horas totales</th>
+                  <th class="right">Fechas descontadas</th>
+                </tr>
+              </thead>
+              <tbody>${monthlyHoursRows || `<tr><td colspan="6" class="muted">Sin datos.</td></tr>`}</tbody>
+            </table>
+          `)}
         </section>
       `);
     }
@@ -2610,6 +2772,28 @@ const workTimeByServiceOrderType = typeEffPauseRows.map(r => {
             </thead>
             <tbody>${monthlyServiceRows || `<tr><td colspan="${monthlyServiceColumns.length + 2}" class="muted">Sin datos.</td></tr>`}</tbody>
           </table>
+        </section>
+      `);
+    }
+    if (includeSection('service-pm-plan-durations')) {
+      serviceSections.push(`
+        <section class="card">
+          <div class="subtitle">Promedio histórico de duración por PM Plan</div>
+          <div class="muted">Todas las OS preventivas completadas, sin depender del rango activo.</div>
+          ${renderChartTableBlock('service-pm-plan-durations', `
+            <table>
+              <thead>
+                <tr>
+                  <th>PM Plan</th>
+                  <th class="right">OS completadas</th>
+                  <th class="right">Promedio real (h)</th>
+                  <th class="right">Mediana (h)</th>
+                  <th class="right">Configurado (h)</th>
+                </tr>
+              </thead>
+              <tbody>${pmPlanDurationRows || `<tr><td colspan="5" class="muted">Sin datos.</td></tr>`}</tbody>
+            </table>
+          `)}
         </section>
       `);
     }
@@ -2637,29 +2821,49 @@ const workTimeByServiceOrderType = typeEffPauseRows.map(r => {
       serviceSections.push(`
         <section class="card">
           <div class="subtitle">Resumen de cierres por rango</div>
-          <div class="grid three">
-            <div>
-              <div class="muted">Órdenes cerradas por técnico</div>
-              <table>
-                <thead><tr><th>Técnico</th><th class="right">Cerradas</th></tr></thead>
-                <tbody>${closedByTechnicianRows || `<tr><td colspan="2" class="muted">Sin datos.</td></tr>`}</tbody>
-              </table>
+          ${renderChartTableBlock('service-closed-summary', `
+            <div class="grid three">
+              <div>
+                <div class="muted">Órdenes cerradas por técnico</div>
+                <table>
+                  <thead><tr><th>Técnico</th><th class="right">Cerradas</th></tr></thead>
+                  <tbody>${closedByTechnicianRows || `<tr><td colspan="2" class="muted">Sin datos.</td></tr>`}</tbody>
+                </table>
+              </div>
+              <div>
+                <div class="muted">Totales por clase de servicio</div>
+                <table>
+                  <thead><tr><th>Clase</th><th class="right">Cerradas</th></tr></thead>
+                  <tbody>${closedByServiceTypeRows || `<tr><td colspan="2" class="muted">Sin datos.</td></tr>`}</tbody>
+                </table>
+              </div>
+              <div>
+                <div class="muted">Totales de técnico por clase</div>
+                <table>
+                  <thead><tr><th>Técnico</th><th>Clase</th><th class="right">Cerradas</th></tr></thead>
+                  <tbody>${closedByTechTypeRows || `<tr><td colspan="3" class="muted">Sin datos.</td></tr>`}</tbody>
+                </table>
+              </div>
             </div>
-            <div>
-              <div class="muted">Totales por clase de servicio</div>
-              <table>
-                <thead><tr><th>Clase</th><th class="right">Cerradas</th></tr></thead>
-                <tbody>${closedByServiceTypeRows || `<tr><td colspan="2" class="muted">Sin datos.</td></tr>`}</tbody>
-              </table>
-            </div>
-            <div>
-              <div class="muted">Totales de técnico por clase</div>
-              <table>
-                <thead><tr><th>Técnico</th><th>Clase</th><th class="right">Cerradas</th></tr></thead>
-                <tbody>${closedByTechTypeRows || `<tr><td colspan="3" class="muted">Sin datos.</td></tr>`}</tbody>
-              </table>
-            </div>
-          </div>
+          `)}
+        </section>
+      `);
+    }
+    if (includeSection('service-equipment-types')) {
+      serviceSections.push(`
+        <section class="card">
+          <div class="subtitle">OS completadas por tipo de equipo</div>
+          ${renderChartTableBlock('service-equipment-types', `
+            <table>
+              <thead>
+                <tr>
+                  <th>Tipo de equipo</th>
+                  <th class="right">OS cerradas</th>
+                </tr>
+              </thead>
+              <tbody>${closedByEquipmentTypeRows || `<tr><td colspan="2" class="muted">Sin datos.</td></tr>`}</tbody>
+            </table>
+          `)}
         </section>
       `);
     }
@@ -2677,22 +2881,24 @@ const workTimeByServiceOrderType = typeEffPauseRows.map(r => {
               </tbody>
             </table>
           ` : `<div class="muted">Sin base de cálculo disponible.</div>`}
-          <table>
-            <thead>
-              <tr>
-                <th>Técnico</th>
-                <th class="right">Día Prev.</th>
-                <th class="right">Día Corr.</th>
-                <th class="right">Día Diag.</th>
-                <th class="right">Día Total</th>
-                <th class="right">Semana Prev.</th>
-                <th class="right">Semana Corr.</th>
-                <th class="right">Semana Diag.</th>
-                <th class="right">Semana Total</th>
-              </tr>
-            </thead>
-            <tbody>${avgTechRows || `<tr><td colspan="9" class="muted">Sin datos.</td></tr>`}</tbody>
-          </table>
+          ${renderChartTableBlock('service-averages', `
+            <table>
+              <thead>
+                <tr>
+                  <th>Técnico</th>
+                  <th class="right">Día Prev.</th>
+                  <th class="right">Día Corr.</th>
+                  <th class="right">Día Diag.</th>
+                  <th class="right">Día Total</th>
+                  <th class="right">Semana Prev.</th>
+                  <th class="right">Semana Corr.</th>
+                  <th class="right">Semana Diag.</th>
+                  <th class="right">Semana Total</th>
+                </tr>
+              </thead>
+              <tbody>${avgTechRows || `<tr><td colspan="9" class="muted">Sin datos.</td></tr>`}</tbody>
+            </table>
+          `)}
         </section>
       `);
     }
@@ -2786,21 +2992,34 @@ const workTimeByServiceOrderType = typeEffPauseRows.map(r => {
             <div class="summary-box"><div class="k">Utilización</div><div class="v">${this.reportEscapeHtml(formatPercent(weeklyUtilization, 1))}</div></div>
             <div class="summary-box"><div class="k">Hrs/OS</div><div class="v">${this.reportEscapeHtml(this.reportFmtNumber(weeklyHoursPerClosed, 2))}</div></div>
           </div>
-          <table>
-            <thead>
-              <tr>
-                <th>Semana</th>
-                <th class="right">OS cerradas</th>
-                <th class="right">Horas</th>
-                <th class="right">Horas disp.</th>
-                <th class="right">Utilización</th>
-              </tr>
-            </thead>
-            <tbody>${weeklyRows || `<tr><td colspan="5" class="muted">Sin datos en el rango seleccionado.</td></tr>`}</tbody>
-          </table>
+          ${renderChartTableBlock('service-weekly-productivity', `
+            <table>
+              <thead>
+                <tr>
+                  <th>Semana</th>
+                  <th class="right">OS cerradas</th>
+                  <th class="right">Horas</th>
+                  <th class="right">Horas disp.</th>
+                  <th class="right">Utilización</th>
+                </tr>
+              </thead>
+              <tbody>${weeklyRows || `<tr><td colspan="5" class="muted">Sin datos en el rango seleccionado.</td></tr>`}</tbody>
+            </table>
+          `)}
         </section>
       `);
     }
+
+    const summarySectionId = tab === 'assets' ? 'asset-summary-badges' : 'service-summary-badges';
+    const summarySectionHtml = includeSection(summarySectionId)
+      ? `
+        <section class="card">
+          <div class="summary">
+            ${summaryBoxesHtml}
+          </div>
+        </section>
+      `
+      : '';
 
     const bodyContent = (tab === 'assets' ? assetSections : serviceSections).join('')
       || `<section class="card"><div class="muted">No se seleccionaron secciones para este reporte.</div></section>`;
@@ -2820,6 +3039,11 @@ const workTimeByServiceOrderType = typeEffPauseRows.map(r => {
     .subtitle { font-size: 16px; font-weight: 700; margin-bottom: 10px; }
     .muted { color: var(--muted); font-size: 12px; }
     .card { border: 1px solid var(--line); border-radius: 8px; padding: 14px; margin: 12px 0; }
+    .chart-table-block { break-inside: avoid-page; page-break-inside: avoid; }
+    .charts { display: grid; gap: 12px; margin: 0 0 12px; }
+    .chart-card { margin: 0; border: 1px solid var(--line); border-radius: 8px; padding: 10px; background: white; }
+    .chart-card img { width: 100%; height: auto; display: block; }
+    .chart-card figcaption { margin-top: 6px; color: var(--muted); font-size: 11px; }
     .grid { display: grid; gap: 12px; }
     .grid.two { grid-template-columns: 1fr 1fr; }
     .grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -2837,6 +3061,7 @@ const workTimeByServiceOrderType = typeEffPauseRows.map(r => {
     @media print {
       .page { padding: 0; }
       .card { break-inside: avoid; }
+      .chart-table-block, .charts, .chart-card, table { break-inside: avoid; page-break-inside: avoid; }
       tr { break-inside: avoid; }
     }
   </style>
@@ -2861,11 +3086,7 @@ const workTimeByServiceOrderType = typeEffPauseRows.map(r => {
       </div>
     </section>
 
-    <section class="card">
-      <div class="summary">
-        ${summaryBoxesHtml}
-      </div>
-    </section>
+    ${summarySectionHtml}
 
     <section class="card">
       <div class="subtitle">Parámetros del reporte</div>
