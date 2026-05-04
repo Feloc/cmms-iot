@@ -31,6 +31,13 @@ import { InventoryLedgerService } from '../inventory/inventory-ledger.service';
 import { TelegramNotifierService } from '../notifications/telegram-notifier.service';
 
 type Unit = 'DAY' | 'MONTH' | 'YEAR';
+type CommercialStatusNotification = {
+  id: string;
+  assetCode?: string | null;
+  title?: string | null;
+  previousStatus?: string | null;
+  nextStatus: string;
+};
 
 @Injectable()
 export class ServiceOrdersService {
@@ -2145,13 +2152,7 @@ return { ...(so as any), workLogs: enrichedLogs, formData, asset: asset ?? null,
   async update(id: string, dto: UpdateServiceOrderDto) {
   const tenantId = this.getTenantId();
   const actorUserId = this.getUserId();
-  let commercialStatusNotification: {
-    id: string;
-    assetCode?: string | null;
-    title?: string | null;
-    previousStatus?: string | null;
-    nextStatus: string;
-  } | null = null;
+  let commercialStatusNotification: CommercialStatusNotification | null = null;
 
   // Campos administrativos: solo ADMIN
   const adminOnlyKeys = ['assetCode', 'title', 'description', 'serviceOrderType', 'commercialStatus', 'pmPlanId', 'durationMin'] as const;
@@ -2387,15 +2388,16 @@ return { ...(so as any), workLogs: enrichedLogs, formData, asset: asset ?? null,
     return updated;
   });
 
-  if (commercialStatusNotification) {
-    const asset = commercialStatusNotification.assetCode
+  const notification = commercialStatusNotification as CommercialStatusNotification | null;
+  if (notification) {
+    const asset = notification.assetCode
       ? await this.prisma.asset.findFirst({
-          where: { tenantId, code: commercialStatusNotification.assetCode },
+          where: { tenantId, code: notification.assetCode },
           select: { customer: true, serialNumber: true },
         })
       : null;
     await this.telegramNotifier.notifyServiceOrderCommercialStatusChange({
-      ...commercialStatusNotification,
+      ...notification,
       customer: asset?.customer ?? null,
       serialNumber: asset?.serialNumber ?? null,
     });
