@@ -49,15 +49,37 @@ type Filter =
   | { id: string; field: 'status'; value: string }
   | { id: string; field: 'type'; value: string }
   | { id: string; field: 'month'; value: string }
+  | { id: string; field: 'guarantee'; value: string }
   | { id: string; field: 'commercialStatus'; value: string }
+  | { id: string; field: 'assignment'; value: string }
   | { id: string; field: 'technicianId'; value: string }
   | { id: string; field: 'issueStatus'; value: string };
 
 type EditRow = { dueLocal: string; technicianId: string };
+type PersistedServiceOrderFilters = {
+  version?: number;
+  filters?: unknown;
+  dateRange?: unknown;
+  listTab?: unknown;
+  statusTab?: unknown;
+};
 
 const EMPTY_ITEMS: ServiceOrder[] = [];
 const PAGE_SIZE = 50;
 const COMMERCIAL_STATUS_UNDEFINED_FILTER = '__UNDEFINED__';
+const SERVICE_ORDER_FILTERS_STORAGE_VERSION = 1;
+const DEFAULT_FILTERS: Filter[] = [{ id: 'f-q', field: 'q', value: '' }];
+const FILTER_FIELDS = new Set<Filter['field']>([
+  'q',
+  'status',
+  'type',
+  'month',
+  'guarantee',
+  'commercialStatus',
+  'assignment',
+  'technicianId',
+  'issueStatus',
+]);
 
 const STATUS_TABS = ['ALL', 'OPEN', 'SCHEDULED', 'IN_PROGRESS', 'ON_HOLD', 'COMPLETED', 'CLOSED', 'CANCELED'] as const;
 type StatusTab = (typeof STATUS_TABS)[number];
@@ -132,18 +154,44 @@ function commercialStatusMeta(status?: string | null) {
   }
 }
 
+function normalizeStoredFilters(value: unknown): Filter[] {
+  if (!Array.isArray(value)) return DEFAULT_FILTERS;
+  const filters = value
+    .map((item, index) => {
+      if (!item || typeof item !== 'object') return null;
+      const field = String((item as any).field || '') as Filter['field'];
+      if (!FILTER_FIELDS.has(field)) return null;
+      return {
+        id: String((item as any).id || `${field}-${index}`),
+        field,
+        value: String((item as any).value ?? ''),
+      } as Filter;
+    })
+    .filter((item): item is Filter => !!item);
+  return filters.length ? filters : DEFAULT_FILTERS;
+}
+
+function normalizeStoredDateRange(value: unknown) {
+  if (!value || typeof value !== 'object') return { start: '', end: '' };
+  return {
+    start: String((value as any).start ?? ''),
+    end: String((value as any).end ?? ''),
+  };
+}
+
 export default function ServiceOrdersPage() {
   const { data: session } = useSession();
   const auth = getAuthFromSession(session);
   const role = (session as any)?.user?.role as string | undefined;
   const isAdmin = role === 'ADMIN';
 
-  const [filters, setFilters] = useState<Filter[]>([{ id: 'f-q', field: 'q', value: '' }]);
+  const [filters, setFilters] = useState<Filter[]>(DEFAULT_FILTERS);
   const [dateRange, setDateRange] = useState<{ start: string; end: string }>({ start: '', end: '' });
   const [edits, setEdits] = useState<Record<string, EditRow>>({});
   const [listTab, setListTab] = useState<ListTab>('ALL');
   const [statusTab, setStatusTab] = useState<StatusTab>('ALL');
   const [page, setPage] = useState(1);
+  const [hydratedStorageKey, setHydratedStorageKey] = useState('');
 
   const [data, setData] = useState<Paginated<ServiceOrder> | null>(null);
   const [loading, setLoading] = useState(false);
@@ -153,9 +201,14 @@ export default function ServiceOrdersPage() {
   const [exportingReport, setExportingReport] = useState(false);
 
   const [technicians, setTechnicians] = useState<User[]>([]);
+  const filtersStorageKey = useMemo(
+    () => (auth.tenantSlug ? `cmms.service-orders.filters.${auth.tenantSlug}` : ''),
+    [auth.tenantSlug]
+  );
+  const filtersHydrated = !!filtersStorageKey && hydratedStorageKey === filtersStorageKey;
 
   const listPath = useMemo(() => {
-    if (!auth.token || !auth.tenantSlug) return null;
+    if (!auth.token || !auth.tenantSlug || !filtersHydrated) return null;
 
     const qs = new URLSearchParams();
     for (const f of filters) {
@@ -181,10 +234,10 @@ export default function ServiceOrdersPage() {
     qs.set('size', String(PAGE_SIZE));
 
     return `/service-orders?${qs.toString()}`;
-  }, [auth.token, auth.tenantSlug, filters, dateRange.end, dateRange.start, listTab, statusTab, page]);
+  }, [auth.token, auth.tenantSlug, filtersHydrated, filters, dateRange.end, dateRange.start, listTab, statusTab, page]);
 
   const exportPath = useMemo(() => {
-    if (!auth.token || !auth.tenantSlug) return null;
+    if (!auth.token || !auth.tenantSlug || !filtersHydrated) return null;
 
     const qs = new URLSearchParams();
     for (const f of filters) {
@@ -208,10 +261,10 @@ export default function ServiceOrdersPage() {
     if (statusTab !== 'ALL') qs.append('status', statusTab);
 
     return `/service-orders/export?${qs.toString()}`;
-  }, [auth.token, auth.tenantSlug, filters, dateRange.end, dateRange.start, listTab, statusTab]);
+  }, [auth.token, auth.tenantSlug, filtersHydrated, filters, dateRange.end, dateRange.start, listTab, statusTab]);
 
   const exportReportPath = useMemo(() => {
-    if (!auth.token || !auth.tenantSlug) return null;
+    if (!auth.token || !auth.tenantSlug || !filtersHydrated) return null;
 
     const qs = new URLSearchParams();
     for (const f of filters) {
@@ -235,7 +288,7 @@ export default function ServiceOrdersPage() {
     if (statusTab !== 'ALL') qs.append('status', statusTab);
 
     return `/service-orders/export-report?${qs.toString()}`;
-  }, [auth.token, auth.tenantSlug, filters, dateRange.end, dateRange.start, listTab, statusTab]);
+  }, [auth.token, auth.tenantSlug, filtersHydrated, filters, dateRange.end, dateRange.start, listTab, statusTab]);
 
   const items = data?.items ?? EMPTY_ITEMS;
   const statusCounts = data?.statusCounts ?? {};
@@ -251,8 +304,50 @@ export default function ServiceOrdersPage() {
   const currentPage = data?.page ?? page;
 
   useEffect(() => {
+    if (!filtersStorageKey) return;
+    try {
+      const raw = window.localStorage.getItem(filtersStorageKey);
+      if (raw) {
+        const stored = JSON.parse(raw) as PersistedServiceOrderFilters;
+        setFilters(normalizeStoredFilters(stored.filters));
+        setDateRange(normalizeStoredDateRange(stored.dateRange));
+        if (LIST_TABS.some((tab) => tab.id === stored.listTab)) setListTab(stored.listTab as ListTab);
+        if (STATUS_TABS.includes(stored.statusTab as StatusTab)) setStatusTab(stored.statusTab as StatusTab);
+      } else {
+        setFilters(DEFAULT_FILTERS);
+        setDateRange({ start: '', end: '' });
+        setListTab('ALL');
+        setStatusTab('ALL');
+      }
+    } catch {
+      setFilters(DEFAULT_FILTERS);
+      setDateRange({ start: '', end: '' });
+      setListTab('ALL');
+      setStatusTab('ALL');
+    } finally {
+      setPage(1);
+      setHydratedStorageKey(filtersStorageKey);
+    }
+  }, [filtersStorageKey]);
+
+  useEffect(() => {
+    if (!filtersHydrated || !filtersStorageKey) return;
+    window.localStorage.setItem(
+      filtersStorageKey,
+      JSON.stringify({
+        version: SERVICE_ORDER_FILTERS_STORAGE_VERSION,
+        filters,
+        dateRange,
+        listTab,
+        statusTab,
+      })
+    );
+  }, [dateRange, filters, filtersHydrated, filtersStorageKey, listTab, statusTab]);
+
+  useEffect(() => {
+    if (!filtersHydrated) return;
     setPage(1);
-  }, [filters, dateRange.end, dateRange.start, listTab, statusTab]);
+  }, [filtersHydrated, filters, dateRange.end, dateRange.start, listTab, statusTab]);
 
   // Cargar técnicos una vez (y refrescar si cambia auth)
   useEffect(() => {
@@ -523,8 +618,14 @@ export default function ServiceOrdersPage() {
             <button className="px-2 py-1 border rounded text-sm" onClick={() => addFilter('month')} type="button">
               + Mes
             </button>
+            <button className="px-2 py-1 border rounded text-sm" onClick={() => addFilter('guarantee')} type="button">
+              + Garantía
+            </button>
             <button className="px-2 py-1 border rounded text-sm" onClick={() => addFilter('commercialStatus')} type="button">
               + Negociación
+            </button>
+            <button className="px-2 py-1 border rounded text-sm" onClick={() => addFilter('assignment')} type="button">
+              + Asignación
             </button>
             <button className="px-2 py-1 border rounded text-sm" onClick={() => addFilter('technicianId')} type="button">
               + Técnico
@@ -576,7 +677,9 @@ export default function ServiceOrdersPage() {
                 <option value="status">Status</option>
                 <option value="type">Tipo</option>
                 <option value="month">Mes</option>
+                <option value="guarantee">Garantía</option>
                 <option value="commercialStatus">Negociación</option>
+                <option value="assignment">Asignación</option>
                 <option value="technicianId">Técnico</option>
                 <option value="issueStatus">Estado novedad</option>
               </select>
@@ -624,6 +727,14 @@ export default function ServiceOrdersPage() {
                 />
               ) : null}
 
+              {f.field === 'guarantee' ? (
+                <select className="border rounded px-2 py-2 text-sm" value={f.value} onChange={(e) => setFilterValue(f.id, e.target.value)}>
+                  <option value="">(cualquiera)</option>
+                  <option value="IN_WARRANTY">En garantía</option>
+                  <option value="OUT_OF_WARRANTY">Fuera de garantía</option>
+                </select>
+              ) : null}
+
               {f.field === 'commercialStatus' ? (
                 <select className="border rounded px-2 py-2 text-sm" value={f.value} onChange={(e) => setFilterValue(f.id, e.target.value)}>
                   <option value="">(cualquiera)</option>
@@ -636,6 +747,14 @@ export default function ServiceOrdersPage() {
                   <option value="PROGRAMMED">PR · Programado</option>
                   <option value="CONFIRMED">CF · Confirmado</option>
                   <option value="COMPLETED">CP · Completado</option>
+                </select>
+              ) : null}
+
+              {f.field === 'assignment' ? (
+                <select className="border rounded px-2 py-2 text-sm" value={f.value} onChange={(e) => setFilterValue(f.id, e.target.value)}>
+                  <option value="">(cualquiera)</option>
+                  <option value="ASSIGNED">Asignadas</option>
+                  <option value="UNASSIGNED">Sin asignar</option>
                 </select>
               ) : null}
 

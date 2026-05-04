@@ -28,6 +28,7 @@ import { spawn } from 'child_process';
 import { pathToFileURL } from 'url';
 import * as XLSX from 'xlsx';
 import { InventoryLedgerService } from '../inventory/inventory-ledger.service';
+import { TelegramNotifierService } from '../notifications/telegram-notifier.service';
 
 type Unit = 'DAY' | 'MONTH' | 'YEAR';
 
@@ -36,6 +37,7 @@ export class ServiceOrdersService {
   constructor(
     private prisma: PrismaService,
     private inventoryLedger: InventoryLedgerService,
+    private telegramNotifier: TelegramNotifierService,
   ) {}
 
   private getTenantId(): string {
@@ -1430,6 +1432,66 @@ private async assertTechCanMutateServiceOrder(
     if (types.length === 1) where.serviceOrderType = types[0] as any;
     else if (types.length > 1) where.serviceOrderType = { in: types } as any;
 
+    const guaranteeFilters = normalizeQueryArray((q as any).guarantee)
+      .map((value) => String(value || '').trim().toUpperCase())
+      .filter((value) => value === 'IN_WARRANTY' || value === 'OUT_OF_WARRANTY');
+    if (guaranteeFilters.length > 0) {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const oneYearAgo = new Date(today.getTime());
+      oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+
+      const assetWarrantyClauses: Prisma.AssetWhereInput[] = [];
+      if (guaranteeFilters.includes('IN_WARRANTY')) {
+        assetWarrantyClauses.push({
+          OR: [
+            { guarantee: { gte: today } },
+            {
+              AND: [
+                { guarantee: null },
+                { acquiredOn: { not: null, gte: oneYearAgo } },
+              ],
+            },
+          ],
+        });
+      }
+      if (guaranteeFilters.includes('OUT_OF_WARRANTY')) {
+        assetWarrantyClauses.push({
+          OR: [
+            { guarantee: { lt: today } },
+            {
+              AND: [
+                { guarantee: null },
+                {
+                  OR: [
+                    { acquiredOn: null },
+                    { acquiredOn: { lt: oneYearAgo } },
+                  ],
+                },
+              ],
+            },
+          ],
+        });
+      }
+
+      const matchingWarrantyAssets = await this.prisma.asset.findMany({
+        where: {
+          tenantId,
+          OR: assetWarrantyClauses,
+        },
+        select: { code: true },
+      });
+      const warrantyAssetCodes = Array.from(
+        new Set(
+          matchingWarrantyAssets
+            .map((asset) => String(asset.code || '').trim())
+            .filter(Boolean),
+        ),
+      );
+      if (warrantyAssetCodes.length === 0) return { items: [], total: 0, page, size, statusCounts: {} };
+      where.assetCode = { in: warrantyAssetCodes };
+    }
+
     const commercialStatusFilters = normalizeQueryArray((q as any).commercialStatus);
     const includeUndefinedCommercialStatus = commercialStatusFilters.some((value) => this.isUndefinedCommercialStatusFilter(value));
     const commercialStatuses = commercialStatusFilters
@@ -1517,8 +1579,19 @@ private async assertTechCanMutateServiceOrder(
       if (end) (where.dueDate as any).lte = end;
     }
 
-    // Filtro por técnico: buscamos assignments ACTIVAS de rol TECHNICIAN
+    // Filtro por asignación/técnico: buscamos assignments ACTIVAS de rol TECHNICIAN
+    const assignmentFilters = normalizeQueryArray((q as any).assignment)
+      .map((value) => String(value || '').trim().toUpperCase())
+      .filter((value) => value === 'ASSIGNED' || value === 'UNASSIGNED');
+    const wantsAssigned = assignmentFilters.includes('ASSIGNED');
+    const wantsUnassigned = assignmentFilters.includes('UNASSIGNED');
     const techIds = normalizeQueryArray((q as any).technicianId);
+    const specificTechIds = techIds.filter((value) => String(value).toUpperCase() !== 'UNASSIGNED');
+
+    if (specificTechIds.length > 0 && wantsUnassigned && !wantsAssigned) {
+      return { items: [], total: 0, page, size, statusCounts: {} };
+    }
+
     if (techIds.length === 1 && String(techIds[0]).toUpperCase() === 'UNASSIGNED') {
       where.assignments = {
         none: {
@@ -1527,22 +1600,38 @@ private async assertTechCanMutateServiceOrder(
           role: 'TECHNICIAN',
         },
       };
-    } else if (techIds.length === 1) {
+    } else if (specificTechIds.length === 1) {
       where.assignments = {
         some: {
           tenantId,
           state: 'ACTIVE',
           role: 'TECHNICIAN',
-          userId: techIds[0],
+          userId: specificTechIds[0],
         },
       };
-    } else if (techIds.length > 1) {
+    } else if (specificTechIds.length > 1) {
       where.assignments = {
         some: {
           tenantId,
           state: 'ACTIVE',
           role: 'TECHNICIAN',
-          userId: { in: techIds },
+          userId: { in: specificTechIds },
+        },
+      };
+    } else if (wantsUnassigned && !wantsAssigned) {
+      where.assignments = {
+        none: {
+          tenantId,
+          state: 'ACTIVE',
+          role: 'TECHNICIAN',
+        },
+      };
+    } else if (wantsAssigned && !wantsUnassigned) {
+      where.assignments = {
+        some: {
+          tenantId,
+          state: 'ACTIVE',
+          role: 'TECHNICIAN',
         },
       };
     }
@@ -1671,7 +1760,19 @@ private async assertTechCanMutateServiceOrder(
     if (text) entries.push({ label: 'Texto', value: text });
     pushIfAny('Status', normalizeQueryArray((q as any).status));
     pushIfAny('Tipo', normalizeQueryArray((q as any).type));
+    pushIfAny('Garantía', normalizeQueryArray((q as any).guarantee).map((value) => {
+      const normalized = String(value || '').trim().toUpperCase();
+      if (normalized === 'IN_WARRANTY') return 'En garantía';
+      if (normalized === 'OUT_OF_WARRANTY') return 'Fuera de garantía';
+      return value;
+    }));
     pushIfAny('Negociación', normalizeQueryArray((q as any).commercialStatus).map((value) => this.commercialStatusLabel(value)));
+    pushIfAny('Asignación', normalizeQueryArray((q as any).assignment).map((value) => {
+      const normalized = String(value || '').trim().toUpperCase();
+      if (normalized === 'ASSIGNED') return 'Asignadas';
+      if (normalized === 'UNASSIGNED') return 'Sin asignar';
+      return value;
+    }));
     pushIfAny('Técnico', normalizeQueryArray((q as any).technicianId));
     pushIfAny('Estado novedad', normalizeQueryArray((q as any).issueStatus));
     if (this.truthy((q as any).hasIssue)) entries.push({ label: 'Novedad', value: 'Sí' });
@@ -2044,13 +2145,20 @@ return { ...(so as any), workLogs: enrichedLogs, formData, asset: asset ?? null,
   async update(id: string, dto: UpdateServiceOrderDto) {
   const tenantId = this.getTenantId();
   const actorUserId = this.getUserId();
+  let commercialStatusNotification: {
+    id: string;
+    assetCode?: string | null;
+    title?: string | null;
+    previousStatus?: string | null;
+    nextStatus: string;
+  } | null = null;
 
   // Campos administrativos: solo ADMIN
   const adminOnlyKeys = ['assetCode', 'title', 'description', 'serviceOrderType', 'commercialStatus', 'pmPlanId', 'durationMin'] as const;
   const wantsAdminChange = adminOnlyKeys.some((k) => (dto as any)[k] !== undefined);
   if (wantsAdminChange) await this.assertAdmin();
 
-  return this.prisma.$transaction(async (tx) => {
+  const updateResult = await this.prisma.$transaction(async (tx) => {
     const current = await tx.workOrder.findFirst({
       where: { id, tenantId, kind: 'SERVICE_ORDER' },
       select: {
@@ -2258,9 +2366,42 @@ return { ...(so as any), workLogs: enrichedLogs, formData, asset: asset ?? null,
     if (auditEntries.length) {
       await this.appendAuditMany(tx, tenantId, id, auditEntries);
     }
+
+    const previousCommercialStatus = (current as any).commercialStatus ?? null;
+    const nextCommercialStatus = finalCommercialStatus ?? null;
+    if (
+      finalCommercialStatus !== undefined &&
+      previousCommercialStatus !== nextCommercialStatus &&
+      this.telegramNotifier.shouldNotifyCommercialStatus(nextCommercialStatus)
+    ) {
+      commercialStatusNotification = {
+        id,
+        assetCode: (data as any).assetCode ?? (current as any).assetCode ?? null,
+        title: (data as any).title ?? (current as any).title ?? null,
+        previousStatus: previousCommercialStatus,
+        nextStatus: String(nextCommercialStatus),
+      };
+    }
+
     if (infoMessage) return { ...(updated as any), _info: infoMessage };
     return updated;
   });
+
+  if (commercialStatusNotification) {
+    const asset = commercialStatusNotification.assetCode
+      ? await this.prisma.asset.findFirst({
+          where: { tenantId, code: commercialStatusNotification.assetCode },
+          select: { customer: true, serialNumber: true },
+        })
+      : null;
+    await this.telegramNotifier.notifyServiceOrderCommercialStatusChange({
+      ...commercialStatusNotification,
+      customer: asset?.customer ?? null,
+      serialNumber: asset?.serialNumber ?? null,
+    });
+  }
+
+  return updateResult;
 }
 async schedule(id: string, dto: ScheduleServiceOrderDto) {
   const tenantId = this.getTenantId();
