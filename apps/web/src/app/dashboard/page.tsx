@@ -213,6 +213,16 @@ type Summary = {
 };
 
 type DashboardPdfChartImages = Record<string, string[]>;
+type MonthlyGoalProgress = {
+  metric: string;
+  period: string;
+  target: number;
+  actual: number;
+  progress: number | null;
+  remaining: number;
+  start: string;
+  end: string;
+};
 
 const DASHBOARD_PDF_SECTION_OPTIONS = {
   assets: [
@@ -358,6 +368,11 @@ function formatMonthYearLabel(value: string | null | undefined) {
   return label.charAt(0).toUpperCase() + label.slice(1);
 }
 
+function currentMonthKey() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+}
+
 function pctOfScheduled(value: number, scheduled: number) {
   if (!scheduled || !Number.isFinite(value) || !Number.isFinite(scheduled)) return 0;
   return Math.round((value / scheduled) * 100);
@@ -496,6 +511,8 @@ function StatCard(props: { title: string; value: ReactNode; hint?: string; href?
 
 export default function Dashboard() {
   const { data: session } = useSession();
+  const role = (session as any)?.user?.role as string | undefined;
+  const isAdmin = role === 'ADMIN';
   const token =
     (session as any)?.token ||
     (session as any)?.accessToken ||
@@ -517,6 +534,9 @@ export default function Dashboard() {
   const [activeTab, setActiveTab] = useState<'assets' | 'service'>('assets');
   const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [exportPdfError, setExportPdfError] = useState('');
+  const [preventiveGoalTargetInput, setPreventiveGoalTargetInput] = useState('');
+  const [savingPreventiveGoal, setSavingPreventiveGoal] = useState(false);
+  const [preventiveGoalError, setPreventiveGoalError] = useState('');
   const [selectedTechId, setSelectedTechId] = useState<string>('');
   const [selectedNegotiationMonth, setSelectedNegotiationMonth] = useState<string>('all');
   const [opDim, setOpDim] = useState<'TECHNICIAN' | 'TYPE' | 'CUSTOMER' | 'LOCATION'>('TECHNICIAN');
@@ -529,6 +549,8 @@ export default function Dashboard() {
 
   type DashboardKey = readonly [string, string, string];
   type NegotiationMonthsKey = readonly [string, string, string];
+  type MonthlyGoalKey = readonly [string, string, string];
+  const preventiveGoalPeriod = currentMonthKey();
 
   const dashboardQuery = useMemo(() => {
     const qs = new URLSearchParams();
@@ -564,6 +586,17 @@ export default function Dashboard() {
     return apiFetch<ScheduledNegotiationMonthRow[]>(url, { token: t, tenantSlug: slug });
   };
 
+  const preventiveGoalKey: MonthlyGoalKey | null =
+    token && tenantSlug
+      ? ([`/goals/monthly/preventive-maintenance?period=${preventiveGoalPeriod}`, String(token), String(tenantSlug)] as const)
+      : null;
+
+  const fetchMonthlyGoal = (key: MonthlyGoalKey | null) => {
+    if (!key) throw new Error('Missing monthlyGoalKey');
+    const [url, t, slug] = key;
+    return apiFetch<MonthlyGoalProgress | null>(url, { token: t, tenantSlug: slug });
+  };
+
   const { data, error, isLoading } = useSWR<Summary, any, DashboardKey | null>(
     dashboardKey,
     fetchSummary,
@@ -579,6 +612,46 @@ export default function Dashboard() {
     fetchNegotiationMonths,
     { refreshInterval: 15000 }
   );
+
+  const {
+    data: preventiveGoal,
+    error: preventiveGoalFetchError,
+    isLoading: isPreventiveGoalLoading,
+    mutate: mutatePreventiveGoal,
+  } = useSWR<MonthlyGoalProgress | null, any, MonthlyGoalKey | null>(
+    preventiveGoalKey,
+    fetchMonthlyGoal,
+    { refreshInterval: 15000 }
+  );
+
+  useEffect(() => {
+    if (!preventiveGoal) return;
+    setPreventiveGoalTargetInput(String(preventiveGoal.target ?? 0));
+  }, [preventiveGoal?.period, preventiveGoal?.target]);
+
+  async function savePreventiveGoalTarget() {
+    if (!token || !tenantSlug) return;
+    const target = Number(preventiveGoalTargetInput);
+    if (!Number.isInteger(target) || target < 0) {
+      setPreventiveGoalError('La meta debe ser un entero mayor o igual a 0.');
+      return;
+    }
+    setSavingPreventiveGoal(true);
+    setPreventiveGoalError('');
+    try {
+      const updated = await apiFetch<MonthlyGoalProgress>('/goals/monthly/preventive-maintenance', {
+        method: 'PUT',
+        token: String(token),
+        tenantSlug: String(tenantSlug),
+        body: { period: preventiveGoalPeriod, target },
+      });
+      await mutatePreventiveGoal(updated, false);
+    } catch (e: any) {
+      setPreventiveGoalError(e?.message || 'Error guardando meta');
+    } finally {
+      setSavingPreventiveGoal(false);
+    }
+  }
 
   const rangeLabel = useMemo(() => {
     if (!data?.range) return '';
@@ -1341,6 +1414,76 @@ export default function Dashboard() {
             <StatCard title="Cerradas en rango" value={isLoading ? '—' : data?.service.closedInRange ?? 0} />
             <StatCard title="MTTR (horas)" value={isLoading ? '—' : (data?.service.mttrHours ?? '—')} hint="Promedio cierre (rango)" />
           </div>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base flex items-center">
+                Meta mensual de preventivos
+                <HelpTip text="Cuenta OS de tipo PREVENTIVO en COMPLETED/CLOSED durante el mes actual, usando fecha de cierre con fallback a updatedAt." />
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {isPreventiveGoalLoading ? (
+                <div className="text-sm text-neutral-500">Cargando meta...</div>
+              ) : preventiveGoalFetchError ? (
+                <div className="text-sm text-red-600">No se pudo cargar la meta.</div>
+              ) : (
+                <>
+                  <div className="flex flex-wrap items-end justify-between gap-4">
+                    <div>
+                      <div className="text-sm text-neutral-500">{formatMonthYearLabel(preventiveGoal?.period || preventiveGoalPeriod)}</div>
+                      <div className="mt-1 text-3xl font-semibold text-neutral-900">
+                        {preventiveGoal?.actual ?? 0}
+                        <span className="text-lg font-medium text-neutral-500"> / {preventiveGoal?.target ?? 0}</span>
+                      </div>
+                      <div className="mt-1 text-sm text-neutral-600">
+                        {(preventiveGoal?.target ?? 0) > 0
+                          ? `Faltan ${preventiveGoal?.remaining ?? 0} para cumplir la meta`
+                          : 'Define una meta para este mes'}
+                      </div>
+                    </div>
+
+                    <div className="flex items-end gap-2">
+                      <div className="space-y-1">
+                        <label className="text-xs text-neutral-600">Meta del mes</label>
+                        <input
+                          type="number"
+                          min={0}
+                          step={1}
+                          className="h-9 w-28 rounded-md border px-3 text-sm"
+                          value={preventiveGoalTargetInput}
+                          onChange={(e) => setPreventiveGoalTargetInput(e.target.value)}
+                          disabled={!isAdmin || savingPreventiveGoal}
+                        />
+                      </div>
+                      {isAdmin ? (
+                        <Button size="sm" onClick={savePreventiveGoalTarget} disabled={savingPreventiveGoal}>
+                          {savingPreventiveGoal ? 'Guardando...' : 'Guardar'}
+                        </Button>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="h-2 overflow-hidden rounded-full bg-neutral-100">
+                      <div
+                        className="h-full rounded-full bg-emerald-500"
+                        style={{ width: `${Math.min(Number(preventiveGoal?.progress ?? 0), 100)}%` }}
+                      />
+                    </div>
+                    <div className="mt-2 flex items-center justify-between gap-2 text-xs text-neutral-500">
+                      <span>{preventiveGoal?.progress == null ? 'Sin porcentaje' : `${preventiveGoal.progress}% completado`}</span>
+                      <Link className="underline" href="/service-orders">
+                        Ver OS
+                      </Link>
+                    </div>
+                  </div>
+
+                  {preventiveGoalError ? <div className="text-sm text-red-600">{preventiveGoalError}</div> : null}
+                </>
+              )}
+            </CardContent>
+          </Card>
 
           <Card data-pdf-section-ids="service-monthly-hours">
             <CardHeader>

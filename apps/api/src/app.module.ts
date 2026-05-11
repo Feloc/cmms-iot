@@ -18,6 +18,7 @@ import { DevicesModule } from './modules/devices/devices.module';
 import { TenantsModule } from './modules/tenants/tenants.module';
 import { AdminUsersModule } from './modules/admin-users/admin-users.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
+import { GoalsModule } from './modules/goals/goals.module';
 import { AppController } from './app.controller';
 
 
@@ -43,6 +44,7 @@ import { AppController } from './app.controller';
     TenantsModule,
     AdminUsersModule,
     DashboardModule,
+    GoalsModule,
   ],
 })
 export class AppModule {}

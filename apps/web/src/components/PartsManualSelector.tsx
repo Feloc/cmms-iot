@@ -51,6 +51,8 @@ export type PartsManual = {
 export type PartsManualHotspotUsage = {
   requiredQty?: number;
   replacedQty?: number;
+  requiredParts?: Array<{ id: string; label: string; qty: number }>;
+  replacedParts?: Array<{ id: string; label: string; qty: number }>;
 };
 
 type Props = {
@@ -61,6 +63,7 @@ type Props = {
   hotspotUsageById?: Record<string, PartsManualHotspotUsage>;
   onAddInventoryItem: (item: PartsManualInventoryMatch, qty: number) => Promise<void> | void;
   onAddFreeText: (freeText: string, qty: number) => Promise<void> | void;
+  onRemovePart?: (partId: string) => Promise<void> | void;
 };
 
 function resolveImageUrl(imageUrl: string) {
@@ -84,6 +87,7 @@ export function PartsManualSelector({
   hotspotUsageById,
   onAddInventoryItem,
   onAddFreeText,
+  onRemovePart,
 }: Props) {
   const [selectedPageId, setSelectedPageId] = useState<string>('');
   const [selectedHotspotId, setSelectedHotspotId] = useState<string>('');
@@ -177,6 +181,11 @@ export function PartsManualSelector({
     await Promise.resolve(onAddFreeText(selectedHotspot.freeText, nextQty));
   }
 
+  async function handleRemovePart(partId: string) {
+    if (!partId || !onRemovePart) return;
+    await Promise.resolve(onRemovePart(partId));
+  }
+
   return (
     <div className="overflow-hidden rounded-2xl border border-slate-200 bg-[linear-gradient(180deg,#ffffff_0%,#f8fafc_100%)] shadow-sm">
       <div className="border-b border-slate-200 bg-[radial-gradient(circle_at_top_left,_rgba(14,165,233,0.10),_transparent_30%),linear-gradient(135deg,#ffffff_0%,#f8fafc_45%,#eef2ff_100%)] px-4 py-4 sm:px-5">
@@ -243,8 +252,8 @@ export function PartsManualSelector({
 
         {manual ? (
           <div className="space-y-4">
-            <div className="grid gap-4 xl:grid-cols-[280px_minmax(0,1.55fr)_minmax(330px,0.95fr)]">
-              <aside className="space-y-3">
+            <div className="grid gap-4 xl:grid-cols-[240px_minmax(0,1fr)] 2xl:grid-cols-[240px_minmax(0,1fr)_320px]">
+              <aside className="space-y-3 xl:order-2">
                 <div className="rounded-2xl border border-slate-200 bg-white p-3">
                   <div className="mb-3 flex items-center justify-between gap-2">
                     <div>
@@ -319,7 +328,7 @@ export function PartsManualSelector({
                 </div>
               </aside>
 
-              <section className="space-y-3">
+              <section className="min-w-0 space-y-3 xl:order-1 xl:col-span-2 2xl:col-span-3">
                 <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3">
                   <div>
                     <div className="text-sm font-semibold text-slate-900">
@@ -427,7 +436,7 @@ export function PartsManualSelector({
                 </div>
               </section>
 
-              <aside className="space-y-3">
+              <aside className="space-y-3 xl:order-3 2xl:col-span-2">
                 <div className="rounded-2xl border border-slate-200 bg-white p-4">
                   <div className="flex items-center justify-between gap-2">
                     <div>
@@ -614,6 +623,32 @@ export function PartsManualSelector({
                       >
                         Agregar como texto libre
                       </button>
+
+                      {selectedHotspotUsage?.requiredParts?.length ? (
+                        <div className="mt-4 rounded-2xl border border-lime-200 bg-lime-50/70 px-3 py-3">
+                          <div className="text-sm font-medium text-lime-900">Seleccionado en esta OS</div>
+                          <div className="mt-2 space-y-2">
+                            {selectedHotspotUsage.requiredParts.map((part) => (
+                              <div key={part.id} className="flex items-center justify-between gap-3 rounded-xl bg-white px-3 py-2">
+                                <div className="min-w-0 text-sm text-slate-700">
+                                  <div className="truncate font-medium">{part.label}</div>
+                                  <div className="text-xs text-slate-500">Qty: {part.qty}</div>
+                                </div>
+                                {onRemovePart ? (
+                                  <button
+                                    type="button"
+                                    className="shrink-0 rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50 disabled:opacity-60"
+                                    onClick={() => handleRemovePart(part.id)}
+                                    disabled={disabled}
+                                  >
+                                    Quitar
+                                  </button>
+                                ) : null}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
                     </>
                   )}
                 </div>

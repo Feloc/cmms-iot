@@ -99,6 +99,17 @@ function fmt(dt?: string | null) {
   }
 }
 
+function pad2(value: number) {
+  return String(value).padStart(2, '0');
+}
+
+function toLocalInputValue(value?: string | null) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}T${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
+}
+
 function monthToRange(value: string) {
   const raw = String(value || '').trim();
   if (!/^\d{4}-\d{2}$/.test(raw)) return null;
@@ -393,7 +404,7 @@ export default function ServiceOrdersPage() {
       for (const so of items) {
         if (next[so.id]) continue;
 
-        const dueLocal = so.dueDate ? new Date(so.dueDate).toISOString().slice(0, 16) : '';
+        const dueLocal = toLocalInputValue(so.dueDate);
         const tech = so.assignments?.find((a) => a.role === 'TECHNICIAN' && a.state === 'ACTIVE')?.user?.id ?? '';
         next[so.id] = { dueLocal, technicianId: tech };
         changed = true;

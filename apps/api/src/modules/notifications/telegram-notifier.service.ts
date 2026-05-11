@@ -6,6 +6,7 @@ type ServiceOrderCommercialNotification = {
   title?: string | null;
   customer?: string | null;
   serialNumber?: string | null;
+  dueDate?: Date | string | null;
   previousStatus?: string | null;
   nextStatus: string;
 };
@@ -45,6 +46,7 @@ export class TelegramNotifierService {
     const title = String(payload.title || '').trim();
     const customer = String(payload.customer || '').trim();
     const serial = String(payload.serialNumber || '').trim();
+    const dueDate = this.formatDateTime(payload.dueDate);
 
     const lines = [
       `OS con negociacion ${nextLabel}`,
@@ -54,6 +56,7 @@ export class TelegramNotifierService {
       title ? `Titulo: ${title}` : null,
       customer ? `Cliente: ${customer}` : null,
       serial ? `Serie: ${serial}` : null,
+      dueDate ? `Programacion: ${dueDate}` : 'Programacion: Sin fecha',
       `Cambio: ${previousLabel} -> ${nextLabel}`,
     ].filter((line): line is string => line !== null);
 
@@ -67,6 +70,23 @@ export class TelegramNotifierService {
   private commercialStatusLabel(status: string) {
     const normalized = String(status || '').trim().toUpperCase();
     return COMMERCIAL_STATUS_LABELS[normalized] || normalized || 'Sin definir';
+  }
+
+  private formatDateTime(value?: Date | string | null) {
+    if (!value) return null;
+    const date = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(date.getTime())) return null;
+    const timeZone = process.env.TELEGRAM_TIME_ZONE || 'America/Bogota';
+    return new Intl.DateTimeFormat('es-CO', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+      timeZone,
+      timeZoneName: 'short',
+    }).format(date);
   }
 
   private async sendMessage(text: string) {

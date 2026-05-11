@@ -5,7 +5,7 @@ import { useAssetsDetail } from '../assets-detail.context';
 
 type Unit = 'DAY' | 'MONTH' | 'YEAR';
 type PmPlan = { id: string; name: string; intervalHours?: number | null; defaultDurationMin?: number | null; active?: boolean };
-type FutureServiceOrder = { id: string; dueDate?: string | null; status?: string | null; title?: string | null; pmPlanId?: string | null };
+type PreventiveServiceOrder = { id: string; dueDate?: string | null; status?: string | null; title?: string | null; pmPlanId?: string | null };
 type CompletedPreventiveOrder = {
   id: string;
   workOrderId?: string | null;
@@ -50,7 +50,8 @@ export default function MaintenancePlanTab({
   const [err, setErr] = React.useState<string | null>(null);
   const [info, setInfo] = React.useState<string | null>(null);
   const [generateResult, setGenerateResult] = React.useState<any>(null);
-  const [futureOrders, setFutureOrders] = React.useState<FutureServiceOrder[]>([]);
+  const [overdueOrders, setOverdueOrders] = React.useState<PreventiveServiceOrder[]>([]);
+  const [futureOrders, setFutureOrders] = React.useState<PreventiveServiceOrder[]>([]);
   const [lastMaintenances, setLastMaintenances] = React.useState<CompletedPreventiveOrder[]>([]);
   const [loadingFutureOrders, setLoadingFutureOrders] = React.useState(false);
 
@@ -119,6 +120,7 @@ export default function MaintenancePlanTab({
       let json: any = {};
       try { json = text ? JSON.parse(text) : {}; } catch {}
       if (!res.ok) throw new Error(json?.message || json?.error || `HTTP ${res.status}`);
+      setOverdueOrders(Array.isArray(json?.overdueServiceOrders) ? json.overdueServiceOrders : []);
       setFutureOrders(Array.isArray(json?.futureServiceOrders) ? json.futureServiceOrders : []);
       setLastMaintenances(Array.isArray(json?.lastPreventiveMaintenances) ? json.lastPreventiveMaintenances : []);
     } catch (e: any) {
@@ -384,7 +386,7 @@ export default function MaintenancePlanTab({
       ) : null}
 
       <div className="border rounded-lg p-4 space-y-2">
-        <h3 className="font-semibold">Últimos 3 mantenimientos preventivos realizados</h3>
+        <h3 className="font-semibold">Mantenimientos preventivos realizados</h3>
         {loadingFutureOrders ? (
           <div className="text-sm text-gray-600">Cargando…</div>
         ) : lastMaintenances.length === 0 ? (
@@ -401,6 +403,29 @@ export default function MaintenancePlanTab({
                   <span>{r.title || r.id}</span>
                 )}
                 {r?.note ? ` · ${r.note}` : ''}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      <div className="border rounded-lg p-4 space-y-2">
+        <div className="flex items-center justify-between gap-3">
+          <h3 className="font-semibold">OS preventivas vencidas sin ejecutar</h3>
+          {overdueOrders.length > 0 ? (
+            <span className="rounded-full bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700">{overdueOrders.length}</span>
+          ) : null}
+        </div>
+        {loadingFutureOrders ? (
+          <div className="text-sm text-gray-600">Cargando…</div>
+        ) : overdueOrders.length === 0 ? (
+          <div className="text-sm text-gray-600">No hay OS preventivas vencidas sin ejecutar para este activo/plan.</div>
+        ) : (
+          <ul className="list-disc pl-5 text-sm">
+            {overdueOrders.map((r) => (
+              <li key={r.id}>
+                {r?.dueDate ? new Date(r.dueDate).toLocaleString() : 'Sin fecha'} · {r?.status ?? '-'} ·{' '}
+                <a className="underline" href={`/service-orders/${r.id}`}>{r.title || r.id}</a>
               </li>
             ))}
           </ul>

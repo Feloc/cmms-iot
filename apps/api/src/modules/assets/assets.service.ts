@@ -118,15 +118,15 @@ export class AssetsService {
     tx: Prisma.TransactionClient,
     tenantId: string,
     asset: { id: string; code: string },
-    limit = 3,
+    limit?: number | null,
   ) {
-    const safeLimit = Math.max(3, Math.min(30, Number(limit || 3)));
-    const fetchTake = Math.max(safeLimit * 4, 12);
+    const safeLimit = limit == null ? null : Math.max(3, Math.min(500, Number(limit || 3)));
+    const fetchTake = safeLimit == null ? null : Math.max(safeLimit * 4, 12);
 
     const recordedRows = await (tx as any).assetPreventiveMaintenance.findMany({
       where: { tenantId, assetId: asset.id },
       orderBy: [{ executedAt: 'desc' }, { createdAt: 'desc' }],
-      take: fetchTake,
+      ...(fetchTake == null ? {} : { take: fetchTake }),
       include: {
         pmPlan: { select: { id: true, name: true } },
         workOrder: {
@@ -171,7 +171,7 @@ export class AssetsService {
         updatedAt: true,
         pmPlan: { select: { id: true, name: true } },
       },
-      take: fetchTake,
+      ...(fetchTake == null ? {} : { take: fetchTake }),
     });
 
     const items = [
@@ -210,7 +210,7 @@ export class AssetsService {
       .filter((item: any) => !!item?.executedAt)
       .sort((a: any, b: any) => new Date(b.executedAt).getTime() - new Date(a.executedAt).getTime());
 
-    return items.slice(0, safeLimit);
+    return safeLimit == null ? items : items.slice(0, safeLimit);
   }
 
   private parseHourmeterDateWindow(from?: string, to?: string, defaultDays = 90): { from: Date; to: Date } {
@@ -854,30 +854,49 @@ if (q.customer) where.customer = { contains: q.customer.trim(), mode: 'insensiti
       });
 
       const now = new Date();
-      const futureWhere: any = {
+      const openPreventiveOrderWhere: any = {
         tenantId,
         kind: 'SERVICE_ORDER',
         serviceOrderType: 'PREVENTIVO',
         assetCode: asset.code,
-        dueDate: { not: null, gte: now },
         status: { notIn: ['CANCELED', 'COMPLETED', 'CLOSED'] },
       };
-      if (plan?.pmPlanId) futureWhere.pmPlanId = plan.pmPlanId;
+      if (plan?.pmPlanId) openPreventiveOrderWhere.pmPlanId = plan.pmPlanId;
 
-      const futureServiceOrders = await tx.workOrder.findMany({
-        where: futureWhere,
+      const overdueServiceOrders = await tx.workOrder.findMany({
+        where: {
+          ...openPreventiveOrderWhere,
+          dueDate: { not: null, lt: now },
+        },
         orderBy: [{ dueDate: 'asc' }, { createdAt: 'desc' }],
         select: { id: true, dueDate: true, status: true, title: true, pmPlanId: true },
         take: 500,
       });
 
-      const lastPreventiveMaintenances = await this.listPreventiveMaintenanceHistory(tx, tenantId, asset, 3);
+      const futureServiceOrders = await tx.workOrder.findMany({
+        where: {
+          ...openPreventiveOrderWhere,
+          dueDate: { not: null, gte: now },
+        },
+        orderBy: [{ dueDate: 'asc' }, { createdAt: 'desc' }],
+        select: { id: true, dueDate: true, status: true, title: true, pmPlanId: true },
+        take: 500,
+      });
+
+      const lastPreventiveMaintenances = await this.listPreventiveMaintenanceHistory(tx, tenantId, asset);
 
       return {
         assetId: asset.id,
         assetCode: asset.code,
         acquiredOn: asset.acquiredOn,
         plan: plan ?? null,
+        overdueServiceOrders: (overdueServiceOrders ?? []).map((wo: any) => ({
+          id: wo.id,
+          dueDate: wo?.dueDate ? new Date(wo.dueDate).toISOString() : null,
+          status: wo.status,
+          title: wo.title,
+          pmPlanId: wo.pmPlanId ?? null,
+        })),
         futureServiceOrders: (futureServiceOrders ?? []).map((wo: any) => ({
           id: wo.id,
           dueDate: wo?.dueDate ? new Date(wo.dueDate).toISOString() : null,

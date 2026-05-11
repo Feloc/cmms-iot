@@ -754,6 +754,8 @@ const invPath = useMemo(() => {
       for (const hotspot of page.hotspots ?? []) {
         let requiredQty = 0;
         let replacedQty = 0;
+        const matchedRequiredParts: PartsManualHotspotUsage['requiredParts'] = [];
+        const matchedReplacedParts: PartsManualHotspotUsage['replacedParts'] = [];
 
         for (const part of requiredParts) {
           const inventoryMatch =
@@ -763,7 +765,13 @@ const invPath = useMemo(() => {
             !!part.freeText &&
             normalizeText(part.freeText) === normalizeText(hotspot.freeText);
           if (inventoryMatch || freeTextMatch) {
-            requiredQty += Number(part.qty ?? 0) || 0;
+            const partQty = Number(part.qty ?? 0) || 0;
+            requiredQty += partQty;
+            matchedRequiredParts.push({
+              id: part.id,
+              label: part.inventoryItem ? `${part.inventoryItem.sku} — ${part.inventoryItem.name}` : part.freeText || hotspot.freeText,
+              qty: partQty,
+            });
           }
         }
 
@@ -775,7 +783,13 @@ const invPath = useMemo(() => {
             !!part.freeText &&
             normalizeText(part.freeText) === normalizeText(hotspot.freeText);
           if (inventoryMatch || freeTextMatch) {
-            replacedQty += Number(part.qty ?? 0) || 0;
+            const partQty = Number(part.qty ?? 0) || 0;
+            replacedQty += partQty;
+            matchedReplacedParts.push({
+              id: part.id,
+              label: part.inventoryItem ? `${part.inventoryItem.sku} — ${part.inventoryItem.name}` : part.freeText || hotspot.freeText,
+              qty: partQty,
+            });
           }
         }
 
@@ -783,6 +797,8 @@ const invPath = useMemo(() => {
           usageById[hotspot.id] = {
             requiredQty,
             replacedQty,
+            requiredParts: matchedRequiredParts,
+            replacedParts: matchedReplacedParts,
           };
         }
       }
@@ -1349,7 +1365,7 @@ async function setTimestamp(key: TsKey, localValue: string) {
   const quoteItems = (quotesData?.items ?? []) as QuoteSummary[];
 
   return (
-    <div className="p-4 space-y-6 max-w-4xl">
+    <div className="w-full max-w-none p-4 space-y-6">
       {uiErr ? (
         <div className="p-3 border rounded bg-red-50 text-red-700 text-sm whitespace-pre-wrap">{uiErr}</div>
       ) : null}
@@ -2401,6 +2417,7 @@ async function setTimestamp(key: TsKey, localValue: string) {
                     hotspotUsageById={manualHotspotUsageById}
                     onAddInventoryItem={(item, qty) => submitPart({ inventoryItem: item, qty })}
                     onAddFreeText={(freeText, qty) => submitPart({ freeText, qty })}
+                    onRemovePart={(partId) => removePart(partId)}
                   />
                 </div>
               ) : (

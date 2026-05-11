@@ -157,8 +157,25 @@ model Tenant {
   pmPlans               PmPlan[]
   assetMaintenancePlans AssetMaintenancePlan[]
   preventiveMaintenanceRecords AssetPreventiveMaintenance[]
+  goals                Goal[]
 
   workOrderReports      WorkOrderReport[]
+}
+
+model Goal {
+  id        String   @id @default(cuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  metric    String
+  period    String
+  target    Int
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, metric, period])
+  @@index([tenantId, metric, period])
 }
 
 enum WorkOrderReportAudience {

@@ -35,6 +35,7 @@ type CommercialStatusNotification = {
   id: string;
   assetCode?: string | null;
   title?: string | null;
+  dueDate?: Date | string | null;
   previousStatus?: string | null;
   nextStatus: string;
 };
@@ -2166,6 +2167,7 @@ return { ...(so as any), workLogs: enrichedLogs, formData, asset: asset ?? null,
         id: true,
         status: true,
         activityFinishedAt: true,
+        dueDate: true,
         assetCode: true,
         title: true,
         description: true,
@@ -2379,6 +2381,7 @@ return { ...(so as any), workLogs: enrichedLogs, formData, asset: asset ?? null,
         id,
         assetCode: (data as any).assetCode ?? (current as any).assetCode ?? null,
         title: (data as any).title ?? (current as any).title ?? null,
+        dueDate: (data as any).dueDate ?? (current as any).dueDate ?? null,
         previousStatus: previousCommercialStatus,
         nextStatus: String(nextCommercialStatus),
       };
