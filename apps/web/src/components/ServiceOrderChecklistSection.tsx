@@ -10,6 +10,7 @@ type ChecklistItem = {
   label: string;
   required?: boolean;
   done: boolean;
+  notApplicable?: boolean;
   notes?: string | null;
 };
 
@@ -52,7 +53,8 @@ function toChecklistState(
       return {
         label: t.label,
         required: !!t.required,
-        done: prev?.done ?? false,
+        done: prev?.notApplicable ? false : (prev?.done ?? false),
+        notApplicable: !t.required && !!prev?.notApplicable,
         notes: prev?.notes ?? '',
       };
     });
@@ -68,6 +70,7 @@ function toChecklistState(
         label: t.label,
         required: !!t.required,
         done: !!legacyChecked[t.label],
+        notApplicable: false,
         notes: '',
       })),
     };
@@ -76,7 +79,7 @@ function toChecklistState(
   return {
     templateKey: template.key,
     templateName: template.name,
-    items: template.items.map((t) => ({ label: t.label, required: !!t.required, done: false, notes: '' })),
+    items: template.items.map((t) => ({ label: t.label, required: !!t.required, done: false, notApplicable: false, notes: '' })),
   };
 }
 
@@ -219,11 +222,13 @@ export function ServiceOrderChecklistSection({
   }
 
   const progress = useMemo(() => {
-    if (!checklist?.items?.length) return { done: 0, total: 0, reqPending: 0 };
-    const total = checklist.items.length;
-    const done = checklist.items.filter((i) => i.done).length;
-    const reqPending = checklist.items.filter((i) => i.required && !i.done).length;
-    return { done, total, reqPending };
+    if (!checklist?.items?.length) return { done: 0, total: 0, reqPending: 0, notApplicable: 0 };
+    const applicableItems = checklist.items.filter((i) => !i.notApplicable);
+    const total = applicableItems.length;
+    const done = applicableItems.filter((i) => i.done).length;
+    const reqPending = checklist.items.filter((i) => i.required && !i.done && !i.notApplicable).length;
+    const notApplicable = checklist.items.filter((i) => i.notApplicable).length;
+    return { done, total, reqPending, notApplicable };
   }, [checklist]);
 
   const checkedByLabel = useMemo(() => {
@@ -287,9 +292,10 @@ export function ServiceOrderChecklistSection({
         </div>
 
         <div className="text-xs text-gray-700">
-          {progress.total ? (
+          {progress.total || progress.notApplicable ? (
             <span>
               {progress.done}/{progress.total} · Pendientes requeridos: {progress.reqPending}
+              {progress.notApplicable ? ` · No aplica: ${progress.notApplicable}` : ''}
             </span>
           ) : (
             <span>—</span>
@@ -307,27 +313,51 @@ export function ServiceOrderChecklistSection({
 
           return (
             <div key={idx} className="border rounded p-2">
-              <label className="flex items-start gap-2">
+              <div className="flex items-start gap-2">
                 <input
                   type="checkbox"
                   className="mt-1"
                   checked={!!it.done}
+                  disabled={!!it.notApplicable}
+                  aria-label={`Marcar ${it.label} como realizado`}
                   onChange={(e) => {
                     const done = e.target.checked;
                     setDirty(true);
                     setChecklist((s) => {
                       if (!s) return s;
                       const items = [...s.items];
-                      items[idx] = { ...items[idx], done };
+                      items[idx] = { ...items[idx], done, notApplicable: done ? false : items[idx].notApplicable };
                       return { ...s, items };
                     });
                   }}
                 />
                 <div className="flex-1">
-                  <div className="text-sm font-medium">
-                    {it.label} {it.required ? <span className="text-xs text-red-600">(requerido)</span> : null}
-                    {meta?.name ? <span className="text-xs text-gray-600"> · {meta.name}</span> : null}
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm font-medium">
+                    <span className={it.notApplicable ? 'text-gray-500' : ''}>
+                      {it.label} {it.required ? <span className="text-xs text-red-600">(requerido)</span> : null}
+                    </span>
+                    {it.notApplicable ? <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-700">No aplica</span> : null}
+                    {meta?.name ? <span className="text-xs text-gray-600">· {meta.name}</span> : null}
                   </div>
+                  {!it.required ? (
+                    <label className="mt-1 inline-flex items-center gap-2 text-xs text-gray-700">
+                      <input
+                        type="checkbox"
+                        checked={!!it.notApplicable}
+                        onChange={(e) => {
+                          const notApplicable = e.target.checked;
+                          setDirty(true);
+                          setChecklist((s) => {
+                            if (!s) return s;
+                            const items = [...s.items];
+                            items[idx] = { ...items[idx], notApplicable, done: notApplicable ? false : items[idx].done };
+                            return { ...s, items };
+                          });
+                        }}
+                      />
+                      No aplica
+                    </label>
+                  ) : null}
                   <input
                     className="mt-1 w-full border rounded px-2 py-1 text-sm"
                     placeholder="Nota / lectura / comentario (opcional)"
@@ -344,7 +374,7 @@ export function ServiceOrderChecklistSection({
                     }}
                   />
                 </div>
-              </label>
+              </div>
             </div>
           );
         })}

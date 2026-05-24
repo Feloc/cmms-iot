@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Res, Req, UploadedFiles, UseInterceptors } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Res, Req, UploadedFile, UploadedFiles, UseInterceptors } from '@nestjs/common';
 import { ServiceOrdersService } from './service-orders.service';
 import { CreateServiceOrderDto } from './dto/create-service-order.dto';
 import { UpdateServiceOrderDto } from './dto/update-service-order.dto';
@@ -6,7 +6,7 @@ import { ScheduleServiceOrderDto } from './dto/schedule-service-order.dto';
 import { ServiceOrderTimestampsDto } from './dto/timestamps.dto';
 import { ServiceOrderFormDataDto } from './dto/form-data.dto';
 import { ServiceOrderSignaturesDto } from './dto/signatures.dto';
-import { AddServiceOrderPartDto } from './dto/parts.dto';
+import { AddServiceOrderPartDto, UpdateServiceOrderPartDto } from './dto/parts.dto';
 import { MarkServiceOrderPartReplacedDto } from './dto/mark-part-replaced.dto';
 import { CreateServiceOrderReportDto } from './dto/create-report.dto';
 import { UpdateServiceOrderWorkLogDto } from './dto/update-worklog.dto';
@@ -17,7 +17,7 @@ import { ListServiceOrdersQuery } from './dto/list-service-orders.query';
 import { ListServiceOrderIssuesQuery } from './dto/list-issues.query';
 import { UpsertServiceOrderIssueDto, CreateCorrectiveFromIssueDto } from './dto/issue.dto';
 import { ServiceOrdersCalendarQuery } from './dto/calendar.query';
-import { FilesInterceptor } from '@nestjs/platform-express';
+import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { memoryStorage, diskStorage } from 'multer';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
@@ -199,6 +199,44 @@ export class ServiceOrdersController {
   @Post(':id/parts')
   addPart(@Param('id') id: string, @Body() dto: AddServiceOrderPartDto) {
     return this.svc.addPart(id, dto);
+  }
+
+  @Patch(':id/parts/:partId')
+  updatePart(@Param('id') id: string, @Param('partId') partId: string, @Body() dto: UpdateServiceOrderPartDto) {
+    return this.svc.updatePart(id, partId, dto);
+  }
+
+  @Post(':id/parts/:partId/photo')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: diskStorage({
+        destination: (_req: any, _file: any, cb: any) => {
+          const dir = path.join(process.cwd(), 'uploads', 'tmp');
+          cb(null, dir);
+        },
+        filename: (_req: any, file: any, cb: any) => {
+          const extRaw = path.extname(String(file?.originalname || '')).toLowerCase();
+          const ext = extRaw && extRaw.length <= 10 ? extRaw : '';
+          cb(null, `${Date.now()}-${randomUUID()}${ext}`);
+        },
+      }),
+      limits: { fileSize: 10 * 1024 * 1024 },
+      fileFilter: (_req: any, file: any, cb: any) => cb(null, !!file?.mimetype?.startsWith('image/')),
+    }),
+  )
+  uploadPartPhoto(@Param('id') id: string, @Param('partId') partId: string, @UploadedFile() file: any) {
+    return this.svc.uploadPartPhoto(id, partId, file);
+  }
+
+  @Get(':id/parts/:partId/photo')
+  async getPartPhoto(@Param('id') id: string, @Param('partId') partId: string, @Res() res: Response) {
+    const p = await this.svc.getPartPhotoPath(id, partId);
+    return res.sendFile(p);
+  }
+
+  @Delete(':id/parts/:partId/photo')
+  deletePartPhoto(@Param('id') id: string, @Param('partId') partId: string) {
+    return this.svc.deletePartPhoto(id, partId);
   }
 
   @Delete(':id/parts/:partId')

@@ -1,9 +1,11 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useSession } from 'next-auth/react';
+import { ChevronLeft, ChevronRight, RefreshCcw, X } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
 import { getAuthFromSession } from '@/lib/auth';
+import { AttachmentFilePicker } from '@/components/AttachmentFilePicker';
 
 type Props = {
   serviceOrderId: string;
@@ -20,9 +22,8 @@ export function ServiceOrderImagesGallery({ serviceOrderId }: Props) {
   const [items, setItems] = useState<Item[]>([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
+  const [uploadProgress, setUploadProgress] = useState('');
   const [lightbox, setLightbox] = useState<number | null>(null);
-
-  const fileRef = useRef<HTMLInputElement | null>(null);
 
   const baseApi = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
@@ -85,25 +86,44 @@ export function ServiceOrderImagesGallery({ serviceOrderId }: Props) {
     if (!files || files.length === 0) return;
     if (!auth.token || !auth.tenantSlug) return;
 
+    const selected = Array.from(files);
     setBusy(true);
     setErr('');
+    setUploadProgress('');
     try {
-      const fd = new FormData();
-      for (const f of Array.from(files)) fd.append('files', f);
+      const failures: string[] = [];
 
-      const res = await fetch(`${baseApi}/service-orders/${serviceOrderId}/attachments?type=IMAGE`, {
-        method: 'POST',
-        headers, // Authorization + x-tenant
-        body: fd,
-      });
-      if (!res.ok) throw new Error(await res.text());
-      await res.json().catch(() => null);
+      for (let i = 0; i < selected.length; i += 1) {
+        const file = selected[i];
+        setUploadProgress(`Subiendo ${i + 1} de ${selected.length}: ${file.name}`);
 
-      if (fileRef.current) fileRef.current.value = '';
+        const fd = new FormData();
+        fd.append('files', file);
+
+        const res = await fetch(`${baseApi}/service-orders/${serviceOrderId}/attachments?type=IMAGE`, {
+          method: 'POST',
+          headers, // Authorization + x-tenant
+          body: fd,
+        });
+
+        if (!res.ok) {
+          const detail = await res.text().catch(() => '');
+          failures.push(`${file.name}: ${detail || res.statusText || res.status}`);
+          continue;
+        }
+
+        await res.json().catch(() => null);
+      }
+
       await load();
+
+      if (failures.length > 0) {
+        setErr(`No se pudieron subir ${failures.length} archivo(s):\n${failures.join('\n')}`);
+      }
     } catch (e: any) {
       setErr(e?.message ?? 'Error subiendo imágenes');
     } finally {
+      setUploadProgress('');
       setBusy(false);
     }
   }
@@ -139,16 +159,19 @@ export function ServiceOrderImagesGallery({ serviceOrderId }: Props) {
           <div className="text-xs text-gray-600">Miniaturas (click para ampliar)</div>
         </div>
         <div className="flex items-center gap-2">
-          <input
-            ref={fileRef}
-            type="file"
+          <AttachmentFilePicker
+            label="Elegir fotos"
             accept="image/*"
-            multiple
-            onChange={(e) => uploadFiles(e.target.files)}
             disabled={busy}
-            className="text-sm"
+            onFiles={uploadFiles}
           />
-          <button type="button" className="px-3 py-2 border rounded text-sm" onClick={load} disabled={busy}>
+          <button
+            type="button"
+            className="inline-flex min-h-10 items-center gap-2 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-800 transition-all duration-150 hover:-translate-y-0.5 hover:border-gray-400 hover:bg-gray-50 hover:shadow-sm active:translate-y-0 active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50"
+            onClick={load}
+            disabled={busy}
+          >
+            <RefreshCcw className="h-4 w-4" aria-hidden="true" />
             Refrescar
           </button>
         </div>
@@ -156,20 +179,21 @@ export function ServiceOrderImagesGallery({ serviceOrderId }: Props) {
 
       {err ? <div className="text-sm text-red-700 whitespace-pre-wrap">{err}</div> : null}
       {busy ? <div className="text-sm text-gray-600">Procesando…</div> : null}
+      {uploadProgress ? <div className="text-sm text-gray-600">{uploadProgress}</div> : null}
 
       <div className="flex gap-2 overflow-x-auto">
         {items.map((it, idx) => (
           <button
             key={it.filename}
             type="button"
-            className="relative shrink-0"
+            className="relative shrink-0 rounded-md transition-all duration-150 hover:-translate-y-0.5 hover:shadow-sm active:translate-y-0 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-300"
             onClick={() => setLightbox(idx)}
             title={it.filename}
           >
             <img src={it.url} alt={it.filename} className="w-24 h-20 object-cover rounded border" />
             {isAdmin ? (
               <span
-                className="absolute top-1 right-1 bg-white/90 border rounded px-1 text-xs"
+                className="absolute right-1 top-1 inline-flex h-6 w-6 items-center justify-center rounded-md border border-red-200 bg-white/95 text-xs font-medium text-red-700 shadow-sm transition-colors hover:bg-red-50"
                 onClick={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
@@ -177,7 +201,7 @@ export function ServiceOrderImagesGallery({ serviceOrderId }: Props) {
                 }}
                 title="Eliminar"
               >
-                ✕
+                <X className="h-3.5 w-3.5" aria-hidden="true" />
               </span>
             ) : null}
           </button>
@@ -195,20 +219,27 @@ export function ServiceOrderImagesGallery({ serviceOrderId }: Props) {
                 <div className="text-sm break-all">{current.filename}</div>
                 <div className="flex items-center gap-2">
                   <button
-                    className="px-2 py-1 border rounded text-sm"
+                    className="inline-flex min-h-8 items-center gap-1 rounded-md border border-gray-300 bg-white px-2 py-1 text-xs font-medium text-gray-800 transition-all hover:bg-gray-50 active:scale-[0.98]"
                     type="button"
                     onClick={() => setLightbox((i) => (i == null ? i : (i + items.length - 1) % items.length))}
+                    aria-label="Foto anterior"
                   >
-                    ◀
+                    <ChevronLeft className="h-4 w-4" aria-hidden="true" />
                   </button>
                   <button
-                    className="px-2 py-1 border rounded text-sm"
+                    className="inline-flex min-h-8 items-center gap-1 rounded-md border border-gray-300 bg-white px-2 py-1 text-xs font-medium text-gray-800 transition-all hover:bg-gray-50 active:scale-[0.98]"
                     type="button"
                     onClick={() => setLightbox((i) => (i == null ? i : (i + 1) % items.length))}
+                    aria-label="Foto siguiente"
                   >
-                    ▶
+                    <ChevronRight className="h-4 w-4" aria-hidden="true" />
                   </button>
-                  <button className="px-2 py-1 border rounded text-sm" type="button" onClick={() => setLightbox(null)}>
+                  <button
+                    className="inline-flex min-h-8 items-center gap-2 rounded-md border border-gray-300 bg-white px-3 py-1 text-xs font-medium text-gray-800 transition-all hover:bg-gray-50 active:scale-[0.98]"
+                    type="button"
+                    onClick={() => setLightbox(null)}
+                  >
+                    <X className="h-3.5 w-3.5" aria-hidden="true" />
                     Cerrar
                   </button>
                 </div>

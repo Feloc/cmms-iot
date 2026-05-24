@@ -122,6 +122,33 @@ export const ALISTAMIENTO_TEMPLATES: ChecklistTemplate[] = [
       { label: 'Prueba de carga', required: true },
     ],
   },
+  {
+    key: 'ESTIBADORES ELECTRICOS',
+    name: 'ESTIBADORES ELECTRICOS',
+    matchBrands: ['HELI'],
+    matchModels: ['CBD'],
+    items: [
+      { label: 'Boton Paro de emergencia', required: true },
+      { label: 'Frenos', required: true },
+      { label: 'Indicador de batería', required: true },
+      { label: 'Horquillas', required: true},
+      { label: 'Sistema de Dirección', required: true },
+      { label: 'Funciones(Subir, bajar)', required: true },
+      { label: 'Sistema hidráulico', required: true },
+      { label: 'Mastil', required: true },
+      { label: 'Cadenas', required: true },
+      { label: 'Apariencia', required: true },
+      { label: 'Etiquetas MyZ y Logos', required: true },
+      { label: 'Tornillería', required: true },
+      { label: 'Conexiones eléctricas', required: true },
+      { label: 'Batería', required: true },
+      { label: 'Cargador', required: true },
+      { label: 'Ruedas', required: true },
+      { label: 'Patas', required: true },
+      { label: 'Prueba de carga', required: true },
+      { label: 'Prueba', required: true }
+    ],
+  }
 ];
 
 export function resolveAlistamientoTemplate(asset: { brand?: string | null; model?: string | null }) {

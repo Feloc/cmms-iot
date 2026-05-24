@@ -1,9 +1,11 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useSession } from 'next-auth/react';
+import { ExternalLink, Play, RefreshCcw, Trash2, X } from 'lucide-react';
 import { getAuthFromSession } from '@/lib/auth';
 import { apiFetch } from '@/lib/api';
+import { AttachmentFilePicker } from '@/components/AttachmentFilePicker';
 
 type Props = {
   serviceOrderId: string;
@@ -22,8 +24,6 @@ export function ServiceOrderFilesSection({ serviceOrderId, type, title }: Props)
   const [uploading, setUploading] = useState(false);
   const [err, setErr] = useState('');
   const [playing, setPlaying] = useState<{ filename: string; url: string } | null>(null);
-
-  const fileRef = useRef<HTMLInputElement | null>(null);
 
   const headers = useMemo(() => {
     const h: Record<string, string> = {};
@@ -75,7 +75,6 @@ export function ServiceOrderFilesSection({ serviceOrderId, type, title }: Props)
       if (!res.ok) throw new Error(await res.text());
       await res.json().catch(() => null);
 
-      if (fileRef.current) fileRef.current.value = '';
       await load();
     } catch (e: any) {
       setErr(e?.message ?? `Error subiendo ${title.toLowerCase()}`);
@@ -144,16 +143,19 @@ export function ServiceOrderFilesSection({ serviceOrderId, type, title }: Props)
         </div>
 
         <div className="flex items-center gap-2">
-          <input
-            ref={fileRef}
-            type="file"
-            multiple
+          <AttachmentFilePicker
+            label={`Elegir ${type === 'VIDEO' ? 'videos' : 'documentos'}`}
             accept={type === 'VIDEO' ? 'video/*' : undefined}
-            onChange={(e) => uploadFiles(e.target.files)}
-            className="text-sm"
             disabled={uploading || loading}
+            onFiles={uploadFiles}
           />
-          <button type="button" className="px-3 py-2 border rounded text-sm" onClick={load} disabled={uploading || loading}>
+          <button
+            type="button"
+            className="inline-flex min-h-10 items-center gap-2 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-800 transition-all duration-150 hover:-translate-y-0.5 hover:border-gray-400 hover:bg-gray-50 hover:shadow-sm active:translate-y-0 active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50"
+            onClick={load}
+            disabled={uploading || loading}
+          >
+            <RefreshCcw className="h-4 w-4" aria-hidden="true" />
             Refrescar
           </button>
         </div>
@@ -168,11 +170,21 @@ export function ServiceOrderFilesSection({ serviceOrderId, type, title }: Props)
           <div key={f} className="py-2 flex items-center justify-between gap-2">
             <div className="text-sm break-all">{f}</div>
             <div className="flex items-center gap-2">
-              <button className="px-2 py-1 border rounded text-sm" type="button" onClick={() => openFile(f)}>
+              <button
+                className="inline-flex min-h-8 items-center gap-2 rounded-md border border-gray-300 bg-white px-3 py-1 text-xs font-medium text-gray-800 transition-all hover:bg-gray-50 active:scale-[0.98]"
+                type="button"
+                onClick={() => openFile(f)}
+              >
+                {type === 'VIDEO' ? <Play className="h-3.5 w-3.5" aria-hidden="true" /> : <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />}
                 {type === 'VIDEO' ? 'Reproducir' : 'Abrir'}
               </button>
               {isAdmin ? (
-                <button className="px-2 py-1 border rounded text-sm" type="button" onClick={() => del(f)}>
+                <button
+                  className="inline-flex min-h-8 items-center gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-1 text-xs font-medium text-red-700 transition-all hover:bg-red-100 active:scale-[0.98]"
+                  type="button"
+                  onClick={() => del(f)}
+                >
+                  <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
                   Eliminar
                 </button>
               ) : null}
@@ -190,7 +202,12 @@ export function ServiceOrderFilesSection({ serviceOrderId, type, title }: Props)
             <div className="bg-white rounded border shadow max-w-3xl w-full p-3">
               <div className="flex items-center justify-between gap-2">
                 <div className="font-semibold text-sm break-all">{playing.filename}</div>
-                <button className="px-2 py-1 border rounded text-sm" onClick={closeVideo}>
+                <button
+                  className="inline-flex min-h-8 items-center gap-2 rounded-md border border-gray-300 bg-white px-3 py-1 text-xs font-medium text-gray-800 transition-all hover:bg-gray-50 active:scale-[0.98]"
+                  type="button"
+                  onClick={closeVideo}
+                >
+                  <X className="h-3.5 w-3.5" aria-hidden="true" />
                   Cerrar
                 </button>
               </div>

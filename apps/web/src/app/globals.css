@@ -22,4 +22,14 @@
   body {
     @apply bg-background text-foreground;
   }
+
+  button,
+  [role="button"] {
+    @apply cursor-pointer select-none;
+  }
+
+  button:disabled,
+  [role="button"][aria-disabled="true"] {
+    @apply cursor-not-allowed;
+  }
 }

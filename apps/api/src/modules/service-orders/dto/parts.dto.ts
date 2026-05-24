@@ -4,3 +4,7 @@ export class AddServiceOrderPartDto {
   qty?: number;
   notes?: string;
 }
+
+export class UpdateServiceOrderPartDto {
+  notes?: string | null;
+}

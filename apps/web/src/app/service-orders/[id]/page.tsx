@@ -3,9 +3,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { useSession } from 'next-auth/react';
+import { ImagePlus, Upload, X } from 'lucide-react';
 import { getAuthFromSession } from '@/lib/auth';
 import { useApiSWR } from '@/lib/swr';
 import { apiBase, apiFetch } from '@/lib/api';
+import { cn } from '@/lib/utils';
 import { SignatureCanvas } from '@/components/SignatureCanvas';
 import { ServiceOrderImagesGallery } from '@/components/ServiceOrderImagesGallery';
 import { ServiceOrderFilesSection } from '@/components/ServiceOrderFilesSection';
@@ -67,6 +69,14 @@ type AuditEntry = {
   from?: any;
   to?: any;
   user?: User | null;
+};
+
+type GeneralIssueNote = {
+  id: string;
+  text: string;
+  createdAt: string;
+  createdByUserId?: string | null;
+  createdByName?: string | null;
 };
 
 type WorkOrderReportRow = {
@@ -293,6 +303,25 @@ function commercialStatusMeta(status?: string | null) {
 type TsKey = 'takenAt' | 'arrivedAt' | 'checkInAt' | 'activityStartedAt' | 'activityFinishedAt' | 'deliveredAt';
 type VisitMode = 'PRIMARY' | 'FOLLOW_UP';
 
+type ActionButtonVariant = 'primary' | 'secondary' | 'success' | 'warning' | 'danger' | 'ghost';
+type ActionButtonSize = 'sm' | 'md';
+
+function actionButtonClass(variant: ActionButtonVariant = 'secondary', size: ActionButtonSize = 'md') {
+  return cn(
+    'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md border font-medium transition-all duration-150',
+    'hover:-translate-y-0.5 hover:shadow-sm active:translate-y-0 active:scale-[0.98]',
+    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-1',
+    'disabled:pointer-events-none disabled:translate-y-0 disabled:shadow-none disabled:opacity-50',
+    size === 'sm' ? 'min-h-8 px-3 py-1 text-xs' : 'min-h-10 px-3 py-2 text-sm',
+    variant === 'primary' && 'border-black bg-black text-white hover:bg-gray-800 focus-visible:ring-black/30',
+    variant === 'secondary' && 'border-gray-300 bg-white text-gray-800 hover:border-gray-400 hover:bg-gray-50 focus-visible:ring-gray-300',
+    variant === 'success' && 'border-emerald-700 bg-emerald-700 text-white hover:bg-emerald-800 focus-visible:ring-emerald-300',
+    variant === 'warning' && 'border-amber-300 bg-amber-50 text-amber-900 hover:border-amber-400 hover:bg-amber-100 focus-visible:ring-amber-300',
+    variant === 'danger' && 'border-red-200 bg-red-50 text-red-700 hover:border-red-300 hover:bg-red-100 focus-visible:ring-red-300',
+    variant === 'ghost' && 'border-transparent bg-transparent text-gray-700 hover:bg-gray-100 focus-visible:ring-gray-300',
+  );
+}
+
 const TS_FIELDS: Array<{ key: TsKey; label: string; hint?: string }> = [
   { key: 'takenAt', label: 'Hora toma OS', hint: 'Al registrar este tiempo, la OS pasa a IN_PROGRESS.' },
   { key: 'arrivedAt', label: 'Hora llegada cliente' },
@@ -396,6 +425,11 @@ export default function ServiceOrderDetailPage() {
   const [workLogDraft, setWorkLogDraft] = useState<{ startedAt: string; endedAt: string }>({ startedAt: '', endedAt: '' });
   const [partQ, setPartQ] = useState('');
   const [partQty, setPartQty] = useState<number>(1);
+  const [partNote, setPartNote] = useState('');
+  const [partPhotoUrls, setPartPhotoUrls] = useState<Record<string, string>>({});
+  const [partPhotoBusyById, setPartPhotoBusyById] = useState<Record<string, boolean>>({});
+  const [partPhotoPreview, setPartPhotoPreview] = useState<{ url: string; label: string } | null>(null);
+  const [issueNoteText, setIssueNoteText] = useState('');
   const [hourmeterReading, setHourmeterReading] = useState<string>('');
   const [hourmeterPhase, setHourmeterPhase] = useState<'BEFORE' | 'AFTER' | 'OTHER'>('OTHER');
   const [hourmeterNote, setHourmeterNote] = useState<string>('');
@@ -494,6 +528,20 @@ export default function ServiceOrderDetailPage() {
     const raw = Array.isArray(fd?._audit) ? (fd._audit as AuditEntry[]) : [];
     // Mostrar los últimos 8 (más recientes primero)
     return raw.slice(-8).reverse();
+  }, [data?.formData]);
+  const issueNotes = useMemo<GeneralIssueNote[]>(() => {
+    const fd = (data?.formData ?? {}) as any;
+    const raw = Array.isArray(fd?.issueNotes) ? fd.issueNotes : [];
+    return raw
+      .map((note: any) => ({
+        id: String(note?.id || ''),
+        text: String(note?.text || '').trim(),
+        createdAt: String(note?.createdAt || ''),
+        createdByUserId: note?.createdByUserId ? String(note.createdByUserId) : null,
+        createdByName: note?.createdByName ? String(note.createdByName) : null,
+      }))
+      .filter((note: GeneralIssueNote) => note.id && note.text)
+      .sort((a: GeneralIssueNote, b: GeneralIssueNote) => String(b.createdAt).localeCompare(String(a.createdAt)));
   }, [data?.formData]);
 
   function parseApiError(e: any): { status?: number; message: string; payload?: any } {
@@ -744,6 +792,61 @@ const invPath = useMemo(() => {
   );
   const requiredParts = (data?.serviceOrderParts ?? []).filter((p) => (p as any).stage !== 'REPLACED');
   const replacedParts = (data?.serviceOrderParts ?? []).filter((p) => (p as any).stage === 'REPLACED');
+  const partPhotoKey = useMemo(
+    () => (data?.serviceOrderParts ?? []).map((p) => p.id).sort().join('|'),
+    [data?.serviceOrderParts],
+  );
+
+  useEffect(() => {
+    if (!id || !auth.token || !auth.tenantSlug || !partPhotoKey) {
+      setPartPhotoUrls((prev) => {
+        Object.values(prev).forEach((url) => URL.revokeObjectURL(url));
+        return {};
+      });
+      return;
+    }
+
+    let cancelled = false;
+    const partIds = partPhotoKey.split('|').filter(Boolean);
+
+    async function loadPhotos() {
+      const next: Record<string, string> = {};
+      await Promise.all(
+        partIds.map(async (partId) => {
+          try {
+            const res = await fetch(`${apiBase}/service-orders/${id}/parts/${partId}/photo`, {
+              headers: {
+                Authorization: `Bearer ${auth.token}`,
+                'x-tenant': auth.tenantSlug!,
+              },
+            });
+            if (!res.ok) return;
+            const blob = await res.blob();
+            next[partId] = URL.createObjectURL(blob);
+          } catch {
+            // Sin foto o no disponible: se deja el placeholder.
+          }
+        }),
+      );
+
+      if (cancelled) {
+        Object.values(next).forEach((url) => URL.revokeObjectURL(url));
+        return;
+      }
+
+      setPartPhotoUrls((prev) => {
+        Object.values(prev).forEach((url) => URL.revokeObjectURL(url));
+        return next;
+      });
+    }
+
+    loadPhotos();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [id, auth.token, auth.tenantSlug, partPhotoKey]);
+
   const manualHotspotUsageById = useMemo<Record<string, PartsManualHotspotUsage>>(() => {
     if (!partsManual) return {};
 
@@ -1092,6 +1195,7 @@ async function setTimestamp(key: TsKey, localValue: string) {
     inventoryItem?: Pick<InventoryItem, 'id'> | null;
     freeText?: string;
     qty?: number;
+    notes?: string;
     resetSearch?: boolean;
   }) {
     if (techBlocked) {
@@ -1113,11 +1217,12 @@ async function setTimestamp(key: TsKey, localValue: string) {
     method: 'POST',
     token: auth.token!,
     tenantSlug: auth.tenantSlug!,
-    body: options.inventoryItem ? { inventoryItemId: options.inventoryItem.id, qty } : { freeText, qty },
+    body: options.inventoryItem ? { inventoryItemId: options.inventoryItem.id, qty, notes: options.notes } : { freeText, qty, notes: options.notes },
   });
   if (options.resetSearch) {
     setPartQ('');
     setPartQty(1);
+    setPartNote('');
   }
   mutate();
 } catch (e: any) {
@@ -1133,8 +1238,33 @@ async function setTimestamp(key: TsKey, localValue: string) {
       inventoryItem: item ?? null,
       freeText: item ? undefined : partQ.trim(),
       qty: Number(partQty ?? 1),
+      notes: partNote.trim(),
       resetSearch: true,
     });
+  }
+
+  async function updatePartNotes(part: Part, notes: string) {
+    if (techBlocked) {
+      setUiInfo('Tienes un WorkLog abierto en otra OS. Debes cerrarlo antes de modificar esta OS.');
+      return;
+    }
+    const nextNotes = notes.trim();
+    if (nextNotes === String(part.notes ?? '').trim()) return;
+
+    try {
+      await apiFetch(`/service-orders/${id}/parts/${part.id}`, {
+        method: 'PATCH',
+        token: auth.token!,
+        tenantSlug: auth.tenantSlug!,
+        body: { notes: nextNotes || null },
+      });
+      await mutate();
+    } catch (e: any) {
+      const parsed = parseApiError(e);
+      if (applyWorkLogBlockIfPresent(parsed)) return;
+      if (parsed.status === 403 || parsed.status === 409) setUiInfo(parsed.message);
+      else setUiErr(parsed.message || 'Error guardando comentario del repuesto');
+    }
   }
 
   async function markPartReplaced(part: Part) {
@@ -1195,6 +1325,148 @@ async function setTimestamp(key: TsKey, localValue: string) {
   if (parsed.status === 403 || parsed.status === 409) setUiInfo(parsed.message);
   else setUiErr(parsed.message || 'Error eliminando repuesto');
 }
+  }
+
+  async function uploadPartPhoto(partId: string, files: FileList) {
+    if (techBlocked) {
+      setUiInfo('Tienes un WorkLog abierto en otra OS. Debes cerrarlo antes de modificar esta OS.');
+      return;
+    }
+    const file = files?.[0];
+    if (!file) return;
+
+    setPartPhotoBusyById((prev) => ({ ...prev, [partId]: true }));
+    setUiErr('');
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+
+      const res = await fetch(`${apiBase}/service-orders/${id}/parts/${partId}/photo`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${auth.token}`,
+          'x-tenant': auth.tenantSlug!,
+        },
+        body: fd,
+      });
+
+      if (!res.ok) throw new Error(await res.text());
+
+      const preview = URL.createObjectURL(file);
+      setPartPhotoUrls((prev) => {
+        if (prev[partId]) URL.revokeObjectURL(prev[partId]);
+        return { ...prev, [partId]: preview };
+      });
+    } catch (e: any) {
+      setUiErr(e?.message ?? 'Error subiendo foto del repuesto');
+    } finally {
+      setPartPhotoBusyById((prev) => ({ ...prev, [partId]: false }));
+    }
+  }
+
+  async function deletePartPhoto(partId: string) {
+    if (techBlocked) {
+      setUiInfo('Tienes un WorkLog abierto en otra OS. Debes cerrarlo antes de modificar esta OS.');
+      return;
+    }
+    if (!confirm('¿Eliminar foto del repuesto?')) return;
+
+    setPartPhotoBusyById((prev) => ({ ...prev, [partId]: true }));
+    setUiErr('');
+    try {
+      const res = await fetch(`${apiBase}/service-orders/${id}/parts/${partId}/photo`, {
+        method: 'DELETE',
+        headers: {
+          Authorization: `Bearer ${auth.token}`,
+          'x-tenant': auth.tenantSlug!,
+        },
+      });
+
+      if (!res.ok) throw new Error(await res.text());
+
+      setPartPhotoUrls((prev) => {
+        if (prev[partId]) URL.revokeObjectURL(prev[partId]);
+        const next = { ...prev };
+        delete next[partId];
+        return next;
+      });
+    } catch (e: any) {
+      setUiErr(e?.message ?? 'Error eliminando foto del repuesto');
+    } finally {
+      setPartPhotoBusyById((prev) => ({ ...prev, [partId]: false }));
+    }
+  }
+
+  async function saveIssueNotes(nextNotes: GeneralIssueNote[]) {
+    if (!id || !auth.token || !auth.tenantSlug || !data) return;
+    const currentFd = data.formData && typeof data.formData === 'object' ? (data.formData as any) : {};
+    await apiFetch(`/service-orders/${id}/form`, {
+      method: 'PATCH',
+      token: auth.token,
+      tenantSlug: auth.tenantSlug,
+      body: { formData: { ...currentFd, issueNotes: nextNotes } },
+    });
+    await mutate();
+  }
+
+  async function addIssueNote() {
+    if (techBlocked) {
+      setUiInfo('Tienes un WorkLog abierto en otra OS. Debes cerrarlo antes de modificar esta OS.');
+      return;
+    }
+    const text = issueNoteText.trim();
+    if (!text) {
+      setUiErr('Escribe la novedad antes de agregarla.');
+      return;
+    }
+
+    setBusy(true);
+    setUiErr('');
+    setUiInfo('');
+    try {
+      const currentFd = data?.formData && typeof data.formData === 'object' ? (data.formData as any) : {};
+      const existing = Array.isArray(currentFd.issueNotes) ? currentFd.issueNotes : [];
+      const note: GeneralIssueNote = {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        text,
+        createdAt: new Date().toISOString(),
+        createdByUserId: currentUserId ?? null,
+        createdByName: (session as any)?.user?.name || (session as any)?.user?.email || null,
+      };
+      await saveIssueNotes([...existing, note]);
+      setIssueNoteText('');
+    } catch (e: any) {
+      const parsed = parseApiError(e);
+      if (applyWorkLogBlockIfPresent(parsed)) return;
+      if (parsed.status === 403 || parsed.status === 409) setUiInfo(parsed.message);
+      else setUiErr(parsed.message || 'Error agregando novedad');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeIssueNote(noteId: string) {
+    if (techBlocked) {
+      setUiInfo('Tienes un WorkLog abierto en otra OS. Debes cerrarlo antes de modificar esta OS.');
+      return;
+    }
+    if (!confirm('¿Eliminar esta novedad?')) return;
+
+    setBusy(true);
+    setUiErr('');
+    setUiInfo('');
+    try {
+      const currentFd = data?.formData && typeof data.formData === 'object' ? (data.formData as any) : {};
+      const existing = Array.isArray(currentFd.issueNotes) ? currentFd.issueNotes : [];
+      await saveIssueNotes(existing.filter((note: any) => String(note?.id || '') !== noteId));
+    } catch (e: any) {
+      const parsed = parseApiError(e);
+      if (applyWorkLogBlockIfPresent(parsed)) return;
+      if (parsed.status === 403 || parsed.status === 409) setUiInfo(parsed.message);
+      else setUiErr(parsed.message || 'Error eliminando novedad');
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function saveHourmeter() {
@@ -1394,7 +1666,7 @@ async function setTimestamp(key: TsKey, localValue: string) {
             {isAdmin ? (
               <button
                 type="button"
-                className="px-3 py-2 border rounded text-sm"
+                className={actionButtonClass(editMode ? 'warning' : 'primary')}
                 onClick={() => setEditMode((v) => !v)}
               >
                 {editMode ? 'Cerrar edición' : 'Editar'}
@@ -1423,7 +1695,7 @@ async function setTimestamp(key: TsKey, localValue: string) {
       <h2 className="font-semibold">Edición (ADMIN)</h2>
       <button
         type="button"
-        className="px-3 py-2 border rounded text-sm"
+        className={actionButtonClass(editMode ? 'warning' : 'primary')}
         onClick={() => setEditMode((v) => !v)}
       >
         {editMode ? 'Cerrar' : 'Editar'}
@@ -1535,7 +1807,7 @@ async function setTimestamp(key: TsKey, localValue: string) {
         <div className="flex items-center gap-2">
           <button
             type="button"
-            className="px-3 py-2 border rounded bg-black text-white text-sm disabled:opacity-50"
+            className={actionButtonClass('primary')}
             disabled={busy}
             onClick={async () => {
               setBusy(true);
@@ -1569,7 +1841,7 @@ async function setTimestamp(key: TsKey, localValue: string) {
 
           <button
             type="button"
-            className="px-3 py-2 border rounded text-sm"
+            className={actionButtonClass('secondary')}
             disabled={busy}
             onClick={() => {
               setEditMode(false);
@@ -1730,7 +2002,7 @@ async function setTimestamp(key: TsKey, localValue: string) {
               <div className="pt-6">
                 <button
                   type="button"
-                  className="px-3 py-2 rounded bg-black text-white text-sm disabled:opacity-50"
+                  className={actionButtonClass('primary')}
                   disabled={commercialNoteBusy}
                   onClick={addCommercialNote}
                 >
@@ -1764,7 +2036,7 @@ async function setTimestamp(key: TsKey, localValue: string) {
                     {isAdmin ? (
                       <button
                         type="button"
-                        className="px-2 py-1 border rounded text-sm disabled:opacity-50"
+                        className={actionButtonClass('danger', 'sm')}
                         disabled={commercialNoteBusy}
                         onClick={() => removeCommercialNote(note.id)}
                       >
@@ -1839,7 +2111,7 @@ async function setTimestamp(key: TsKey, localValue: string) {
                 {/* Evitamos doble guardado: click en botón no dispara blur del input */}
                 <button
                   type="button"
-                  className="px-3 py-2 border rounded whitespace-nowrap disabled:opacity-50"
+                  className={actionButtonClass('success')}
                   disabled={busy || disabledByVisitMode}
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={() => setTimestamp(key, nowLocalInputValue())}
@@ -1850,7 +2122,7 @@ async function setTimestamp(key: TsKey, localValue: string) {
 
                 <button
                   type="button"
-                  className="px-3 py-2 border rounded whitespace-nowrap disabled:opacity-50"
+                  className={actionButtonClass('secondary')}
                   disabled={busy || disabledByVisitMode || !ts[key]}
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={() => setTimestamp(key, '')}
@@ -1875,7 +2147,7 @@ async function setTimestamp(key: TsKey, localValue: string) {
       {(isTech || isAdmin) && !isClosedStatus && !myOpenLog ? (
         <button
           type="button"
-          className="px-3 py-2 border rounded whitespace-nowrap disabled:opacity-50"
+          className={actionButtonClass('success')}
           disabled={busy}
           onClick={startMyWorkLog}
           title="Iniciar mi WorkLog"
@@ -1888,7 +2160,7 @@ async function setTimestamp(key: TsKey, localValue: string) {
       {(isTech || isAdmin) && myOpenLog ? (
         <button
           type="button"
-          className="px-3 py-2 border rounded whitespace-nowrap disabled:opacity-50"
+          className={actionButtonClass('warning')}
           disabled={busy}
           onClick={() => closeWorkLog(myOpenLog.id)}
           title="Cerrar mi WorkLog"
@@ -1960,7 +2232,7 @@ async function setTimestamp(key: TsKey, localValue: string) {
                     <div className="flex items-center gap-2">
                       <button
                         type="button"
-                        className="px-3 py-1 border rounded bg-black text-white disabled:opacity-50"
+                        className={actionButtonClass('primary', 'sm')}
                         disabled={busy}
                         onClick={() => saveWorkLogEdit(wl.id)}
                       >
@@ -1968,7 +2240,7 @@ async function setTimestamp(key: TsKey, localValue: string) {
                       </button>
                       <button
                         type="button"
-                        className="px-3 py-1 border rounded disabled:opacity-50"
+                        className={actionButtonClass('secondary', 'sm')}
                         disabled={busy}
                         onClick={cancelEditWorkLog}
                       >
@@ -1980,7 +2252,7 @@ async function setTimestamp(key: TsKey, localValue: string) {
                       {canClose ? (
                         <button
                           type="button"
-                          className="px-3 py-1 border rounded disabled:opacity-50"
+                          className={actionButtonClass('warning', 'sm')}
                           disabled={busy}
                           onClick={() => closeWorkLog(wl.id)}
                         >
@@ -1990,7 +2262,7 @@ async function setTimestamp(key: TsKey, localValue: string) {
                       {isAdmin ? (
                         <button
                           type="button"
-                          className="px-3 py-1 border rounded disabled:opacity-50"
+                          className={actionButtonClass('secondary', 'sm')}
                           disabled={busy}
                           onClick={() => beginEditWorkLog(wl)}
                         >
@@ -2000,7 +2272,7 @@ async function setTimestamp(key: TsKey, localValue: string) {
                       {isAdmin ? (
                         <button
                           type="button"
-                          className="px-3 py-1 border rounded text-red-700 disabled:opacity-50"
+                          className={actionButtonClass('danger', 'sm')}
                           disabled={busy}
                           onClick={() => removeWorkLog(wl.id)}
                         >
@@ -2145,7 +2417,7 @@ async function setTimestamp(key: TsKey, localValue: string) {
         <div className="flex items-center gap-2">
           <button
             type="button"
-            className="px-3 py-2 border rounded bg-black text-white disabled:opacity-50"
+            className={actionButtonClass('primary')}
             disabled={busy}
             onClick={saveHourmeter}
           >
@@ -2321,7 +2593,7 @@ async function setTimestamp(key: TsKey, localValue: string) {
                 <div className="flex items-center gap-2 flex-wrap">
                   <button
                     type="button"
-                    className="px-3 py-2 border rounded bg-black text-white disabled:opacity-50"
+                    className={actionButtonClass('primary')}
                     disabled={busy}
                     onClick={saveIssueTracking}
                   >
@@ -2329,7 +2601,7 @@ async function setTimestamp(key: TsKey, localValue: string) {
                   </button>
                   <button
                     type="button"
-                    className="px-3 py-2 border rounded disabled:opacity-50"
+                    className={actionButtonClass('secondary')}
                     disabled={busy}
                     onClick={createCorrectiveFromIssue}
                   >
@@ -2344,13 +2616,65 @@ async function setTimestamp(key: TsKey, localValue: string) {
               </div>
             ) : null}
 
+            <div className="border rounded p-3 space-y-3">
+              <div className="font-medium">Novedades adicionales</div>
+              <div className="grid gap-2 md:grid-cols-[1fr_auto] md:items-start">
+                <label className="space-y-1">
+                  <span className="text-sm font-medium">Novedad sin repuesto</span>
+                  <textarea
+                    className="border rounded px-3 py-2 w-full"
+                    rows={2}
+                    value={issueNoteText}
+                    onChange={(e) => setIssueNoteText(e.target.value)}
+                    placeholder="Ej: fuga detectada, daño estético, ruido, ajuste pendiente, recomendación al cliente..."
+                    disabled={busy || techBlocked || (!isAdmin && !isTech)}
+                  />
+                </label>
+                <button
+                  type="button"
+                  className={actionButtonClass('primary')}
+                  disabled={busy || techBlocked || (!isAdmin && !isTech) || !issueNoteText.trim()}
+                  onClick={addIssueNote}
+                >
+                  Agregar novedad
+                </button>
+              </div>
+
+              {issueNotes.length > 0 ? (
+                <div className="space-y-2">
+                  {issueNotes.map((note) => (
+                    <div key={note.id} className="flex items-start justify-between gap-3 rounded border px-3 py-2">
+                      <div className="min-w-0 space-y-1">
+                        <div className="whitespace-pre-wrap text-sm text-gray-800">{note.text}</div>
+                        <div className="text-xs text-gray-500">
+                          {note.createdByName || note.createdByUserId || 'Usuario'} · {fmtDateTime(note.createdAt)}
+                        </div>
+                      </div>
+                      {(isAdmin || isTech) ? (
+                        <button
+                          type="button"
+                          className={actionButtonClass('danger', 'sm')}
+                          disabled={busy || techBlocked}
+                          onClick={() => removeIssueNote(note.id)}
+                        >
+                          Quitar
+                        </button>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-sm text-gray-600">Sin novedades adicionales.</div>
+              )}
+            </div>
+
             {isAdmin ? (
               <div className="border rounded p-3 space-y-3">
                 <div className="flex items-center justify-between gap-2 flex-wrap">
                   <div className="font-medium">Cotización para cliente</div>
                   <button
                     type="button"
-                    className="px-3 py-2 border rounded bg-black text-white disabled:opacity-50"
+                    className={actionButtonClass('primary')}
                     disabled={busy}
                     onClick={generateQuoteFromRequiredParts}
                   >
@@ -2446,6 +2770,13 @@ async function setTimestamp(key: TsKey, localValue: string) {
 	                  title="Cantidad"
 	                />
 	              </div>
+              <textarea
+                className="w-full rounded border px-3 py-2 text-sm"
+                rows={2}
+                value={partNote}
+                onChange={(e) => setPartNote(e.target.value)}
+                placeholder="Comentario del repuesto (opcional)"
+              />
               {partQ.trim() && (invMatches ?? []).length > 0 && (
                 <div className="border rounded mt-1">
                   {(invMatches ?? []).map((it) => (
@@ -2463,7 +2794,7 @@ async function setTimestamp(key: TsKey, localValue: string) {
                   ))}
                 </div>
               )}
-              <button type="button" className="px-3 py-2 border rounded" onClick={() => addPart(undefined)} disabled={!partQ.trim()}>
+              <button type="button" className={actionButtonClass('secondary')} onClick={() => addPart(undefined)} disabled={!partQ.trim()}>
                 Agregar como texto libre
               </button>
             </div>
@@ -2471,16 +2802,88 @@ async function setTimestamp(key: TsKey, localValue: string) {
 	            <div className="space-y-2">
 	              <div className="text-sm font-medium">Repuestos necesarios (diagnóstico)</div>
 	              {requiredParts.map((p) => (
-	                <div key={p.id} className="flex items-center justify-between border rounded px-3 py-2">
-	                  <div className="text-sm">
-	                    {p.inventoryItem ? `${p.inventoryItem.sku} — ${p.inventoryItem.name}` : p.freeText ?? ''}
-	                    <span className="text-gray-600"> · Qty: {p.qty}</span>
+	                <div key={p.id} className="grid gap-3 border rounded px-3 py-3 md:grid-cols-[88px_1fr_auto] md:items-center">
+	                  <div className="relative h-20 w-20 overflow-hidden rounded border bg-gray-50">
+	                    {partPhotoUrls[p.id] ? (
+	                      <>
+	                        <button
+	                          type="button"
+	                          className="h-full w-full transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-300"
+	                          onClick={() => setPartPhotoPreview({
+	                            url: partPhotoUrls[p.id],
+	                            label: p.inventoryItem ? `${p.inventoryItem.sku} — ${p.inventoryItem.name}` : p.freeText ?? 'Repuesto requerido',
+	                          })}
+	                          title="Ampliar foto"
+	                        >
+	                          <img src={partPhotoUrls[p.id]} alt="Foto repuesto requerido" className="h-full w-full object-cover" />
+	                        </button>
+	                        <button
+	                          type="button"
+	                          className="absolute right-1 top-1 inline-flex h-6 w-6 items-center justify-center rounded-md border border-red-200 bg-white/95 text-red-700 shadow-sm transition-colors hover:bg-red-50 disabled:pointer-events-none disabled:opacity-50"
+	                          disabled={busy || !!partPhotoBusyById[p.id] || techBlocked || (!isAdmin && !isTech)}
+	                          onClick={() => deletePartPhoto(p.id)}
+	                          title="Quitar foto"
+	                          aria-label="Quitar foto del repuesto"
+	                        >
+	                          <X className="h-3.5 w-3.5" aria-hidden="true" />
+	                        </button>
+	                        <label
+	                          className={cn(
+	                            'absolute bottom-1 right-1 inline-flex h-6 w-6 items-center justify-center rounded-md border border-gray-200 bg-white/95 text-gray-700 shadow-sm transition-colors hover:bg-gray-50',
+	                            (busy || !!partPhotoBusyById[p.id] || techBlocked || (!isAdmin && !isTech)) && 'pointer-events-none opacity-50',
+	                          )}
+	                          title="Cambiar foto"
+	                          aria-label="Cambiar foto del repuesto"
+	                        >
+	                          <Upload className="h-3.5 w-3.5" aria-hidden="true" />
+	                          <input
+	                            type="file"
+	                            accept="image/*"
+	                            className="sr-only"
+	                            disabled={busy || !!partPhotoBusyById[p.id] || techBlocked || (!isAdmin && !isTech)}
+	                            onChange={(e) => uploadPartPhoto(p.id, e.target.files as FileList)}
+	                          />
+	                        </label>
+	                      </>
+	                    ) : (
+	                      <label
+	                        className={cn(
+	                          'flex h-full w-full cursor-pointer flex-col items-center justify-center gap-1 px-2 text-center text-xs text-gray-500 transition-colors hover:bg-gray-100',
+	                          (busy || !!partPhotoBusyById[p.id] || techBlocked || (!isAdmin && !isTech)) && 'pointer-events-none cursor-not-allowed opacity-50',
+	                        )}
+	                        title="Agregar foto"
+	                      >
+	                        <ImagePlus className="h-4 w-4" aria-hidden="true" />
+	                        <span>Agregar foto</span>
+	                        <input
+	                          type="file"
+	                          accept="image/*"
+	                          className="sr-only"
+	                          disabled={busy || !!partPhotoBusyById[p.id] || techBlocked || (!isAdmin && !isTech)}
+	                          onChange={(e) => uploadPartPhoto(p.id, e.target.files as FileList)}
+	                        />
+	                      </label>
+	                    )}
 	                  </div>
-	                  <div className="flex items-center gap-3">
+	                  <div className="min-w-0 space-y-2">
+	                    <div className="text-sm">
+	                      <span className="font-medium">{p.inventoryItem ? `${p.inventoryItem.sku} — ${p.inventoryItem.name}` : p.freeText ?? ''}</span>
+	                      <span className="text-gray-600"> · Qty: {p.qty}</span>
+	                    </div>
+	                    <textarea
+	                      className="w-full rounded border px-2 py-1 text-sm"
+	                      rows={2}
+	                      defaultValue={p.notes ?? ''}
+	                      placeholder="Comentario del repuesto (opcional)"
+	                      disabled={busy || techBlocked || (!isAdmin && !isTech)}
+	                      onBlur={(e) => updatePartNotes(p, e.target.value)}
+	                    />
+	                  </div>
+	                  <div className="flex items-center gap-3 md:justify-end">
 	                    {(canChangeStatus) ? (
-	                      <button className="text-sm underline" onClick={() => markPartReplaced(p)}>Marcar como cambiado</button>
+	                      <button type="button" className={actionButtonClass('success', 'sm')} onClick={() => markPartReplaced(p)}>Marcar como cambiado</button>
 	                    ) : null}
-	                    <button className="text-sm underline" onClick={() => removePart(p.id)}>Quitar</button>
+	                    <button type="button" className={actionButtonClass('danger', 'sm')} onClick={() => removePart(p.id)}>Quitar</button>
 	                  </div>
 	                </div>
 	              ))}
@@ -2490,13 +2893,23 @@ async function setTimestamp(key: TsKey, localValue: string) {
 	            <div className="space-y-2">
 	              <div className="text-sm font-medium">Repuestos cambiados (historial)</div>
 	              {replacedParts.map((p) => (
-	                <div key={p.id} className="flex items-center justify-between border rounded px-3 py-2">
-	                  <div className="text-sm">
-	                    {p.inventoryItem ? `${p.inventoryItem.sku} — ${p.inventoryItem.name}` : p.freeText ?? ''}
-	                    <span className="text-gray-600"> · Qty: {p.qty}</span>
-	                    {p.replacedAt ? <span className="text-gray-600"> · {String(p.replacedAt).slice(0, 10)}</span> : null}
+	                <div key={p.id} className="grid gap-3 border rounded px-3 py-2 md:grid-cols-[1fr_auto] md:items-start">
+	                  <div className="space-y-2">
+	                    <div className="text-sm">
+	                      {p.inventoryItem ? `${p.inventoryItem.sku} — ${p.inventoryItem.name}` : p.freeText ?? ''}
+	                      <span className="text-gray-600"> · Qty: {p.qty}</span>
+	                      {p.replacedAt ? <span className="text-gray-600"> · {String(p.replacedAt).slice(0, 10)}</span> : null}
+	                    </div>
+	                    <textarea
+	                      className="w-full rounded border px-2 py-1 text-sm"
+	                      rows={2}
+	                      defaultValue={p.notes ?? ''}
+	                      placeholder="Comentario del repuesto (opcional)"
+	                      disabled={busy || techBlocked || (!isAdmin && !isTech)}
+	                      onBlur={(e) => updatePartNotes(p, e.target.value)}
+	                    />
 	                  </div>
-	                  {isAdmin ? <button className="text-sm underline" onClick={() => removePart(p.id)}>Quitar</button> : null}
+	                  {isAdmin ? <button type="button" className={actionButtonClass('danger', 'sm')} onClick={() => removePart(p.id)}>Quitar</button> : null}
 	                </div>
 	              ))}
 	              {replacedParts.length === 0 && <div className="text-sm text-gray-600">Sin repuestos cambiados.</div>}
@@ -2541,7 +2954,7 @@ async function setTimestamp(key: TsKey, localValue: string) {
           <div className="flex gap-2 flex-wrap">
             <button
               type="button"
-              className="px-3 py-2 border rounded"
+              className={actionButtonClass('primary')}
               onClick={() => generateReport('CUSTOMER')}
               disabled={!canGenerateReport || busy}
               title={!canGenerateReport ? 'Disponible solo cuando la OS está COMPLETED/CLOSED' : ''}
@@ -2550,7 +2963,7 @@ async function setTimestamp(key: TsKey, localValue: string) {
             </button>
             <button
               type="button"
-              className="px-3 py-2 border rounded"
+              className={actionButtonClass('secondary')}
               onClick={() => generateReport('INTERNAL')}
               disabled={!canGenerateReport || busy}
               title={!canGenerateReport ? 'Disponible solo cuando la OS está COMPLETED/CLOSED' : ''}
@@ -2616,6 +3029,39 @@ async function setTimestamp(key: TsKey, localValue: string) {
             ))}
           </ul>
         </section>
+      ) : null}
+
+      {partPhotoPreview ? (
+        <div className="fixed inset-0 z-50">
+          <button
+            type="button"
+            className="absolute inset-0 bg-black/70"
+            aria-label="Cerrar foto ampliada"
+            onClick={() => setPartPhotoPreview(null)}
+          />
+          <div className="absolute inset-0 flex items-center justify-center p-4">
+            <div className="w-full max-w-5xl rounded border bg-white p-3 shadow">
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-sm font-medium break-all">{partPhotoPreview.label}</div>
+                <button
+                  type="button"
+                  className={actionButtonClass('secondary', 'sm')}
+                  onClick={() => setPartPhotoPreview(null)}
+                >
+                  <X className="h-3.5 w-3.5" aria-hidden="true" />
+                  Cerrar
+                </button>
+              </div>
+              <div className="mt-3">
+                <img
+                  src={partPhotoPreview.url}
+                  alt={partPhotoPreview.label}
+                  className="max-h-[76vh] w-full rounded border object-contain"
+                />
+              </div>
+            </div>
+          </div>
+        </div>
       ) : null}
 
       {busy && <div className="text-sm text-gray-600">Guardando...</div>}

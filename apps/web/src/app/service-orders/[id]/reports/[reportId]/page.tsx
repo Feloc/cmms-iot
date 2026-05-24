@@ -44,10 +44,6 @@ function workLogDurationMinutes(startedAt?: string | null, endedAt?: string | nu
   return Math.max(0, Math.round((b.getTime() - a.getTime()) / 60000));
 }
 
-function audienceLabel(aud: Report['audience']) {
-  return aud === 'CUSTOMER' ? 'Cliente' : 'Interno';
-}
-
 function normalizeImageFilename(v: any): string | null {
   if (typeof v === 'string') return v.trim() || null;
   if (!v || typeof v !== 'object') return null;
@@ -57,27 +53,35 @@ function normalizeImageFilename(v: any): string | null {
   return safe || null;
 }
 
-function toChecklistView(raw: any): { templateName?: string; items: Array<{ label: string; done: boolean; notes?: string; required?: boolean }> } {
+function toChecklistView(raw: any): { templateName?: string; items: Array<{ label: string; done: boolean; notApplicable?: boolean; notes?: string; required?: boolean }> } {
   if (!raw) return { items: [] };
   if (Array.isArray(raw)) {
     return {
-      items: raw.map((it: any, idx: number) => ({
-        label: String(it?.label ?? it?.name ?? `Ítem ${idx + 1}`),
-        done: !!(it?.done ?? it?.checked),
-        notes: it?.notes ? String(it.notes) : '',
-        required: !!it?.required,
-      })),
+      items: raw.map((it: any, idx: number) => {
+        const notApplicable = !!(it?.notApplicable ?? it?.na);
+        return {
+          label: String(it?.label ?? it?.name ?? `Ítem ${idx + 1}`),
+          done: notApplicable ? false : !!(it?.done ?? it?.checked),
+          notApplicable,
+          notes: it?.notes ? String(it.notes) : '',
+          required: !!it?.required,
+        };
+      }),
     };
   }
   if (Array.isArray(raw?.items)) {
     return {
       templateName: raw?.templateName ? String(raw.templateName) : undefined,
-      items: raw.items.map((it: any, idx: number) => ({
-        label: String(it?.label ?? it?.name ?? `Ítem ${idx + 1}`),
-        done: !!(it?.done ?? it?.checked),
-        notes: it?.notes ? String(it.notes) : '',
-        required: !!it?.required,
-      })),
+      items: raw.items.map((it: any, idx: number) => {
+        const notApplicable = !!(it?.notApplicable ?? it?.na);
+        return {
+          label: String(it?.label ?? it?.name ?? `Ítem ${idx + 1}`),
+          done: notApplicable ? false : !!(it?.done ?? it?.checked),
+          notApplicable,
+          notes: it?.notes ? String(it.notes) : '',
+          required: !!it?.required,
+        };
+      }),
     };
   }
   return { items: [] };
@@ -107,6 +111,7 @@ function resolveChecklist(formData: any, soTypeKey: string) {
     const items = Object.entries(formData.checked as Record<string, any>).map(([label, val]) => ({
       label,
       done: !!val,
+      notApplicable: false,
       notes: '',
       required: false,
     }));
@@ -130,6 +135,7 @@ export default function ServiceOrderReportPage() {
   const [photos, setPhotos] = useState<PhotoItem[]>([]);
   const [photosBusy, setPhotosBusy] = useState(false);
   const [photosErr, setPhotosErr] = useState('');
+  const [partPhotoUrls, setPartPhotoUrls] = useState<Record<string, string>>({});
 
   const { data, error, isLoading } = useApiSWR<Report>(
     id && reportId ? `/service-orders/${id}/reports/${reportId}` : null,
@@ -155,10 +161,32 @@ export default function ServiceOrderReportPage() {
     }
   }
 
+  function revokeUrlRecord(record: Record<string, string>) {
+    for (const url of Object.values(record)) {
+      try {
+        URL.revokeObjectURL(url);
+      } catch {}
+    }
+  }
+
   // Cargar fotos como blobs para que funcionen con auth + tenant (y se impriman en PDF)
   const imageKey = Array.isArray((data as any)?.data?.images)
     ? ((data as any).data.images as any[]).map(normalizeImageFilename).filter(Boolean).join('|')
     : '';
+  const partPhotoKey = useMemo(() => {
+    const snap = (data as any)?.data ?? {};
+    const snapParts = snap?.parts ?? null;
+    const snapshotIds = [
+      ...(Array.isArray(snapParts?.required) ? snapParts.required : []),
+      ...(Array.isArray(snapParts?.replaced) ? snapParts.replaced : []),
+    ]
+      .map((p: any) => String(p?.id ?? '').trim())
+      .filter(Boolean);
+    const liveIds = Array.isArray(liveSo?.serviceOrderParts)
+      ? liveSo.serviceOrderParts.map((p: any) => String(p?.id ?? '').trim()).filter(Boolean)
+      : [];
+    return Array.from(new Set(snapshotIds.length ? snapshotIds : liveIds)).sort().join('|');
+  }, [data, liveSo?.serviceOrderParts]);
 
   useEffect(() => {
     let cancelled = false;
@@ -232,6 +260,57 @@ export default function ServiceOrderReportPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [auth.token, auth.tenantSlug, id, reportId, imageKey]);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadPartPhotos() {
+      if (!auth.token || !auth.tenantSlug || !id || !partPhotoKey) {
+        setPartPhotoUrls((prev) => {
+          revokeUrlRecord(prev);
+          return {};
+        });
+        return;
+      }
+
+      const next: Record<string, string> = {};
+      await Promise.all(
+        partPhotoKey.split('|').filter(Boolean).map(async (partId) => {
+          try {
+            const r = await fetch(`${apiBase}/service-orders/${id}/parts/${partId}/photo`, {
+              method: 'GET',
+              headers,
+            });
+            if (!r.ok) return;
+            const blob = await r.blob();
+            next[partId] = URL.createObjectURL(blob);
+          } catch {
+            // Sin foto o no disponible.
+          }
+        }),
+      );
+
+      if (cancelled) {
+        revokeUrlRecord(next);
+        return;
+      }
+
+      setPartPhotoUrls((prev) => {
+        revokeUrlRecord(prev);
+        return next;
+      });
+    }
+
+    loadPartPhotos();
+    return () => {
+      cancelled = true;
+      setPartPhotoUrls((prev) => {
+        revokeUrlRecord(prev);
+        return {};
+      });
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [auth.token, auth.tenantSlug, id, reportId, partPhotoKey]);
+
   if (!auth.token || !auth.tenantSlug) return <div className="p-6">Inicia sesión.</div>;
   if (isLoading) return <div className="p-6">Cargando...</div>;
   if (error) return <div className="p-6 text-red-600">Error: {(error as any).message}</div>;
@@ -250,9 +329,19 @@ export default function ServiceOrderReportPage() {
     : ((liveSo?.formData && typeof liveSo.formData === 'object') ? liveSo.formData : {});
   const notes = String(formData?.notes ?? '').trim();
   const result = String(formData?.result ?? '').trim();
+  const issueNotes = (Array.isArray(formData?.issueNotes) ? formData.issueNotes : [])
+    .map((note: any) => ({
+      id: String(note?.id || ''),
+      text: String(note?.text || '').trim(),
+      createdAt: note?.createdAt ?? null,
+      createdByName: note?.createdByName ? String(note.createdByName) : null,
+      createdByUserId: note?.createdByUserId ? String(note.createdByUserId) : null,
+    }))
+    .filter((note: any) => note.id && note.text)
+    .sort((a: any, b: any) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')));
   const soTypeKey = String(so.serviceOrderType ?? '').toUpperCase();
   const checklistView = resolveChecklist(formData, soTypeKey);
-  const checklistItems = checklistView.items;
+  const checklistItems = checklistView.items.filter((it: any) => !it.notApplicable);
 
   const rawWorkLogs = (Array.isArray(snap.workLogs) && snap.workLogs.length > 0)
     ? snap.workLogs
@@ -302,9 +391,7 @@ export default function ServiceOrderReportPage() {
     <div className="p-6 max-w-4xl mx-auto space-y-6">
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div className="space-y-1">
-          <div className="text-sm text-gray-600">{audienceLabel(data.audience)} · v{data.version}</div>
-          <h1 className="text-2xl font-semibold">Resumen de Orden de Servicio</h1>
-          <div className="text-sm text-gray-600">Generado: {fmtDateTime(data.createdAt)}</div>
+          <h1 className="text-2xl font-semibold">Orden de Servicio</h1>
         </div>
         <div className="flex gap-2">
           <button type="button" className="px-3 py-2 border rounded" onClick={() => window.print()}>
@@ -399,7 +486,7 @@ export default function ServiceOrderReportPage() {
         <div className="font-semibold">Checklist, resultado y observaciones</div>
 
         {(notes || result) ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+          <div className="grid grid-cols-1 gap-3 text-sm">
             {notes ? (
               <div className="border rounded p-3">
                 <div className="font-medium mb-1">Observaciones</div>
@@ -449,17 +536,27 @@ export default function ServiceOrderReportPage() {
         </div>
       </section>
 
-      {/* Horómetro */}
-      <section className="border rounded p-4 space-y-3">
-        <div className="font-semibold">Horómetro</div>
-        <div className="text-sm">
-          {hourmeterReading != null ? (
+      {hourmeterReading != null ? (
+        <section className="border rounded p-4 space-y-3">
+          <div className="font-semibold">Horómetro</div>
+          <div className="text-sm">
             <b>{hourmeterReading} h</b>
-          ) : (
-            <span className="text-gray-600">Sin lectura registrada.</span>
-          )}
-        </div>
-      </section>
+          </div>
+        </section>
+      ) : null}
+
+      {issueNotes.length > 0 ? (
+        <section className="border rounded p-4 space-y-3">
+          <div className="font-semibold">Novedades adicionales</div>
+          <ul className="list-disc pl-5 text-sm space-y-2">
+            {issueNotes.map((note: any) => (
+              <li key={note.id}>
+                <div className="whitespace-pre-wrap">{note.text}</div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
 
       {/* Repuestos */}
       {hasParts ? (
@@ -469,11 +566,18 @@ export default function ServiceOrderReportPage() {
           {requiredParts.length > 0 ? (
             <div className="space-y-2">
               <div className="text-sm font-medium">Necesarios (diagnóstico)</div>
-              <ul className="list-disc pl-5 text-sm">
+              <ul className="space-y-2 text-sm">
                 {requiredParts.map((p: any) => (
-                  <li key={p.id}>
-                    {(p.inventoryItem ? `${p.inventoryItem.sku} — ${p.inventoryItem.name}` : p.freeText ?? '-')}
-                    <span className="text-gray-600"> · Qty: {p.qty}</span>
+                  <li key={p.id} className={`grid gap-2 rounded border p-2 ${partPhotoUrls[p.id] ? 'sm:grid-cols-[1fr_96px]' : ''}`}>
+                    <div>
+                      {(p.inventoryItem ? `${p.inventoryItem.sku} — ${p.inventoryItem.name}` : p.freeText ?? '-')}
+                      <span className="text-gray-600"> · Qty: {p.qty}</span>
+                      {p.notes ? <div className="mt-1 whitespace-pre-wrap text-gray-700">{String(p.notes)}</div> : null}
+                    </div>
+                    {partPhotoUrls[p.id] ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={partPhotoUrls[p.id]} alt="Foto repuesto" className="h-20 w-24 rounded border object-cover" />
+                    ) : null}
                   </li>
                 ))}
               </ul>
@@ -483,13 +587,20 @@ export default function ServiceOrderReportPage() {
           {replacedParts.length > 0 ? (
             <div className="space-y-2">
               <div className="text-sm font-medium">Cambiados (historial)</div>
-              <ul className="list-disc pl-5 text-sm">
+              <ul className="space-y-2 text-sm">
                 {replacedParts.map((p: any) => (
-                  <li key={p.id}>
-                    {(p.inventoryItem ? `${p.inventoryItem.sku} — ${p.inventoryItem.name}` : p.freeText ?? '-')}
-                    <span className="text-gray-600"> · Qty: {p.qty}</span>
-                    {p.replacedAt ? <span className="text-gray-600"> · {String(p.replacedAt).slice(0, 10)}</span> : null}
-                    {p.replacedByUser?.name ? <span className="text-gray-600"> · Por: {p.replacedByUser.name}</span> : null}
+                  <li key={p.id} className={`grid gap-2 rounded border p-2 ${partPhotoUrls[p.id] ? 'sm:grid-cols-[1fr_96px]' : ''}`}>
+                    <div>
+                      {(p.inventoryItem ? `${p.inventoryItem.sku} — ${p.inventoryItem.name}` : p.freeText ?? '-')}
+                      <span className="text-gray-600"> · Qty: {p.qty}</span>
+                      {p.replacedAt ? <span className="text-gray-600"> · {String(p.replacedAt).slice(0, 10)}</span> : null}
+                      {p.replacedByUser?.name ? <span className="text-gray-600"> · Por: {p.replacedByUser.name}</span> : null}
+                      {p.notes ? <div className="mt-1 whitespace-pre-wrap text-gray-700">{String(p.notes)}</div> : null}
+                    </div>
+                    {partPhotoUrls[p.id] ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={partPhotoUrls[p.id]} alt="Foto repuesto" className="h-20 w-24 rounded border object-cover" />
+                    ) : null}
                   </li>
                 ))}
               </ul>

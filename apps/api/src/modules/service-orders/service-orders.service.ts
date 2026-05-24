@@ -9,7 +9,7 @@ import { ScheduleServiceOrderDto } from './dto/schedule-service-order.dto';
 import { ServiceOrderTimestampsDto } from './dto/timestamps.dto';
 import { ServiceOrderFormDataDto } from './dto/form-data.dto';
 import { ServiceOrderSignaturesDto } from './dto/signatures.dto';
-import { AddServiceOrderPartDto } from './dto/parts.dto';
+import { AddServiceOrderPartDto, UpdateServiceOrderPartDto } from './dto/parts.dto';
 import { MarkServiceOrderPartReplacedDto } from './dto/mark-part-replaced.dto';
 import { CreateServiceOrderReportDto } from './dto/create-report.dto';
 import { UpdateServiceOrderWorkLogDto } from './dto/update-worklog.dto';
@@ -1018,6 +1018,12 @@ private async assertTechCanMutateServiceOrder(
           changes.push({ field: 'formData', part: `checklists.${k}.${label}.done`, from: pdone, to: ndone });
         }
 
+        const pna = !!prevIt?.notApplicable;
+        const nna = !!it?.notApplicable;
+        if (pna != nna) {
+          changes.push({ field: 'formData', part: `checklists.${k}.${label}.notApplicable`, from: pna, to: nna });
+        }
+
         const pnote = String(prevIt?.notes ?? '');
         const nnote = String(it?.notes ?? '');
         if (pnote != nnote) {
@@ -1329,6 +1335,21 @@ private async assertTechCanMutateServiceOrder(
       const issueRow = await (tx as any).serviceOrderIssue.findFirst({
         where: { tenantId, workOrderId: id },
       });
+      const sourceRequiredParts = await tx.serviceOrderPart.findMany({
+        where: {
+          tenantId,
+          workOrderId: id,
+          stage: 'REQUIRED' as any,
+        },
+        orderBy: { createdAt: 'asc' },
+        select: {
+          id: true,
+          inventoryItemId: true,
+          freeText: true,
+          qty: true,
+          notes: true,
+        },
+      });
 
       const dueDate = dto?.dueDate ? this.coerceDate(dto.dueDate as any) : undefined;
       const durationMin =
@@ -1387,6 +1408,23 @@ private async assertTechCanMutateServiceOrder(
         });
       }
 
+      const copiedParts: Array<{ sourcePartId: string; correctivePartId: string }> = [];
+      for (const part of sourceRequiredParts) {
+        const createdPart = await tx.serviceOrderPart.create({
+          data: {
+            tenantId,
+            workOrderId: corrective.id,
+            inventoryItemId: part.inventoryItemId ?? undefined,
+            freeText: part.freeText ?? undefined,
+            qty: part.qty,
+            notes: part.notes ?? undefined,
+            stage: 'REQUIRED' as any,
+          } as any,
+          select: { id: true },
+        });
+        copiedParts.push({ sourcePartId: part.id, correctivePartId: createdPart.id });
+      }
+
       await (tx as any).serviceOrderIssue.update({
         where: { id: issue.id },
         data: {
@@ -1403,19 +1441,33 @@ private async assertTechCanMutateServiceOrder(
       });
 
       await this.appendAuditMany(tx, tenantId, id, [
-        this.buildAuditEntry(actorUserId, 'issue', 'create-corrective', null, corrective.id),
+        this.buildAuditEntry(actorUserId, 'issue', 'create-corrective', null, {
+          correctiveId: corrective.id,
+          copiedRequiredParts: copiedParts.length,
+        }),
       ]);
 
-      return corrective;
+      if (copiedParts.length > 0) {
+        await this.appendAuditMany(tx, tenantId, corrective.id, [
+          this.buildAuditEntry(actorUserId, 'parts', 'copied-from-source-os', null, {
+            sourceServiceOrderId: source.id,
+            copiedRequiredParts: copiedParts.length,
+          }),
+        ]);
+      }
+
+      return { corrective, copiedParts };
     });
+
+    await this.copyPartPhotosBestEffort(tenantId, id, result.corrective.id, result.copiedParts);
 
     return {
       correctiveWorkOrder: {
-        id: result.id,
-        title: result.title ?? null,
-        status: result.status ?? null,
-        serviceOrderType: result.serviceOrderType ?? null,
-        dueDate: result?.dueDate ? new Date(result.dueDate).toISOString() : null,
+        id: result.corrective.id,
+        title: result.corrective.title ?? null,
+        status: result.corrective.status ?? null,
+        serviceOrderType: result.corrective.serviceOrderType ?? null,
+        dueDate: result.corrective?.dueDate ? new Date(result.corrective.dueDate).toISOString() : null,
       },
       issue: await this.getIssue(id),
     };
@@ -3039,6 +3091,35 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
     });
   }
 
+  async updatePart(id: string, partId: string, dto: UpdateServiceOrderPartDto) {
+    const tenantId = this.getTenantId();
+    const actorUserId = this.getUserId();
+    const notes = dto.notes == null ? null : String(dto.notes).trim();
+
+    return this.prisma.$transaction(async (tx) => {
+      const role = await this.getCurrentUserRole(tx, tenantId, actorUserId);
+      await this.assertTechCanMutateServiceOrder(tx, tenantId, actorUserId, id, role);
+
+      const part = await tx.serviceOrderPart.findFirst({
+        where: { id: partId, tenantId, workOrderId: id },
+        include: { inventoryItem: true },
+      });
+      if (!part) throw new NotFoundException('Part not found');
+
+      const updated = await tx.serviceOrderPart.update({
+        where: { id: partId },
+        data: { notes: notes || null } as any,
+        include: { inventoryItem: true },
+      });
+
+      await this.appendAuditMany(tx, tenantId, id, [
+        this.buildAuditEntry(actorUserId, 'parts', 'notes:update', part.notes ?? null, updated.notes ?? null),
+      ]);
+
+      return updated;
+    });
+  }
+
 
   /**
    * Marca un repuesto (línea ServiceOrderPart) como "cambiado" (REPLACED) con manejo pro de cantidades:
@@ -3184,6 +3265,9 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
         });
       }
 
+      const photoPath = await this.findPartPhotoPath(tenantId, id, partId);
+      if (photoPath) await this.safeUnlink(photoPath);
+
       await tx.serviceOrderPart.delete({ where: { id: partId } });
       await this.appendAuditMany(tx, tenantId, id, [
         this.buildAuditEntry(actorUserId, 'parts', 'remove', { id: partId, qty: (part as any).qty, stage: (part as any).stage }, null),
@@ -3191,6 +3275,156 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
 
       return { ok: true };
     });
+  }
+
+  private partPhotoDir(tenantId: string, serviceOrderId: string): string {
+    return path.join(this.soRootDir(tenantId, serviceOrderId), 'part-photos');
+  }
+
+  private async copyPartPhotosBestEffort(
+    tenantId: string,
+    sourceServiceOrderId: string,
+    correctiveServiceOrderId: string,
+    copiedParts: Array<{ sourcePartId: string; correctivePartId: string }>,
+  ) {
+    if (!copiedParts.length) return;
+
+    const targetDir = this.partPhotoDir(tenantId, correctiveServiceOrderId);
+    await fs.mkdir(targetDir, { recursive: true }).catch(() => undefined);
+
+    for (const part of copiedParts) {
+      try {
+        const sourcePhoto = await this.findPartPhotoPath(tenantId, sourceServiceOrderId, part.sourcePartId);
+        if (!sourcePhoto) continue;
+
+        const ext = path.extname(sourcePhoto) || '.jpg';
+        await fs.copyFile(sourcePhoto, path.join(targetDir, `${part.correctivePartId}${ext}`));
+      } catch {
+        // La OS correctiva no debe fallar si una foto no se puede copiar.
+      }
+    }
+  }
+
+  private async findPartPhotoPath(tenantId: string, serviceOrderId: string, partId: string): Promise<string | null> {
+    const safePartId = path.basename(partId);
+    if (safePartId !== partId) throw new BadRequestException('Invalid partId');
+
+    const dir = this.partPhotoDir(tenantId, serviceOrderId);
+    let files: string[] = [];
+    try {
+      files = await fs.readdir(dir);
+    } catch (e: any) {
+      if (e?.code === 'ENOENT') return null;
+      throw e;
+    }
+
+    const match = files.find((f) => f === partId || f.startsWith(`${partId}.`));
+    if (!match) return null;
+
+    const fp = path.join(dir, match);
+    try {
+      const st = await fs.stat(fp);
+      return st.isFile() ? fp : null;
+    } catch {
+      return null;
+    }
+  }
+
+  async uploadPartPhoto(id: string, partId: string, file: any) {
+    const tenantId = this.getTenantId();
+    const actorUserId = this.getUserId();
+    if (!file) throw new BadRequestException('Photo file is required');
+
+    const mime = String(file?.mimetype || '');
+    if (!mime.startsWith('image/')) {
+      await this.safeUnlink(file?.path);
+      throw new BadRequestException('Only images allowed');
+    }
+
+    const role = await this.getCurrentUserRole(this.prisma, tenantId, actorUserId);
+    await this.assertTechCanMutateServiceOrder(this.prisma, tenantId, actorUserId, id, role);
+
+    const part = await this.prisma.serviceOrderPart.findFirst({
+      where: { id: partId, tenantId, workOrderId: id },
+      select: { id: true },
+    });
+    if (!part) {
+      await this.safeUnlink(file?.path);
+      throw new NotFoundException('Part not found');
+    }
+
+    const dir = this.partPhotoDir(tenantId, id);
+    await fs.mkdir(dir, { recursive: true });
+
+    const previous = await this.findPartPhotoPath(tenantId, id, partId);
+    if (previous) await this.safeUnlink(previous);
+
+    const extRaw = path.extname(String(file?.originalname || '')).toLowerCase();
+    const extFromMime =
+      mime === 'image/png' ? '.png' :
+      mime === 'image/webp' ? '.webp' :
+      mime === 'image/gif' ? '.gif' :
+      '.jpg';
+    const ext = extRaw && extRaw.length <= 10 ? extRaw : extFromMime;
+    const target = path.join(dir, `${partId}${ext}`);
+    const diskPath = String(file?.path || '');
+
+    if (diskPath) {
+      try {
+        await fs.rename(diskPath, target);
+      } catch {
+        const buf = await fs.readFile(diskPath);
+        await fs.writeFile(target, buf);
+        await this.safeUnlink(diskPath);
+      }
+    } else {
+      const buf: Buffer = file?.buffer;
+      if (!buf?.length) throw new BadRequestException('Empty photo file');
+      await fs.writeFile(target, buf);
+    }
+
+    await this.appendAuditMany(this.prisma, tenantId, id, [
+      this.buildAuditEntry(actorUserId, 'parts', 'photo:add', null, { id: partId }),
+    ]);
+
+    return { ok: true };
+  }
+
+  async getPartPhotoPath(id: string, partId: string) {
+    const tenantId = this.getTenantId();
+    await this.assertServiceOrderExists(id, tenantId);
+
+    const part = await this.prisma.serviceOrderPart.findFirst({
+      where: { id: partId, tenantId, workOrderId: id },
+      select: { id: true },
+    });
+    if (!part) throw new NotFoundException('Part not found');
+
+    const fp = await this.findPartPhotoPath(tenantId, id, partId);
+    if (!fp) throw new NotFoundException('Part photo not found');
+    return fp;
+  }
+
+  async deletePartPhoto(id: string, partId: string) {
+    const tenantId = this.getTenantId();
+    const actorUserId = this.getUserId();
+    const role = await this.getCurrentUserRole(this.prisma, tenantId, actorUserId);
+    await this.assertTechCanMutateServiceOrder(this.prisma, tenantId, actorUserId, id, role);
+
+    const part = await this.prisma.serviceOrderPart.findFirst({
+      where: { id: partId, tenantId, workOrderId: id },
+      select: { id: true },
+    });
+    if (!part) throw new NotFoundException('Part not found');
+
+    const fp = await this.findPartPhotoPath(tenantId, id, partId);
+    if (!fp) throw new NotFoundException('Part photo not found');
+
+    await fs.unlink(fp);
+    await this.appendAuditMany(this.prisma, tenantId, id, [
+      this.buildAuditEntry(actorUserId, 'parts', 'photo:remove', { id: partId }, null),
+    ]);
+    return { ok: true };
   }
 
   // ---------------------------
@@ -3669,6 +3903,15 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
     }
     imageNames = Array.from(new Set(imageNames));
     const photos = await this.loadReportPhotoDataUris(serviceOrderId, imageNames);
+    const snapPartsForPhotos = snapshot.parts ?? { required: [], replaced: [] };
+    const partPhotos = await this.loadReportPartPhotoDataUris(
+      tenantId,
+      serviceOrderId,
+      [
+        ...(Array.isArray(snapPartsForPhotos?.required) ? snapPartsForPhotos.required : []),
+        ...(Array.isArray(snapPartsForPhotos?.replaced) ? snapPartsForPhotos.replaced : []),
+      ],
+    );
     const reportAudience = String(rep.audience || 'CUSTOMER').toUpperCase();
     if (
       reportAudience === 'CUSTOMER' &&
@@ -3686,7 +3929,7 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
       Array.isArray((snapshot.partsManual as any)?.pages) ? (snapshot.partsManual as any).pages : [],
     );
 
-    const html = this.buildReportPdfHtml(rep, snapshot, photos, reportManualPages);
+    const html = this.buildReportPdfHtml(rep, snapshot, photos, reportManualPages, partPhotos);
     const buffer = await this.renderReportPdfWithChromium(html);
 
     const audience = String(rep.audience || 'CUSTOMER').toLowerCase();
@@ -4226,28 +4469,51 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
     if (!selected && formData?.checklist) selected = formData.checklist;
 
     let templateName = '';
-    let items: Array<{ label: string; done: boolean; notes: string }> = [];
+    let items: Array<{ label: string; done: boolean; notApplicable: boolean; notes: string }> = [];
     if (selected && Array.isArray(selected.items)) {
       templateName = String(selected?.templateName ?? '');
-      items = selected.items.map((it: any, idx: number) => ({
-        label: String(it?.label ?? it?.name ?? `Ítem ${idx + 1}`),
-        done: !!(it?.done ?? it?.checked),
-        notes: String(it?.notes ?? ''),
-      }));
+      items = selected.items.map((it: any, idx: number) => {
+        const notApplicable = !!(it?.notApplicable ?? it?.na);
+        return {
+          label: String(it?.label ?? it?.name ?? `Ítem ${idx + 1}`),
+          done: notApplicable ? false : !!(it?.done ?? it?.checked),
+          notApplicable,
+          notes: String(it?.notes ?? ''),
+        };
+      });
     } else if (Array.isArray(selected)) {
-      items = selected.map((it: any, idx: number) => ({
-        label: String(it?.label ?? it?.name ?? `Ítem ${idx + 1}`),
-        done: !!(it?.done ?? it?.checked),
-        notes: String(it?.notes ?? ''),
-      }));
+      items = selected.map((it: any, idx: number) => {
+        const notApplicable = !!(it?.notApplicable ?? it?.na);
+        return {
+          label: String(it?.label ?? it?.name ?? `Ítem ${idx + 1}`),
+          done: notApplicable ? false : !!(it?.done ?? it?.checked),
+          notApplicable,
+          notes: String(it?.notes ?? ''),
+        };
+      });
     } else if (formData?.checked && typeof formData.checked === 'object') {
       items = Object.entries(formData.checked as Record<string, any>).map(([label, val]) => ({
         label: String(label),
         done: !!val,
+        notApplicable: false,
         notes: '',
       }));
     }
     return { templateName, items };
+  }
+
+  private reportIssueNotes(formData: any) {
+    const raw = Array.isArray(formData?.issueNotes) ? formData.issueNotes : [];
+    return raw
+      .map((note: any) => ({
+        id: String(note?.id || ''),
+        text: String(note?.text || '').trim(),
+        createdAt: note?.createdAt ?? null,
+        createdByName: note?.createdByName ? String(note.createdByName) : null,
+        createdByUserId: note?.createdByUserId ? String(note.createdByUserId) : null,
+      }))
+      .filter((note: any) => note.id && note.text)
+      .sort((a: any, b: any) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')));
   }
 
   private reportImageMime(filename: string) {
@@ -4270,6 +4536,24 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
         out.push({ filename, dataUri: `data:${mime};base64,${buf.toString('base64')}` });
       } catch {
         // ignore broken files
+      }
+    }
+    return out;
+  }
+
+  private async loadReportPartPhotoDataUris(tenantId: string, serviceOrderId: string, parts: any[]) {
+    const out: Record<string, string> = {};
+    for (const part of parts ?? []) {
+      const partId = String(part?.id ?? '').trim();
+      if (!partId || out[partId]) continue;
+      try {
+        const fp = await this.findPartPhotoPath(tenantId, serviceOrderId, partId);
+        if (!fp) continue;
+        const buf = await fs.readFile(fp);
+        const mime = this.reportImageMime(fp);
+        out[partId] = `data:${mime};base64,${buf.toString('base64')}`;
+      } catch {
+        // La ausencia de una foto de repuesto no debe romper el reporte.
       }
     }
     return out;
@@ -4331,6 +4615,7 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
         replacedQty?: number;
       }>;
     }>,
+    partPhotos: Record<string, string>,
   ) {
     const tenant = snap?.tenant ?? {};
     const so = snap?.serviceOrder ?? {};
@@ -4338,8 +4623,6 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
     const op = snap?.operationalTimes ?? { segments: [] };
     const parts = snap?.parts ?? { required: [], replaced: [] };
     const hourmeter = snap?.hourmeter ?? { latest: null, byOrder: [] };
-    const audience = String(rep?.audience || 'CUSTOMER').toUpperCase() === 'INTERNAL' ? 'Interno' : 'Cliente';
-
     const workLogs = Array.isArray(snap?.workLogs) ? snap.workLogs : [];
     const participants = Array.from(
       workLogs
@@ -4358,6 +4641,7 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
     const result = String(formData?.result ?? '').trim();
     const soTypeKey = String(so?.serviceOrderType ?? '').toUpperCase();
     const checklist = this.reportResolveChecklist(formData, soTypeKey);
+    const issueNotes = this.reportIssueNotes(formData);
 
     const visibleSegments = (op?.segments ?? []).filter((s: any) => {
       const label = String(s?.label ?? '').toLowerCase();
@@ -4372,8 +4656,9 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
       ((hourmeter?.byOrder ?? [])[0]?.reading ?? null) ??
       (hourmeter?.latest?.reading ?? null);
 
-    const checklistRows = checklist.items.length > 0
-      ? checklist.items
+    const reportChecklistItems = checklist.items.filter((it) => !it.notApplicable);
+    const checklistRows = reportChecklistItems.length > 0
+      ? reportChecklistItems
           .map((it) => `
             <tr>
               <td>${this.reportEscapeHtml(it.label)}</td>
@@ -4403,13 +4688,20 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
       ? `
       <div class="subsection">
         <div class="subtitle">Necesarios (diagnóstico)</div>
-        <ul>
+        <ul class="part-list">
           ${requiredParts
-            .map((p: any) => `
-              <li>
-                ${this.reportEscapeHtml(p?.inventoryItem ? `${p.inventoryItem.sku} — ${p.inventoryItem.name}` : (p?.freeText ?? '-'))}
-                <span class="muted"> · Qty: ${this.reportEscapeHtml(p?.qty ?? '-')}</span>
-              </li>`)
+            .map((p: any) => {
+              const photo = partPhotos[String(p?.id ?? '')];
+              return `
+              <li class="part-row${photo ? ' has-photo' : ''}">
+                <div class="part-text">
+                  ${this.reportEscapeHtml(p?.inventoryItem ? `${p.inventoryItem.sku} — ${p.inventoryItem.name}` : (p?.freeText ?? '-'))}
+                  <span class="muted"> · Qty: ${this.reportEscapeHtml(p?.qty ?? '-')}</span>
+                  ${p?.notes ? `<div class="part-note">${this.reportEscapeHtmlWithBreaks(p.notes)}</div>` : ''}
+                </div>
+                ${photo ? `<img class="part-photo" src="${photo}" alt="Foto repuesto" />` : ''}
+              </li>`;
+            })
             .join('')}
         </ul>
       </div>`
@@ -4419,15 +4711,22 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
       ? `
       <div class="subsection">
         <div class="subtitle">Cambiados (historial)</div>
-        <ul>
+        <ul class="part-list">
           ${replacedParts
-            .map((p: any) => `
-              <li>
-                ${this.reportEscapeHtml(p?.inventoryItem ? `${p.inventoryItem.sku} — ${p.inventoryItem.name}` : (p?.freeText ?? '-'))}
-                <span class="muted"> · Qty: ${this.reportEscapeHtml(p?.qty ?? '-')}</span>
-                ${p?.replacedAt ? `<span class="muted"> · ${this.reportEscapeHtml(this.reportFmtDate(p.replacedAt))}</span>` : ''}
-                ${p?.replacedByUser?.name ? `<span class="muted"> · Por: ${this.reportEscapeHtml(p.replacedByUser.name)}</span>` : ''}
-              </li>`)
+            .map((p: any) => {
+              const photo = partPhotos[String(p?.id ?? '')];
+              return `
+              <li class="part-row${photo ? ' has-photo' : ''}">
+                <div class="part-text">
+                  ${this.reportEscapeHtml(p?.inventoryItem ? `${p.inventoryItem.sku} — ${p.inventoryItem.name}` : (p?.freeText ?? '-'))}
+                  <span class="muted"> · Qty: ${this.reportEscapeHtml(p?.qty ?? '-')}</span>
+                  ${p?.replacedAt ? `<span class="muted"> · ${this.reportEscapeHtml(this.reportFmtDate(p.replacedAt))}</span>` : ''}
+                  ${p?.replacedByUser?.name ? `<span class="muted"> · Por: ${this.reportEscapeHtml(p.replacedByUser.name)}</span>` : ''}
+                  ${p?.notes ? `<div class="part-note">${this.reportEscapeHtmlWithBreaks(p.notes)}</div>` : ''}
+                </div>
+                ${photo ? `<img class="part-photo" src="${photo}" alt="Foto repuesto" />` : ''}
+              </li>`;
+            })
             .join('')}
         </ul>
       </div>`
@@ -4439,6 +4738,21 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
         <div class="title">Repuestos</div>
         ${requiredPartsBlock}
         ${replacedPartsBlock}
+      </section>`
+      : '';
+
+    const issueNotesBlock = issueNotes.length > 0
+      ? `
+      <section class="card">
+        <div class="title">Novedades adicionales</div>
+        <ul>
+          ${issueNotes
+            .map((note: any) => `
+              <li>
+                ${this.reportEscapeHtmlWithBreaks(note.text)}
+              </li>`)
+            .join('')}
+        </ul>
       </section>`
       : '';
 
@@ -4508,19 +4822,34 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
 
     const notesResultBlock = (notes || result)
       ? `
-      <div class="grid two">
+      <div class="grid">
         ${notes ? `<div class="box"><div class="subtitle">Observaciones</div><div>${this.reportEscapeHtmlWithBreaks(notes)}</div></div>` : ''}
         ${result ? `<div class="box"><div class="subtitle">Resultado</div><div>${this.reportEscapeHtmlWithBreaks(result)}</div></div>` : ''}
       </div>`
+      : '';
+    const hourmeterBlock = hourmeterReading != null
+      ? `
+    <section class="card">
+      <div class="title">Horómetro</div>
+      <div><b>${this.reportEscapeHtml(hourmeterReading)} h</b></div>
+    </section>`
       : '';
 
     return `<!doctype html>
 <html lang="es">
 <head>
   <meta charset="utf-8" />
-  <title>Reporte OS</title>
+  <title></title>
   <style>
     :root { --text: #111827; --muted: #6b7280; --line: #d1d5db; --bg: #f3f4f6; }
+    @page {
+      margin: 12mm 10mm 14mm;
+      @bottom-right {
+        content: "Página " counter(page) " de " counter(pages);
+        color: #6b7280;
+        font-size: 10px;
+      }
+    }
     * { box-sizing: border-box; }
     body { margin: 0; font-family: Arial, Helvetica, sans-serif; color: var(--text); font-size: 12px; line-height: 1.35; }
     .page { padding: 20px; }
@@ -4539,6 +4868,12 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
     .right { text-align: right; }
     ul { margin: 0; padding-left: 18px; }
     .subsection { margin-top: 8px; }
+    .part-list { display: grid; gap: 8px; padding-left: 0; list-style: none; }
+    .part-row { display: grid; grid-template-columns: 1fr; gap: 10px; align-items: start; break-inside: avoid; }
+    .part-row.has-photo { grid-template-columns: minmax(0, 1fr) 92px; }
+    .part-text { min-width: 0; }
+    .part-note { margin-top: 4px; color: var(--text); }
+    .part-photo { width: 92px; height: 72px; object-fit: cover; border: 1px solid var(--line); border-radius: 6px; display: block; }
     .photo-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
     .photo-card { border: 1px solid var(--line); border-radius: 6px; padding: 6px; margin: 0; }
     .photo-card img { width: 100%; height: 160px; object-fit: cover; border-radius: 4px; display: block; }
@@ -4570,9 +4905,7 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
   <div class="page">
     <div class="header">
       <div>
-        <div class="muted">${this.reportEscapeHtml(audience)} · v${this.reportEscapeHtml(rep?.version ?? '-')}</div>
-        <div class="h-title">Resumen de Orden de Servicio</div>
-        <div class="muted">Generado: ${this.reportEscapeHtml(this.reportFmtDateTime(rep?.createdAt ?? null))}</div>
+        <div class="h-title">Orden de Servicio</div>
       </div>
     </div>
 
@@ -4649,10 +4982,9 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
       </div>
     </section>
 
-    <section class="card">
-      <div class="title">Horómetro</div>
-      <div>${hourmeterReading != null ? `<b>${this.reportEscapeHtml(hourmeterReading)} h</b>` : '<span class="muted">Sin lectura registrada.</span>'}</div>
-    </section>
+    ${hourmeterBlock}
+
+    ${issueNotesBlock}
 
     ${partsBlock}
 
@@ -4717,7 +5049,7 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
     try {
       for (const bin of bins) {
         for (const baseArgs of argVariants) {
-          const args = [...baseArgs, `--print-to-pdf=${pdfPath}`, fileUrl];
+          const args = [...baseArgs, '--no-pdf-header-footer', '--print-to-pdf-no-header', `--print-to-pdf=${pdfPath}`, fileUrl];
           try {
             await this.runBinary(bin, args);
             const out = await fs.readFile(pdfPath);

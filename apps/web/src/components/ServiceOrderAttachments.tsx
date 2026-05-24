@@ -1,7 +1,9 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { ExternalLink, Trash2 } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
+import { AttachmentFilePicker } from '@/components/AttachmentFilePicker';
 
 type Kind = 'IMAGE' | 'VIDEO' | 'DOCUMENT';
 
@@ -178,10 +180,12 @@ export function ServiceOrderAttachments({
         </div>
 
         <div className="flex items-center gap-2">
-          <label className="px-3 py-2 border rounded text-sm cursor-pointer">
-            Subir {tab === 'IMAGE' ? 'imágenes' : tab === 'VIDEO' ? 'videos' : 'documentos'}
-            <input className="hidden" type="file" multiple accept={accept} onChange={(e) => upload(tab, e.target.files)} />
-          </label>
+          <AttachmentFilePicker
+            label={`Elegir ${tab === 'IMAGE' ? 'imágenes' : tab === 'VIDEO' ? 'videos' : 'documentos'}`}
+            accept={accept}
+            disabled={loading}
+            onFiles={(files) => upload(tab, files)}
+          />
         </div>
       </div>
 
@@ -227,7 +231,12 @@ export function ServiceOrderAttachments({
                 <div className="text-xs text-gray-600 truncate">{selected}</div>
                 <div className="flex items-center gap-2">
                   {isAdmin ? (
-                    <button className="px-2 py-1 border rounded text-sm" onClick={() => deleteFile('IMAGE', selected)} type="button">
+                    <button
+                      className="inline-flex min-h-8 items-center gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-1 text-xs font-medium text-red-700 transition-all hover:bg-red-100 active:scale-[0.98]"
+                      onClick={() => deleteFile('IMAGE', selected)}
+                      type="button"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
                       Eliminar
                     </button>
                   ) : null}
@@ -248,11 +257,16 @@ export function ServiceOrderAttachments({
             {videos.length === 0 ? <div className="text-sm text-gray-600">Sin videos.</div> : null}
             {videos.map((f) => (
               <div key={f} className="flex items-center justify-between gap-2 py-1">
-                <button className="text-sm underline truncate" onClick={() => openPreview('VIDEO', f)} type="button" title={f}>
+                <button className="truncate text-sm font-medium text-gray-800 underline-offset-4 hover:underline" onClick={() => openPreview('VIDEO', f)} type="button" title={f}>
                   {f}
                 </button>
                 {isAdmin ? (
-                  <button className="text-xs px-2 py-1 border rounded" onClick={() => deleteFile('VIDEO', f)} type="button">
+                  <button
+                    className="inline-flex min-h-8 items-center gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-1 text-xs font-medium text-red-700 transition-all hover:bg-red-100 active:scale-[0.98]"
+                    onClick={() => deleteFile('VIDEO', f)}
+                    type="button"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
                     Eliminar
                   </button>
                 ) : null}
@@ -281,7 +295,7 @@ export function ServiceOrderAttachments({
               </div>
               <div className="flex items-center gap-2">
                 <button
-                  className="px-2 py-1 border rounded text-sm"
+                  className="inline-flex min-h-8 items-center gap-2 rounded-md border border-gray-300 bg-white px-3 py-1 text-xs font-medium text-gray-800 transition-all hover:bg-gray-50 active:scale-[0.98]"
                   onClick={async () => {
                     // abrir blob en nueva pestaña
                     const blob = await fetchBlob('DOCUMENT', f);
@@ -291,10 +305,16 @@ export function ServiceOrderAttachments({
                   }}
                   type="button"
                 >
+                  <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
                   Abrir
                 </button>
                 {isAdmin ? (
-                  <button className="px-2 py-1 border rounded text-sm" onClick={() => deleteFile('DOCUMENT', f)} type="button">
+                  <button
+                    className="inline-flex min-h-8 items-center gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-1 text-xs font-medium text-red-700 transition-all hover:bg-red-100 active:scale-[0.98]"
+                    onClick={() => deleteFile('DOCUMENT', f)}
+                    type="button"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
                     Eliminar
                   </button>
                 ) : null}
@@ -310,7 +330,10 @@ export function ServiceOrderAttachments({
 function Tab({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
   return (
     <button
-      className={['px-3 py-2 border rounded text-sm', active ? 'bg-black text-white border-black' : 'bg-white hover:bg-gray-50'].join(' ')}
+      className={[
+        'inline-flex min-h-10 items-center rounded-md border px-3 py-2 text-sm font-medium transition-all duration-150 hover:-translate-y-0.5 hover:shadow-sm active:translate-y-0 active:scale-[0.98]',
+        active ? 'border-black bg-black text-white' : 'border-gray-300 bg-white text-gray-800 hover:border-gray-400 hover:bg-gray-50',
+      ].join(' ')}
       onClick={onClick}
       type="button"
     >
