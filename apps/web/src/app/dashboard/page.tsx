@@ -109,6 +109,42 @@ type Summary = {
     inWarrantyExcludingManual: number;
     forkliftsTotal: number;
     forkliftsInWarranty: number;
+    forklifts?: {
+      inWarrantyCount: number;
+      outOfWarrantyCount: number;
+      insightCounts: Record<string, number>;
+      topUsage: Array<{
+        assetId: string;
+        assetCode: string;
+        assetName?: string | null;
+        monthlyAvgHourmeter: number | null;
+        currentHourmeter: number | null;
+        remainingHoursTo200: number | null;
+      }>;
+      rows: Array<{
+        assetId: string;
+        assetCode: string;
+        assetName?: string | null;
+        brand?: string | null;
+        model?: string | null;
+        serialNumber?: string | null;
+        customer?: string | null;
+        inWarranty: boolean;
+        warrantyUntil?: string | null;
+        lastMaintenanceAt?: string | null;
+        nextMaintenanceByPlanAt?: string | null;
+        currentHourmeter: number | null;
+        currentHourmeterAt?: string | null;
+        monthlyAvgHourmeter: number | null;
+        lastMaintenanceHourmeter: number | null;
+        hoursSinceMaintenance: number | null;
+        remainingHoursTo200: number | null;
+        projectedNextMaintenanceByHourmeterAt?: string | null;
+        openServiceOrders: number;
+        status: string;
+        insightStatus: string;
+      }>;
+    };
     inWarrantyByName: Array<{ name: string; inWarranty: number }>;
     byStatus: Record<string, number>;
     byCriticality: Record<string, number>;
@@ -227,6 +263,7 @@ type MonthlyGoalProgress = {
 const DASHBOARD_PDF_SECTION_OPTIONS = {
   assets: [
     { id: 'asset-summary-badges', label: 'Indicadores superiores' },
+    { id: 'asset-forklifts', label: 'Montacargas' },
     { id: 'asset-status-criticality', label: 'Estados y criticidad' },
     { id: 'asset-top-open', label: 'Top activos con OS abiertas' },
     { id: 'asset-warranty-by-name', label: 'Equipos en garantía por name' },
@@ -338,6 +375,31 @@ function fmtFixed(value: unknown, digits: number) {
   const n = typeof value === 'number' ? value : Number(value);
   if (!Number.isFinite(n)) return '—';
   return n.toFixed(digits);
+}
+
+function fmtDate(value: string | null | undefined) {
+  if (!value) return '—';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return '—';
+  return format(d, 'yyyy-MM-dd');
+}
+
+function forkliftInsightLabel(value: string | null | undefined) {
+  const key = String(value ?? '').toUpperCase();
+  if (key === 'OVERDUE_BY_HOURS') return 'Vencido por 200h';
+  if (key === 'DUE_SOON_BY_HOURS') return 'Próximo por horas';
+  if (key === 'NO_HOURMETER') return 'Sin horómetro';
+  if (key === 'NO_PM_PLAN') return 'Sin plan PM';
+  if (key === 'NO_FUTURE_PM') return 'Sin próxima OS PM';
+  return 'OK';
+}
+
+function forkliftInsightBadgeVariant(value: string | null | undefined): 'default' | 'secondary' | 'destructive' | 'outline' {
+  const key = String(value ?? '').toUpperCase();
+  if (key === 'OVERDUE_BY_HOURS') return 'destructive';
+  if (key === 'DUE_SOON_BY_HOURS') return 'default';
+  if (key === 'OK') return 'secondary';
+  return 'outline';
 }
 
 function serviceTypeLabel(v?: string | null) {
@@ -477,6 +539,7 @@ function NegotiationTooltip(props: any) {
 }
 
 type RangePreset = '1' | '7' | '30' | '90' | 'custom';
+type ForkliftWarrantyFilter = 'all' | 'in' | 'out';
 
 function toIsoLocalDayStart(v: string) {
   if (!v) return null;
@@ -539,6 +602,8 @@ export default function Dashboard() {
   const [preventiveGoalError, setPreventiveGoalError] = useState('');
   const [selectedTechId, setSelectedTechId] = useState<string>('');
   const [selectedNegotiationMonth, setSelectedNegotiationMonth] = useState<string>('all');
+  const [forkliftWarrantyFilter, setForkliftWarrantyFilter] = useState<ForkliftWarrantyFilter>('all');
+  const [forkliftsCollapsed, setForkliftsCollapsed] = useState(false);
   const [opDim, setOpDim] = useState<'TECHNICIAN' | 'TYPE' | 'CUSTOMER' | 'LOCATION'>('TECHNICIAN');
   const [opMetric, setOpMetric] = useState<'avg' | 'p50' | 'p90'>('p90');
   const [opSegment, setOpSegment] = useState<'travel' | 'intake' | 'handover' | 'onsite' | 'wrapup' | 'total'>('total');
@@ -601,6 +666,22 @@ export default function Dashboard() {
     dashboardKey,
     fetchSummary,
     { refreshInterval: 15000 }
+  );
+  const forkliftsDashboard = data?.assets.forklifts;
+  const filteredForkliftRows = useMemo(() => {
+    const rows = forkliftsDashboard?.rows ?? [];
+    if (forkliftWarrantyFilter === 'in') return rows.filter((row) => row.inWarranty);
+    if (forkliftWarrantyFilter === 'out') return rows.filter((row) => !row.inWarranty);
+    return rows;
+  }, [forkliftsDashboard?.rows, forkliftWarrantyFilter]);
+  const filteredForkliftTopUsage = useMemo(
+    () =>
+      filteredForkliftRows
+        .filter((row) => row.monthlyAvgHourmeter != null)
+        .slice()
+        .sort((a, b) => (b.monthlyAvgHourmeter ?? 0) - (a.monthlyAvgHourmeter ?? 0))
+        .slice(0, 10),
+    [filteredForkliftRows]
   );
 
   const {
@@ -1198,6 +1279,202 @@ export default function Dashboard() {
               href="/assets"
             />
           </div>
+
+          <Card data-pdf-section-ids="asset-forklifts">
+            <CardHeader className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+              <div>
+                <CardTitle className="text-base flex items-center">
+                  Montacargas
+                  <HelpTip text="Usa activos cuyo nombre contiene montacarga. La proyección por horómetro toma frecuencia fija de 200h y el promedio mensual se calcula con todo el historial de lecturas." />
+                </CardTitle>
+                <div className="mt-1 text-sm text-neutral-500">
+                  Garantía, plan PM, horómetro y vencimiento estimado por uso.
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button type="button" variant="outline" size="sm" onClick={() => setForkliftsCollapsed((value) => !value)}>
+                  {forkliftsCollapsed ? 'Mostrar' : 'Ocultar'}
+                </Button>
+                <Button asChild variant="secondary" size="sm">
+                  <Link href="/assets?name=montacarga">Ver montacargas</Link>
+                </Button>
+              </div>
+            </CardHeader>
+            {!forkliftsCollapsed ? (
+            <CardContent className="space-y-4">
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={forkliftWarrantyFilter === 'all' ? 'default' : 'outline'}
+                  onClick={() => setForkliftWarrantyFilter('all')}
+                >
+                  Todos
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={forkliftWarrantyFilter === 'in' ? 'default' : 'outline'}
+                  onClick={() => setForkliftWarrantyFilter('in')}
+                >
+                  En garantía
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={forkliftWarrantyFilter === 'out' ? 'default' : 'outline'}
+                  onClick={() => setForkliftWarrantyFilter('out')}
+                >
+                  Sin garantía
+                </Button>
+                <span className="text-sm text-neutral-500">
+                  Mostrando {filteredForkliftRows.length} de {forkliftsDashboard?.rows?.length ?? 0}
+                </span>
+              </div>
+
+              {!forkliftsDashboard?.rows?.length ? (
+                <div className="text-sm text-neutral-500">Sin montacargas registrados.</div>
+              ) : filteredForkliftRows.length === 0 ? (
+                <div className="text-sm text-neutral-500">Sin montacargas para el filtro seleccionado.</div>
+              ) : (
+                <>
+                  <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-3 text-sm">
+                    <div className="rounded border p-3">
+                      <div className="text-neutral-500">Total</div>
+                      <div className="text-xl font-semibold">{forkliftsDashboard.rows.length}</div>
+                    </div>
+                    <div className="rounded border p-3">
+                      <div className="text-neutral-500">En garantía</div>
+                      <div className="text-xl font-semibold">{forkliftsDashboard.inWarrantyCount}</div>
+                    </div>
+                    <div className="rounded border p-3">
+                      <div className="text-neutral-500">Sin garantía</div>
+                      <div className="text-xl font-semibold">{forkliftsDashboard.outOfWarrantyCount}</div>
+                    </div>
+                    <div className="rounded border p-3">
+                      <div className="text-neutral-500">Vencidos 200h</div>
+                      <div className="text-xl font-semibold">{forkliftsDashboard.insightCounts.OVERDUE_BY_HOURS ?? 0}</div>
+                    </div>
+                    <div className="rounded border p-3">
+                      <div className="text-neutral-500">Próx. por horas</div>
+                      <div className="text-xl font-semibold">{forkliftsDashboard.insightCounts.DUE_SOON_BY_HOURS ?? 0}</div>
+                    </div>
+                    <div className="rounded border p-3">
+                      <div className="text-neutral-500">Sin horómetro</div>
+                      <div className="text-xl font-semibold">{forkliftsDashboard.insightCounts.NO_HOURMETER ?? 0}</div>
+                    </div>
+                    <div className="rounded border p-3">
+                      <div className="text-neutral-500">Sin próxima PM</div>
+                      <div className="text-xl font-semibold">{forkliftsDashboard.insightCounts.NO_FUTURE_PM ?? 0}</div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 xl:grid-cols-[420px_1fr] gap-4">
+                    <div className="rounded border p-3">
+                      <div className="mb-2 text-sm font-medium">Top 10 montacargas con más uso</div>
+                      {!filteredForkliftTopUsage.length ? (
+                        <div className="text-sm text-neutral-500">Sin lecturas suficientes para calcular uso.</div>
+                      ) : (
+                        <div className="h-80">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <ComposedChart
+                              data={filteredForkliftTopUsage.map((row) => ({
+                                code: row.assetCode,
+                                monthly: row.monthlyAvgHourmeter ?? 0,
+                              }))}
+                              layout="vertical"
+                              margin={{ top: 8, right: 24, left: 24, bottom: 8 }}
+                            >
+                              <CartesianGrid strokeDasharray="3 3" />
+                              <XAxis type="number" />
+                              <YAxis type="category" dataKey="code" width={100} interval={0} />
+                              <Tooltip formatter={(value) => [`${fmtFixed(value, 2)} h/mes`, 'Promedio mensual']} />
+                              <Bar dataKey="monthly" fill="#0f766e">
+                                <LabelList dataKey="monthly" content={EndDecimalBarLabel} />
+                              </Bar>
+                            </ComposedChart>
+                          </ResponsiveContainer>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="rounded border p-3">
+                      <div className="mb-2 text-sm font-medium">Datos útiles para análisis</div>
+                      <div className="grid gap-2 text-sm md:grid-cols-2">
+                        <div className="rounded border px-3 py-2">
+                          <div className="font-medium">Riesgo operativo</div>
+                          <div className="text-neutral-600">Cruza 200h restantes, promedio mensual y próxima OS PM para detectar equipos que pueden vencerse antes de la fecha planificada.</div>
+                        </div>
+                        <div className="rounded border px-3 py-2">
+                          <div className="font-medium">Calidad de datos</div>
+                          <div className="text-neutral-600">Los equipos sin horómetro, sin plan PM o sin próxima OS PM aparecen como alertas de configuración.</div>
+                        </div>
+                        <div className="rounded border px-3 py-2">
+                          <div className="font-medium">Garantía</div>
+                          <div className="text-neutral-600">Separar garantía vigente permite priorizar reclamos o mantenimientos que no deberían generar costo interno.</div>
+                        </div>
+                        <div className="rounded border px-3 py-2">
+                          <div className="font-medium">Uso intensivo</div>
+                          <div className="text-neutral-600">El top 10 por horas/mes identifica montacargas que podrían requerir inspecciones adicionales o ajuste de capacidad.</div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="overflow-x-auto rounded border">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Montacargas</TableHead>
+                          <TableHead>Garantía</TableHead>
+                          <TableHead>Último mtto</TableHead>
+                          <TableHead>Próx. PM plan</TableHead>
+                          <TableHead className="text-right">Horómetro</TableHead>
+                          <TableHead className="text-right">Prom. h/mes</TableHead>
+                          <TableHead className="text-right">Restante 200h</TableHead>
+                          <TableHead>Próx. por horómetro</TableHead>
+                          <TableHead>Estado</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {filteredForkliftRows.map((row) => (
+                          <TableRow key={row.assetId}>
+                            <TableCell>
+                              <Link className="font-mono underline" href={`/assets/${row.assetId}`}>{row.assetCode}</Link>
+                              <div className="text-xs text-neutral-500">
+                                {[row.assetName, row.brand, row.model].filter(Boolean).join(' · ') || 'Sin descripción'}
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              <Badge variant={row.inWarranty ? 'secondary' : 'outline'}>
+                                {row.inWarranty ? 'Vigente' : 'Sin garantía'}
+                              </Badge>
+                              <div className="text-xs text-neutral-500">{fmtDate(row.warrantyUntil)}</div>
+                            </TableCell>
+                            <TableCell>{fmtDate(row.lastMaintenanceAt)}</TableCell>
+                            <TableCell>{fmtDate(row.nextMaintenanceByPlanAt)}</TableCell>
+                            <TableCell className="text-right">
+                              {fmtFixed(row.currentHourmeter, 2)}
+                              <div className="text-xs text-neutral-500">{fmtDate(row.currentHourmeterAt)}</div>
+                            </TableCell>
+                            <TableCell className="text-right">{fmtFixed(row.monthlyAvgHourmeter, 2)}</TableCell>
+                            <TableCell className="text-right">{fmtFixed(row.remainingHoursTo200, 2)}</TableCell>
+                            <TableCell>{fmtDate(row.projectedNextMaintenanceByHourmeterAt)}</TableCell>
+                            <TableCell>
+                              <Badge variant={forkliftInsightBadgeVariant(row.insightStatus)}>
+                                {forkliftInsightLabel(row.insightStatus)}
+                              </Badge>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </>
+              )}
+            </CardContent>
+            ) : null}
+          </Card>
 
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
             <Card>

@@ -1259,9 +1259,17 @@ model ServiceOrderPart {
   replacedByUserId String?
   replacedByUser   User? @relation(fields: [replacedByUserId], references: [id])
 
+  // Vinculos entre repuestos copiados a una OS correctiva y su OS origen.
+  sourceServiceOrderId     String?
+  sourceServiceOrderPartId String?
+  replacementServiceOrderId     String?
+  replacementServiceOrderPartId String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([tenantId, workOrderId])
   @@index([tenantId, stage])
+  @@index([tenantId, sourceServiceOrderPartId])
+  @@index([tenantId, replacementServiceOrderPartId])
 }

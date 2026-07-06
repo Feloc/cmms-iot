@@ -529,6 +529,303 @@ export class DashboardService {
       `
     );
 
+    type ForkliftDashboardRow = {
+      assetId: string;
+      assetCode: string;
+      assetName: string | null;
+      brand: string | null;
+      model: string | null;
+      serialNumber: string | null;
+      customer: string | null;
+      inWarranty: boolean;
+      warrantyUntil: Date | null;
+      lastMaintenanceAt: Date | null;
+      nextMaintenanceByPlanAt: Date | null;
+      currentHourmeter: number | null;
+      currentHourmeterAt: Date | null;
+      monthlyAvgHourmeter: number | null;
+      lastMaintenanceHourmeter: number | null;
+      hoursSinceMaintenance: number | null;
+      remainingHoursTo200: number | null;
+      projectedNextMaintenanceByHourmeterAt: Date | null;
+      openServiceOrders: number;
+      status: string;
+      insightStatus: string;
+    };
+
+    const forkliftRowsRaw = await this.prisma.$queryRaw<ForkliftDashboardRow[]>(
+      Prisma.sql`
+        WITH forklifts AS (
+          SELECT
+            a."id",
+            a."code",
+            a."name",
+            a."brand",
+            a."model",
+            a."serialNumber",
+            a."customer",
+            a."guarantee",
+            a."acquiredOn",
+            a."latestHourmeter",
+            a."latestHourmeterAt",
+            COALESCE(
+              a."guarantee",
+              CASE
+                WHEN a."acquiredOn" IS NOT NULL THEN a."acquiredOn" + INTERVAL '1 year'
+                ELSE NULL
+              END
+            ) AS "warrantyUntil"
+          FROM "Asset" a
+          WHERE a."tenantId" = ${tenantId}
+            AND COALESCE(a."serialNumber", '') NOT ILIKE 'T%'
+            AND COALESCE(a."name", '') ILIKE '%montacarga%'
+        ),
+        latest_meter AS (
+          SELECT DISTINCT ON (m."assetId")
+            m."assetId",
+            m."reading",
+            m."readingAt"
+          FROM "AssetMeterReading" m
+          JOIN forklifts f ON f."id" = m."assetId"
+          WHERE m."tenantId" = ${tenantId}
+            AND m."meterType" = 'HOURMETER'
+          ORDER BY m."assetId", m."readingAt" DESC, m."createdAt" DESC
+        ),
+        meter_window AS (
+          SELECT
+            m."assetId",
+            (ARRAY_AGG(m."reading" ORDER BY m."readingAt" ASC, m."createdAt" ASC))[1] AS "firstReading",
+            (ARRAY_AGG(m."reading" ORDER BY m."readingAt" DESC, m."createdAt" DESC))[1] AS "lastReading",
+            MIN(m."readingAt") AS "firstReadingAt",
+            MAX(m."readingAt") AS "lastReadingAt"
+          FROM "AssetMeterReading" m
+          JOIN forklifts f ON f."id" = m."assetId"
+          WHERE m."tenantId" = ${tenantId}
+            AND m."meterType" = 'HOURMETER'
+          GROUP BY m."assetId"
+        ),
+        last_pm AS (
+          SELECT
+            x."assetId",
+            MAX(x."executedAt") AS "lastMaintenanceAt"
+          FROM (
+            SELECT p."assetId", p."executedAt"
+            FROM "AssetPreventiveMaintenance" p
+            JOIN forklifts f ON f."id" = p."assetId"
+            WHERE p."tenantId" = ${tenantId}
+            UNION ALL
+            SELECT f."id" AS "assetId", COALESCE(w."deliveredAt", w."completedAt", w."updatedAt") AS "executedAt"
+            FROM "WorkOrder" w
+            JOIN forklifts f ON f."code" = w."assetCode"
+            WHERE w."tenantId" = ${tenantId}
+              AND w."kind" = 'SERVICE_ORDER'
+              AND w."serviceOrderType" = 'PREVENTIVO'
+              AND w."status" IN ('COMPLETED', 'CLOSED')
+              AND COALESCE(w."deliveredAt", w."completedAt", w."updatedAt") IS NOT NULL
+          ) x
+          GROUP BY x."assetId"
+        ),
+        last_pm_meter AS (
+          SELECT DISTINCT ON (f."id")
+            f."id" AS "assetId",
+            m."reading" AS "lastMaintenanceHourmeter"
+          FROM forklifts f
+          JOIN last_pm lp ON lp."assetId" = f."id"
+          JOIN "AssetMeterReading" m
+            ON m."tenantId" = ${tenantId}
+           AND m."assetId" = f."id"
+           AND m."meterType" = 'HOURMETER'
+           AND m."readingAt" <= lp."lastMaintenanceAt"
+          ORDER BY f."id", m."readingAt" DESC, m."createdAt" DESC
+        ),
+        next_pm AS (
+          SELECT
+            f."id" AS "assetId",
+            MIN(w."dueDate") AS "nextMaintenanceByPlanAt"
+          FROM forklifts f
+          JOIN "WorkOrder" w
+            ON w."tenantId" = ${tenantId}
+           AND w."kind" = 'SERVICE_ORDER'
+           AND w."serviceOrderType" = 'PREVENTIVO'
+           AND w."assetCode" = f."code"
+           AND w."status" NOT IN ('COMPLETED', 'CLOSED', 'CANCELED')
+           AND w."dueDate" IS NOT NULL
+          GROUP BY f."id"
+        ),
+        open_so AS (
+          SELECT
+            f."id" AS "assetId",
+            COUNT(w."id")::int AS "openServiceOrders"
+          FROM forklifts f
+          LEFT JOIN "WorkOrder" w
+            ON w."tenantId" = ${tenantId}
+           AND w."kind" = 'SERVICE_ORDER'
+           AND w."assetCode" = f."code"
+           AND w."status" NOT IN ('COMPLETED', 'CLOSED', 'CANCELED')
+          GROUP BY f."id"
+        ),
+        plan_cfg AS (
+          SELECT
+            amp."assetId",
+            amp."pmPlanId",
+            amp."frequencyValue",
+            amp."frequencyUnit",
+            amp."lastMaintenanceAt",
+            amp."planStartAt"
+          FROM "AssetMaintenancePlan" amp
+          WHERE amp."tenantId" = ${tenantId}
+            AND amp."active" = true
+        ),
+        calc AS (
+          SELECT
+            f."id" AS "assetId",
+            f."code" AS "assetCode",
+            f."name" AS "assetName",
+            f."brand",
+            f."model",
+            f."serialNumber",
+            f."customer",
+            (f."warrantyUntil"::date >= CURRENT_DATE) AS "inWarranty",
+            f."warrantyUntil" AS "warrantyUntil",
+            lp."lastMaintenanceAt",
+            COALESCE(
+              npm."nextMaintenanceByPlanAt",
+              CASE
+                WHEN pc."pmPlanId" IS NOT NULL
+                 AND COALESCE(lp."lastMaintenanceAt", pc."lastMaintenanceAt", pc."planStartAt", f."acquiredOn") IS NOT NULL
+                THEN
+                  COALESCE(lp."lastMaintenanceAt", pc."lastMaintenanceAt", pc."planStartAt", f."acquiredOn")
+                  + CASE
+                      WHEN pc."frequencyUnit" = 'DAY' THEN pc."frequencyValue" * INTERVAL '1 day'
+                      WHEN pc."frequencyUnit" = 'YEAR' THEN pc."frequencyValue" * INTERVAL '1 year'
+                      ELSE pc."frequencyValue" * INTERVAL '1 month'
+                    END
+                ELSE NULL
+              END
+            ) AS "nextMaintenanceByPlanAt",
+            COALESCE(f."latestHourmeter", lm."reading") AS "currentHourmeter",
+            COALESCE(f."latestHourmeterAt", lm."readingAt") AS "currentHourmeterAt",
+            CASE
+              WHEN mw."firstReadingAt" IS NOT NULL
+               AND mw."lastReadingAt" IS NOT NULL
+               AND EXTRACT(EPOCH FROM (mw."lastReadingAt" - mw."firstReadingAt")) > 0
+              THEN GREATEST(0, (mw."lastReading" - mw."firstReading"))
+                / NULLIF(EXTRACT(EPOCH FROM (mw."lastReadingAt" - mw."firstReadingAt")) / 86400.0, 0)
+                * 30.4375
+              ELSE NULL
+            END AS "monthlyAvgHourmeter",
+            lpm."lastMaintenanceHourmeter",
+            CASE
+              WHEN COALESCE(f."latestHourmeter", lm."reading") IS NOT NULL
+               AND lpm."lastMaintenanceHourmeter" IS NOT NULL
+              THEN COALESCE(f."latestHourmeter", lm."reading") - lpm."lastMaintenanceHourmeter"
+              ELSE NULL
+            END AS "hoursSinceMaintenance",
+            CASE
+              WHEN COALESCE(f."latestHourmeter", lm."reading") IS NOT NULL
+               AND lpm."lastMaintenanceHourmeter" IS NOT NULL
+              THEN 200 - (COALESCE(f."latestHourmeter", lm."reading") - lpm."lastMaintenanceHourmeter")
+              ELSE NULL
+            END AS "remainingHoursTo200",
+            COALESCE(os."openServiceOrders", 0) AS "openServiceOrders",
+            pc."pmPlanId"
+          FROM forklifts f
+          LEFT JOIN latest_meter lm ON lm."assetId" = f."id"
+          LEFT JOIN meter_window mw ON mw."assetId" = f."id"
+          LEFT JOIN last_pm lp ON lp."assetId" = f."id"
+          LEFT JOIN last_pm_meter lpm ON lpm."assetId" = f."id"
+          LEFT JOIN next_pm npm ON npm."assetId" = f."id"
+          LEFT JOIN open_so os ON os."assetId" = f."id"
+          LEFT JOIN plan_cfg pc ON pc."assetId" = f."id"
+        )
+        SELECT
+          c."assetId",
+          c."assetCode",
+          c."assetName",
+          c."brand",
+          c."model",
+          c."serialNumber",
+          c."customer",
+          COALESCE(c."inWarranty", false) AS "inWarranty",
+          c."warrantyUntil",
+          c."lastMaintenanceAt",
+          c."nextMaintenanceByPlanAt",
+          c."currentHourmeter",
+          c."currentHourmeterAt",
+          c."monthlyAvgHourmeter",
+          c."lastMaintenanceHourmeter",
+          c."hoursSinceMaintenance",
+          c."remainingHoursTo200",
+          CASE
+            WHEN c."remainingHoursTo200" IS NOT NULL
+             AND c."remainingHoursTo200" > 0
+             AND c."monthlyAvgHourmeter" IS NOT NULL
+             AND c."monthlyAvgHourmeter" > 0
+            THEN CURRENT_DATE + ((c."remainingHoursTo200" / c."monthlyAvgHourmeter") * INTERVAL '30.4375 days')
+            WHEN c."remainingHoursTo200" IS NOT NULL AND c."remainingHoursTo200" <= 0
+            THEN CURRENT_DATE
+            ELSE NULL
+          END AS "projectedNextMaintenanceByHourmeterAt",
+          c."openServiceOrders",
+          CASE
+            WHEN c."remainingHoursTo200" IS NOT NULL AND c."remainingHoursTo200" <= 0 THEN 'OVERDUE_BY_HOURS'
+            WHEN c."remainingHoursTo200" IS NOT NULL AND c."remainingHoursTo200" <= 40 THEN 'DUE_SOON_BY_HOURS'
+            WHEN c."currentHourmeter" IS NULL THEN 'NO_HOURMETER'
+            WHEN c."pmPlanId" IS NULL THEN 'NO_PM_PLAN'
+            WHEN c."nextMaintenanceByPlanAt" IS NULL THEN 'NO_FUTURE_PM'
+            ELSE 'OK'
+          END AS "insightStatus",
+          CASE
+            WHEN c."remainingHoursTo200" IS NOT NULL AND c."remainingHoursTo200" <= 0 THEN 'Vencido por 200h'
+            WHEN c."remainingHoursTo200" IS NOT NULL AND c."remainingHoursTo200" <= 40 THEN 'Próximo por horómetro'
+            WHEN c."currentHourmeter" IS NULL THEN 'Sin horómetro'
+            WHEN c."pmPlanId" IS NULL THEN 'Sin plan PM'
+            WHEN c."nextMaintenanceByPlanAt" IS NULL THEN 'Sin próxima OS PM'
+            ELSE 'OK'
+          END AS "status"
+        FROM calc c
+        ORDER BY COALESCE(c."monthlyAvgHourmeter", -1) DESC, c."assetCode" ASC;
+      `
+    );
+
+    const forkliftRows = (forkliftRowsRaw ?? []).map((row: any) => ({
+      assetId: row.assetId,
+      assetCode: row.assetCode,
+      assetName: row.assetName ?? null,
+      brand: row.brand ?? null,
+      model: row.model ?? null,
+      serialNumber: row.serialNumber ?? null,
+      customer: row.customer ?? null,
+      inWarranty: !!row.inWarranty,
+      warrantyUntil: row.warrantyUntil ? new Date(row.warrantyUntil).toISOString() : null,
+      lastMaintenanceAt: row.lastMaintenanceAt ? new Date(row.lastMaintenanceAt).toISOString() : null,
+      nextMaintenanceByPlanAt: row.nextMaintenanceByPlanAt ? new Date(row.nextMaintenanceByPlanAt).toISOString() : null,
+      currentHourmeter: row.currentHourmeter == null ? null : round(Number(row.currentHourmeter), 2),
+      currentHourmeterAt: row.currentHourmeterAt ? new Date(row.currentHourmeterAt).toISOString() : null,
+      monthlyAvgHourmeter: row.monthlyAvgHourmeter == null ? null : round(Number(row.monthlyAvgHourmeter), 2),
+      lastMaintenanceHourmeter: row.lastMaintenanceHourmeter == null ? null : round(Number(row.lastMaintenanceHourmeter), 2),
+      hoursSinceMaintenance: row.hoursSinceMaintenance == null ? null : round(Number(row.hoursSinceMaintenance), 2),
+      remainingHoursTo200: row.remainingHoursTo200 == null ? null : round(Number(row.remainingHoursTo200), 2),
+      projectedNextMaintenanceByHourmeterAt: row.projectedNextMaintenanceByHourmeterAt
+        ? new Date(row.projectedNextMaintenanceByHourmeterAt).toISOString()
+        : null,
+      openServiceOrders: Number(row.openServiceOrders ?? 0),
+      status: row.status,
+      insightStatus: row.insightStatus,
+    }));
+
+    const forkliftInsightCounts = forkliftRows.reduce<Record<string, number>>((acc, row) => {
+      acc[row.insightStatus] = (acc[row.insightStatus] ?? 0) + 1;
+      return acc;
+    }, {});
+    const forkliftInWarrantyRows = forkliftRows.filter((row) => row.inWarranty);
+    const forkliftOutOfWarrantyRows = forkliftRows.filter((row) => !row.inWarranty);
+    const forkliftTopUsage = forkliftRows
+      .filter((row) => row.monthlyAvgHourmeter != null)
+      .slice()
+      .sort((a, b) => (b.monthlyAvgHourmeter ?? 0) - (a.monthlyAvgHourmeter ?? 0))
+      .slice(0, 10);
+
     const topAssetsByOpenAlerts = await this.prisma.$queryRaw<{ assetCode: string; openAlerts: number }[]>(
       Prisma.sql`
         SELECT
@@ -2035,6 +2332,13 @@ const workTimeByServiceOrderType = typeEffPauseRows.map(r => {
         withOpenServiceOrders: assetsWithOpenServiceOrders,
         topAssetsByOpenSO,
         topAssetsByOpenAlerts,
+        forklifts: {
+          rows: forkliftRows,
+          topUsage: forkliftTopUsage,
+          inWarrantyCount: forkliftInWarrantyRows.length,
+          outOfWarrantyCount: forkliftOutOfWarrantyRows.length,
+          insightCounts: forkliftInsightCounts,
+        },
       },
 
       alerts: {

@@ -720,13 +720,13 @@ async addHourmeter(id: string, dto: CreateServiceOrderHourmeterReadingDto) {
     throw new BadRequestException('note is required when allowDecrease=true');
   }
 
-  const readingAt = dto?.readingAt ? this.coerceDate(dto.readingAt as any) : new Date();
-  if (!readingAt) throw new BadRequestException('readingAt is invalid');
+  const requestedReadingAt = dto?.readingAt ? this.coerceDate(dto.readingAt as any) : null;
+  if (dto?.readingAt && !requestedReadingAt) throw new BadRequestException('readingAt is invalid');
 
   await this.prisma.$transaction(async (tx) => {
     const so = await tx.workOrder.findFirst({
       where: { id, tenantId, kind: 'SERVICE_ORDER' },
-      select: { id: true, assetCode: true },
+      select: { id: true, assetCode: true, activityStartedAt: true },
     });
     if (!so) throw new NotFoundException('Service order not found');
 
@@ -738,6 +738,15 @@ async addHourmeter(id: string, dto: CreateServiceOrderHourmeterReadingDto) {
       select: { id: true, code: true },
     });
     if (!asset) throw new BadRequestException('Asset not found for service order');
+
+    const firstWorkLog = requestedReadingAt || so.activityStartedAt
+      ? null
+      : await tx.workLog.findFirst({
+          where: { tenantId, workOrderId: id },
+          orderBy: { startedAt: 'asc' },
+          select: { startedAt: true },
+        });
+    const readingAt = requestedReadingAt ?? so.activityStartedAt ?? firstWorkLog?.startedAt ?? new Date();
 
     const previous = await (tx as any).assetMeterReading.findFirst({
       where: { tenantId, assetId: asset.id, meterType: 'HOURMETER' },
@@ -1335,6 +1344,15 @@ private async assertTechCanMutateServiceOrder(
       const issueRow = await (tx as any).serviceOrderIssue.findFirst({
         where: { tenantId, workOrderId: id },
       });
+      if (issueRow?.resolutionWorkOrderId) {
+        const existingCorrective = await tx.workOrder.findFirst({
+          where: { id: issueRow.resolutionWorkOrderId, tenantId, kind: 'SERVICE_ORDER' },
+          select: { id: true },
+        });
+        if (existingCorrective) {
+          throw new ConflictException(`La novedad ya tiene una OS correctiva vinculada: ${existingCorrective.id}`);
+        }
+      }
       const sourceRequiredParts = await tx.serviceOrderPart.findMany({
         where: {
           tenantId,
@@ -1419,6 +1437,8 @@ private async assertTechCanMutateServiceOrder(
             qty: part.qty,
             notes: part.notes ?? undefined,
             stage: 'REQUIRED' as any,
+            sourceServiceOrderId: source.id,
+            sourceServiceOrderPartId: part.id,
           } as any,
           select: { id: true },
         });
@@ -1452,6 +1472,7 @@ private async assertTechCanMutateServiceOrder(
           this.buildAuditEntry(actorUserId, 'parts', 'copied-from-source-os', null, {
             sourceServiceOrderId: source.id,
             copiedRequiredParts: copiedParts.length,
+            copiedParts,
           }),
         ]);
       }
@@ -1744,6 +1765,199 @@ private async assertTechCanMutateServiceOrder(
     }, {});
 
     return { items: enriched, total, page, size, statusCounts };
+  }
+
+  async listPartsSummary(q: ListServiceOrdersQuery) {
+    const tenantId = this.getTenantId();
+
+    const page = Math.max(1, Number(q.page ?? 1));
+    const size = Math.min(100, Math.max(1, Number(q.size ?? 50)));
+    const skip = (page - 1) * size;
+
+    const workOrderWhere: Prisma.WorkOrderWhereInput = {
+      tenantId,
+      kind: 'SERVICE_ORDER',
+    };
+
+    const statuses = normalizeQueryArray((q as any).status);
+    if (statuses.length === 1) workOrderWhere.status = statuses[0] as any;
+    else if (statuses.length > 1) workOrderWhere.status = { in: statuses } as any;
+
+    const types = normalizeQueryArray((q as any).type);
+    if (types.length === 1) workOrderWhere.serviceOrderType = types[0] as any;
+    else if (types.length > 1) workOrderWhere.serviceOrderType = { in: types } as any;
+
+    const start = this.coerceDate(q.start ?? undefined);
+    const end = this.coerceDate(q.end ?? undefined);
+    if (start || end) {
+      workOrderWhere.dueDate = {};
+      if (start) (workOrderWhere.dueDate as any).gte = start;
+      if (end) (workOrderWhere.dueDate as any).lte = end;
+    }
+
+    const where: Prisma.ServiceOrderPartWhereInput = {
+      tenantId,
+      workOrder: workOrderWhere,
+    } as any;
+
+    const search = String(q.q ?? '').trim();
+    if (search) {
+      const [matchingAssets, matchingInventoryItems] = await this.prisma.$transaction([
+        this.prisma.asset.findMany({
+          where: {
+            tenantId,
+            OR: [
+              { customer: { contains: search, mode: 'insensitive' } },
+              { serialNumber: { contains: search, mode: 'insensitive' } },
+              { code: { contains: search, mode: 'insensitive' } },
+            ],
+          },
+          select: { code: true },
+        }),
+        this.prisma.inventoryItem.findMany({
+          where: {
+            tenantId,
+            OR: [
+              { sku: { contains: search, mode: 'insensitive' } },
+              { name: { contains: search, mode: 'insensitive' } },
+              { oemPartNo: { contains: search, mode: 'insensitive' } },
+              { supplierPartNo: { contains: search, mode: 'insensitive' } },
+              { itemNo: { contains: search, mode: 'insensitive' } },
+              { systemGroup: { contains: search, mode: 'insensitive' } },
+              { sectionName: { contains: search, mode: 'insensitive' } },
+              { description: { contains: search, mode: 'insensitive' } },
+            ],
+          },
+          select: { id: true },
+        }),
+      ]);
+      const assetCodes = Array.from(new Set(matchingAssets.map((asset) => asset.code).filter(Boolean)));
+      const matchingWorkOrders = await this.prisma.workOrder.findMany({
+        where: {
+          tenantId,
+          kind: 'SERVICE_ORDER',
+          OR: [
+            { title: { contains: search, mode: 'insensitive' } },
+            { assetCode: { contains: search, mode: 'insensitive' } },
+            ...(assetCodes.length ? [{ assetCode: { in: assetCodes } }] : []),
+          ],
+        },
+        select: { id: true },
+      });
+      const inventoryItemIds = matchingInventoryItems.map((item) => item.id);
+      const workOrderIds = matchingWorkOrders.map((order) => order.id);
+
+      (where as any).OR = [
+        { freeText: { contains: search, mode: 'insensitive' } },
+        ...(inventoryItemIds.length ? [{ inventoryItemId: { in: inventoryItemIds } }] : []),
+        ...(workOrderIds.length ? [{ workOrderId: { in: workOrderIds } }] : []),
+      ];
+    }
+
+    const delegatedSourcePartRows = await (this.prisma as any).serviceOrderPart.findMany({
+      where: {
+        tenantId,
+        sourceServiceOrderPartId: { not: null },
+        workOrder: {
+          tenantId,
+          kind: 'SERVICE_ORDER',
+          status: { not: 'CANCELED' },
+        },
+      },
+      select: { sourceServiceOrderPartId: true },
+    });
+    const delegatedSourcePartIds = Array.from(
+      new Set<string>(
+        (delegatedSourcePartRows ?? [])
+          .map((row: any) => String(row.sourceServiceOrderPartId || '').trim())
+          .filter(Boolean),
+      ),
+    );
+    if (delegatedSourcePartIds.length > 0) {
+      (where as any).AND = [
+        ...(((where as any).AND as any[]) ?? []),
+        {
+          NOT: {
+            OR: [
+              {
+                AND: [
+                  { stage: 'REQUIRED' },
+                  { id: { in: delegatedSourcePartIds } },
+                ],
+              },
+              {
+                AND: [
+                  { stage: 'REPLACED' },
+                  { replacementServiceOrderPartId: { not: null } },
+                ],
+              },
+            ],
+          },
+        },
+      ];
+    } else {
+      (where as any).AND = [
+        ...(((where as any).AND as any[]) ?? []),
+        {
+          NOT: {
+            AND: [
+              { stage: 'REPLACED' },
+              { replacementServiceOrderPartId: { not: null } },
+            ],
+          },
+        },
+      ];
+    }
+
+    const [items, total] = await this.prisma.$transaction([
+      (this.prisma as any).serviceOrderPart.findMany({
+        where,
+        orderBy: [
+          { stage: 'asc' },
+          { replacedAt: 'desc' },
+          { createdAt: 'desc' },
+        ],
+        include: {
+          inventoryItem: true,
+          replacedByUser: { select: { id: true, name: true, email: true } },
+          workOrder: {
+            select: {
+              id: true,
+              title: true,
+              assetCode: true,
+              status: true,
+              serviceOrderType: true,
+              dueDate: true,
+              createdAt: true,
+              completedAt: true,
+              deliveredAt: true,
+            },
+          },
+        },
+        skip,
+        take: size,
+      }),
+      (this.prisma as any).serviceOrderPart.count({ where }),
+    ]);
+
+    const assetCodes = Array.from(new Set((items ?? []).map((part: any) => String(part?.workOrder?.assetCode || '').trim()).filter(Boolean)));
+    const assets = await this.prisma.asset.findMany({
+      where: { tenantId, code: { in: assetCodes } },
+      select: { code: true, customer: true, name: true, brand: true, model: true, serialNumber: true },
+    });
+    const assetByCode = new Map(assets.map((asset) => [String(asset.code || '').trim(), asset]));
+
+    const enriched = (items ?? []).map((part: any) => ({
+      ...part,
+      workOrder: part.workOrder
+        ? {
+            ...part.workOrder,
+            asset: assetByCode.get(String(part.workOrder.assetCode || '').trim()) ?? null,
+          }
+        : null,
+    }));
+
+    return { items: enriched, total, page, size };
   }
 
   async exportList(q: ListServiceOrdersQuery) {
@@ -3120,6 +3334,187 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
     });
   }
 
+  private async syncSourcePartReplacement(
+    tx: any,
+    args: {
+      tenantId: string;
+      actorUserId: string;
+      sourcePartId?: string | null;
+      replacementServiceOrderId: string;
+      replacementServiceOrderPartId: string;
+      qtyReplaced: number;
+      replacedAt: Date;
+      visitedPartIds?: Set<string>;
+    },
+  ) {
+    const sourcePartId = String(args.sourcePartId || '').trim();
+    if (!sourcePartId) return null;
+    const visitedPartIds = args.visitedPartIds ?? new Set<string>();
+    if (visitedPartIds.has(sourcePartId)) {
+      throw new ConflictException('Se detectó una relación circular entre repuestos de OS');
+    }
+    visitedPartIds.add(sourcePartId);
+
+    const source = await tx.serviceOrderPart.findFirst({
+      where: { id: sourcePartId, tenantId: args.tenantId },
+    });
+    if (!source) return null;
+
+    const sourceStage = String(source.stage || 'REQUIRED');
+    if (sourceStage !== 'REQUIRED') {
+      if (
+        sourceStage === 'REPLACED' &&
+        String(source.replacementServiceOrderPartId || '') === args.replacementServiceOrderPartId
+      ) {
+        return { mode: 'already-synced', sourcePartId };
+      }
+      throw new ConflictException('El repuesto origen ya no está pendiente en la OS original');
+    }
+
+    const sourceQty = Number(source.qty ?? 0);
+    if (!Number.isFinite(sourceQty) || sourceQty <= 0) {
+      throw new ConflictException('La cantidad del repuesto origen no es válida');
+    }
+    if (args.qtyReplaced > sourceQty) {
+      throw new ConflictException('La cantidad cambiada supera lo pendiente en la OS original');
+    }
+
+    const commonData = {
+      stage: 'REPLACED' as any,
+      replacedAt: args.replacedAt,
+      replacedByUserId: args.actorUserId,
+      replacementServiceOrderId: args.replacementServiceOrderId,
+      replacementServiceOrderPartId: args.replacementServiceOrderPartId,
+    };
+
+    if (args.qtyReplaced === sourceQty) {
+      const parentSync = await this.syncSourcePartReplacement(tx, {
+        ...args,
+        sourcePartId: source.sourceServiceOrderPartId,
+        visitedPartIds,
+      });
+
+      const updated = await tx.serviceOrderPart.update({
+        where: { id: source.id },
+        data: commonData as any,
+      });
+
+      await this.appendAuditMany(tx, args.tenantId, source.workOrderId, [
+        this.buildAuditEntry(args.actorUserId, 'parts', 'markReplaced:linked-corrective', { id: source.id, stage: 'REQUIRED', qty: sourceQty }, {
+          id: source.id,
+          stage: 'REPLACED',
+          qty: args.qtyReplaced,
+          replacementServiceOrderId: args.replacementServiceOrderId,
+          replacementServiceOrderPartId: args.replacementServiceOrderPartId,
+          parentSync,
+        }),
+      ]);
+
+      return { mode: 'updated-source', sourcePartId: updated.id, parentSync };
+    }
+
+    const parentSync = await this.syncSourcePartReplacement(tx, {
+      ...args,
+      sourcePartId: source.sourceServiceOrderPartId,
+      visitedPartIds,
+    });
+
+    const remaining = sourceQty - args.qtyReplaced;
+    await tx.serviceOrderPart.update({
+      where: { id: source.id },
+      data: { qty: remaining } as any,
+    });
+
+    const created = await tx.serviceOrderPart.create({
+      data: {
+        tenantId: args.tenantId,
+        workOrderId: source.workOrderId,
+        inventoryItemId: source.inventoryItemId ?? undefined,
+        freeText: source.freeText ?? undefined,
+        qty: args.qtyReplaced,
+        notes: source.notes ?? undefined,
+        sourceServiceOrderId: source.workOrderId,
+        sourceServiceOrderPartId: source.id,
+        ...commonData,
+      } as any,
+    });
+
+    await this.appendAuditMany(tx, args.tenantId, source.workOrderId, [
+      this.buildAuditEntry(args.actorUserId, 'parts', 'markReplaced:linked-corrective:split', { id: source.id, stage: 'REQUIRED', qty: sourceQty }, {
+        requiredRemaining: remaining,
+        replacedCreatedId: created.id,
+        replacedQty: args.qtyReplaced,
+        replacementServiceOrderId: args.replacementServiceOrderId,
+        replacementServiceOrderPartId: args.replacementServiceOrderPartId,
+        parentSync,
+      }),
+    ]);
+
+    return { mode: 'split-source', sourcePartId: source.id, reflectedPartId: created.id, parentSync };
+  }
+
+  private async revertSourcePartReplacement(
+    tx: any,
+    args: {
+      tenantId: string;
+      actorUserId: string;
+      replacementServiceOrderId: string;
+      replacementServiceOrderPartId: string;
+    },
+  ) {
+    const reflected = await tx.serviceOrderPart.findMany({
+      where: {
+        tenantId: args.tenantId,
+        replacementServiceOrderPartId: args.replacementServiceOrderPartId,
+      },
+    });
+
+    for (const part of reflected ?? []) {
+      const sourcePartId = String(part.sourceServiceOrderPartId || '').trim();
+      const qty = Number(part.qty ?? 0);
+      const delegatedChildren = await tx.serviceOrderPart.count({
+        where: {
+          tenantId: args.tenantId,
+          sourceServiceOrderPartId: part.id,
+        },
+      });
+      const isRealChainLine = delegatedChildren > 0 || !sourcePartId || sourcePartId === part.id;
+
+      if (sourcePartId && sourcePartId !== part.id && !isRealChainLine) {
+        const source = await tx.serviceOrderPart.findFirst({
+          where: { id: sourcePartId, tenantId: args.tenantId },
+        });
+        if (source && String(source.stage || 'REQUIRED') === 'REQUIRED') {
+          await tx.serviceOrderPart.update({
+            where: { id: source.id },
+            data: { qty: Number(source.qty ?? 0) + (Number.isFinite(qty) ? qty : 0) } as any,
+          });
+        }
+        await tx.serviceOrderPart.delete({ where: { id: part.id } });
+      } else {
+        await tx.serviceOrderPart.update({
+          where: { id: part.id },
+          data: {
+            stage: 'REQUIRED' as any,
+            replacedAt: null,
+            replacedByUserId: null,
+            replacementServiceOrderId: null,
+            replacementServiceOrderPartId: null,
+          } as any,
+        });
+      }
+
+      await this.appendAuditMany(tx, args.tenantId, part.workOrderId, [
+        this.buildAuditEntry(args.actorUserId, 'parts', 'revert-linked-corrective', {
+          id: part.id,
+          qty: part.qty,
+          replacementServiceOrderId: args.replacementServiceOrderId,
+          replacementServiceOrderPartId: args.replacementServiceOrderPartId,
+        }, null),
+      ]);
+    }
+  }
+
 
   /**
    * Marca un repuesto (línea ServiceOrderPart) como "cambiado" (REPLACED) con manejo pro de cantidades:
@@ -3168,6 +3563,8 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
         inventoryItemId: (part as any).inventoryItemId ?? undefined,
         freeText: (part as any).freeText ?? undefined,
         notes: (part as any).notes ?? undefined,
+        sourceServiceOrderId: (part as any).sourceServiceOrderId ?? undefined,
+        sourceServiceOrderPartId: (part as any).sourceServiceOrderPartId ?? undefined,
       };
 
       if (qtyReplaced === curQty) {
@@ -3195,8 +3592,23 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
           });
         }
 
+        const linkedSourceSync = await this.syncSourcePartReplacement(tx, {
+          tenantId,
+          actorUserId,
+          sourcePartId: (part as any).sourceServiceOrderPartId,
+          replacementServiceOrderId: id,
+          replacementServiceOrderPartId: updated.id,
+          qtyReplaced,
+          replacedAt: now,
+        });
+
         await this.appendAuditMany(tx, tenantId, id, [
-          this.buildAuditEntry(actorUserId, 'parts', 'markReplaced', { id: partId, stage: 'REQUIRED', qty: curQty }, { id: partId, stage: 'REPLACED', qty: qtyReplaced }),
+          this.buildAuditEntry(actorUserId, 'parts', 'markReplaced', { id: partId, stage: 'REQUIRED', qty: curQty }, {
+            id: partId,
+            stage: 'REPLACED',
+            qty: qtyReplaced,
+            linkedSourceSync,
+          }),
         ]);
 
         return updated;
@@ -3234,8 +3646,23 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
         });
       }
 
+      const linkedSourceSync = await this.syncSourcePartReplacement(tx, {
+        tenantId,
+        actorUserId,
+        sourcePartId: (part as any).sourceServiceOrderPartId,
+        replacementServiceOrderId: id,
+        replacementServiceOrderPartId: created.id,
+        qtyReplaced,
+        replacedAt: now,
+      });
+
       await this.appendAuditMany(tx, tenantId, id, [
-        this.buildAuditEntry(actorUserId, 'parts', 'markReplaced:split', { id: partId, stage: 'REQUIRED', qty: curQty }, { requiredRemaining: remaining, replacedCreatedId: created.id, replacedQty: qtyReplaced }),
+        this.buildAuditEntry(actorUserId, 'parts', 'markReplaced:split', { id: partId, stage: 'REQUIRED', qty: curQty }, {
+          requiredRemaining: remaining,
+          replacedCreatedId: created.id,
+          replacedQty: qtyReplaced,
+          linkedSourceSync,
+        }),
       ]);
 
       return created;
@@ -3262,6 +3689,15 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
           source: 'SERVICE_ORDER',
           note: 'Reversion por eliminacion de repuesto en OS',
           createdByUserId: actorUserId,
+        });
+      }
+
+      if (String((part as any).stage || 'REQUIRED') === 'REPLACED') {
+        await this.revertSourcePartReplacement(tx, {
+          tenantId,
+          actorUserId,
+          replacementServiceOrderId: id,
+          replacementServiceOrderPartId: partId,
         });
       }
 
@@ -3835,6 +4271,10 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
             qty: p.qty,
             notes: p.notes ?? null,
             freeText: p.freeText ?? null,
+            sourceServiceOrderId: p.sourceServiceOrderId ?? null,
+            sourceServiceOrderPartId: p.sourceServiceOrderPartId ?? null,
+            replacementServiceOrderId: p.replacementServiceOrderId ?? null,
+            replacementServiceOrderPartId: p.replacementServiceOrderPartId ?? null,
             inventoryItem: p.inventoryItem
               ? {
                   id: p.inventoryItem.id,
@@ -3861,6 +4301,10 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
             notes: p.notes ?? null,
             freeText: p.freeText ?? null,
             replacedAt: p.replacedAt ?? null,
+            sourceServiceOrderId: p.sourceServiceOrderId ?? null,
+            sourceServiceOrderPartId: p.sourceServiceOrderPartId ?? null,
+            replacementServiceOrderId: p.replacementServiceOrderId ?? null,
+            replacementServiceOrderPartId: p.replacementServiceOrderPartId ?? null,
             replacedByUser: p.replacedByUser ? { id: p.replacedByUser.id, name: p.replacedByUser.name, email: p.replacedByUser.email, role: p.replacedByUser.role } : null,
             inventoryItem: p.inventoryItem
               ? {
@@ -4068,6 +4512,10 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
           qty: p.qty,
           notes: p.notes ?? null,
           freeText: p.freeText ?? null,
+          sourceServiceOrderId: p.sourceServiceOrderId ?? null,
+          sourceServiceOrderPartId: p.sourceServiceOrderPartId ?? null,
+          replacementServiceOrderId: p.replacementServiceOrderId ?? null,
+          replacementServiceOrderPartId: p.replacementServiceOrderPartId ?? null,
           inventoryItem: p.inventoryItem
             ? {
                 id: p.inventoryItem.id,
@@ -4092,6 +4540,10 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
           notes: p.notes ?? null,
           freeText: p.freeText ?? null,
           replacedAt: p.replacedAt ?? null,
+          sourceServiceOrderId: p.sourceServiceOrderId ?? null,
+          sourceServiceOrderPartId: p.sourceServiceOrderPartId ?? null,
+          replacementServiceOrderId: p.replacementServiceOrderId ?? null,
+          replacementServiceOrderPartId: p.replacementServiceOrderPartId ?? null,
           replacedByUser: p.replacedByUser ? { id: p.replacedByUser.id, name: p.replacedByUser.name, email: p.replacedByUser.email, role: p.replacedByUser.role } : null,
           inventoryItem: p.inventoryItem
             ? {

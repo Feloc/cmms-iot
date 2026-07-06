@@ -64,6 +64,33 @@ type RiskItem = {
   status: 'OVERDUE' | 'DUE_SOON' | 'OK' | 'UNKNOWN';
 };
 type RiskResponse = { items: RiskItem[]; totalCandidates?: number };
+type HourmeterReadingItem = {
+  id: string;
+  reading: number;
+  readingAt?: string | null;
+  phase?: string | null;
+  source?: string | null;
+  note?: string | null;
+  deltaFromPrevious?: number | null;
+  workOrderId?: string | null;
+  workOrder?: {
+    id: string;
+    title?: string | null;
+    serviceOrderType?: string | null;
+    status?: string | null;
+  } | null;
+};
+type HourmeterReadingsResponse = {
+  asset: {
+    id: string;
+    code: string;
+    name?: string | null;
+    latestHourmeter?: number | null;
+    latestHourmeterAt?: string | null;
+  };
+  latest: HourmeterReadingItem | null;
+  items: HourmeterReadingItem[];
+};
 
 function toDateInputValue(d: Date) {
   return d.toISOString().slice(0, 10);
@@ -104,6 +131,7 @@ export default function HourmeterAnalyticsTab({ asset }: { asset: any }) {
   const [series, setSeries] = React.useState<SeriesResponse | null>(null);
   const [pmPerformance, setPmPerformance] = React.useState<PmPerformanceResponse | null>(null);
   const [risk, setRisk] = React.useState<RiskResponse | null>(null);
+  const [readings, setReadings] = React.useState<HourmeterReadingsResponse | null>(null);
 
   const load = React.useCallback(async () => {
     setLoading(true);
@@ -115,23 +143,26 @@ export default function HourmeterAnalyticsTab({ asset }: { asset: any }) {
         ...(asset?.customer ? { customer: String(asset.customer) } : {}),
       }).toString();
 
-      const [summaryResp, seriesResp, pmResp, riskResp] = await Promise.all([
+      const [summaryResp, seriesResp, pmResp, riskResp, readingsResp] = await Promise.all([
         fetchJson(`${apiBase}/assets/${assetId}/hourmeter-analytics/summary?${windowQs}`, headers),
         fetchJson(`${apiBase}/assets/${assetId}/hourmeter-analytics/series?${windowQs}&bucket=${bucket}`, headers),
         fetchJson(`${apiBase}/assets/${assetId}/hourmeter-analytics/pm-performance?limit=12`, headers),
         fetchJson(`${apiBase}/assets/hourmeter-analytics/risk?${riskQs}`, headers),
+        fetchJson(`${apiBase}/assets/${assetId}/hourmeter-readings?limit=0`, headers),
       ]);
 
       setSummary(summaryResp as SummaryResponse);
       setSeries(seriesResp as SeriesResponse);
       setPmPerformance(pmResp as PmPerformanceResponse);
       setRisk(riskResp as RiskResponse);
+      setReadings(readingsResp as HourmeterReadingsResponse);
     } catch (e: any) {
       setError(e?.message ?? 'No fue posible cargar analítica de horómetro');
       setSummary(null);
       setSeries(null);
       setPmPerformance(null);
       setRisk(null);
+      setReadings(null);
     } finally {
       setLoading(false);
     }
@@ -150,6 +181,32 @@ export default function HourmeterAnalyticsTab({ asset }: { asset: any }) {
       })),
     [series?.items],
   );
+
+  const readingsSummary = React.useMemo(() => {
+    const items = readings?.items ?? [];
+    const chronological = items
+      .filter((it) => it.readingAt)
+      .slice()
+      .sort((a, b) => new Date(a.readingAt || 0).getTime() - new Date(b.readingAt || 0).getTime());
+    const first = chronological[0] ?? null;
+    const last = chronological[chronological.length - 1] ?? readings?.latest ?? null;
+    const deltas = items.map((it) => it.deltaFromPrevious).filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
+    const accumulatedDelta = deltas.reduce((acc, v) => acc + v, 0);
+    const decreases = deltas.filter((v) => v < 0).length;
+    const linkedToOs = items.filter((it) => !!it.workOrderId).length;
+    const adjustments = items.filter((it) => String(it.source || '').toUpperCase() === 'ADJUSTMENT').length;
+
+    return {
+      total: items.length,
+      first,
+      last,
+      absoluteDelta: first && last ? Number(last.reading) - Number(first.reading) : null,
+      accumulatedDelta,
+      decreases,
+      linkedToOs,
+      adjustments,
+    };
+  }, [readings?.items, readings?.latest]);
 
   const isRangeInvalid = new Date(from).getTime() > new Date(to).getTime();
 
@@ -230,6 +287,75 @@ export default function HourmeterAnalyticsTab({ asset }: { asset: any }) {
               <div><span className="text-gray-600">Calidad:</span> ↓{summary.quality.decreaseEvents} · saltos {summary.quality.largeJumpEvents}</div>
             </div>
           </div>
+        )}
+      </div>
+
+      <div className="border rounded-lg p-4 space-y-3">
+        <div className="font-semibold">Resumen de horómetros registrados</div>
+        {!readings || readings.items.length === 0 ? (
+          <div className="text-sm text-gray-600">No hay lecturas de horómetro registradas para este activo.</div>
+        ) : (
+          <>
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-sm">
+              <div className="border rounded p-3">
+                <div className="text-gray-600">Total registros</div>
+                <div className="text-lg font-semibold">{readingsSummary.total}</div>
+                <div className="text-xs text-gray-600">Todas las lecturas registradas.</div>
+              </div>
+              <div className="border rounded p-3 space-y-0.5">
+                <div><span className="text-gray-600">Primera:</span> <b>{fmtNum(readingsSummary.first?.reading, 2)} h</b></div>
+                <div className="text-xs text-gray-600">{fmtDateTime(readingsSummary.first?.readingAt)}</div>
+              </div>
+              <div className="border rounded p-3 space-y-0.5">
+                <div><span className="text-gray-600">Última:</span> <b>{fmtNum(readingsSummary.last?.reading, 2)} h</b></div>
+                <div className="text-xs text-gray-600">{fmtDateTime(readingsSummary.last?.readingAt)}</div>
+              </div>
+              <div className="border rounded p-3 space-y-0.5">
+                <div><span className="text-gray-600">Delta total:</span> <b>{fmtNum(readingsSummary.absoluteDelta, 2)} h</b></div>
+                <div><span className="text-gray-600">Delta acumulado:</span> <b>{fmtNum(readingsSummary.accumulatedDelta, 2)} h</b></div>
+                <div className="text-xs text-gray-600">
+                  OS {readingsSummary.linkedToOs} · ajustes {readingsSummary.adjustments} · disminuciones {readingsSummary.decreases}
+                </div>
+              </div>
+            </div>
+
+            <div className="overflow-x-auto border rounded">
+              <table className="min-w-full text-sm">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-3 py-2 text-left">Fecha</th>
+                    <th className="px-3 py-2 text-left">Lectura</th>
+                    <th className="px-3 py-2 text-left">Delta anterior</th>
+                    <th className="px-3 py-2 text-left">Origen</th>
+                    <th className="px-3 py-2 text-left">Fase</th>
+                    <th className="px-3 py-2 text-left">OS</th>
+                    <th className="px-3 py-2 text-left">Nota</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {readings.items.map((it) => (
+                    <tr key={it.id} className="border-t">
+                      <td className="px-3 py-2 whitespace-nowrap">{fmtDateTime(it.readingAt)}</td>
+                      <td className="px-3 py-2 whitespace-nowrap"><b>{fmtNum(it.reading, 2)} h</b></td>
+                      <td className="px-3 py-2 whitespace-nowrap">{fmtNum(it.deltaFromPrevious, 2)} h</td>
+                      <td className="px-3 py-2 whitespace-nowrap">{it.source || '-'}</td>
+                      <td className="px-3 py-2 whitespace-nowrap">{it.phase || '-'}</td>
+                      <td className="px-3 py-2">
+                        {it.workOrderId ? (
+                          <a className="underline" href={`/service-orders/${it.workOrderId}`}>
+                            {it.workOrder?.title || it.workOrderId}
+                          </a>
+                        ) : (
+                          <span className="text-gray-500">-</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2">{it.note || '-'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
       </div>
 

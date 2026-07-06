@@ -33,6 +33,39 @@ type ServiceOrder = {
   } | null;
 };
 
+type ServiceOrderPartSummary = {
+  id: string;
+  qty: number;
+  stage: 'REQUIRED' | 'REPLACED';
+  notes?: string | null;
+  freeText?: string | null;
+  replacedAt?: string | null;
+  createdAt?: string | null;
+  sourceServiceOrderId?: string | null;
+  sourceServiceOrderPartId?: string | null;
+  replacementServiceOrderId?: string | null;
+  replacementServiceOrderPartId?: string | null;
+  inventoryItem?: {
+    id: string;
+    sku?: string | null;
+    name?: string | null;
+    model?: string | null;
+  } | null;
+  replacedByUser?: { id: string; name?: string | null; email?: string | null } | null;
+  workOrder?: {
+    id: string;
+    title?: string | null;
+    assetCode?: string | null;
+    status?: string | null;
+    serviceOrderType?: string | null;
+    dueDate?: string | null;
+    createdAt?: string | null;
+    completedAt?: string | null;
+    deliveredAt?: string | null;
+    asset?: { customer?: string | null; brand?: string | null; model?: string | null; serialNumber?: string | null } | null;
+  } | null;
+};
+
 type Paginated<T> = { items: T[]; total: number; page: number; size: number; statusCounts?: Record<string, number> };
 type CommercialStatus =
   | 'NO_MANAGEMENT'
@@ -87,6 +120,7 @@ type StatusTab = (typeof STATUS_TABS)[number];
 const LIST_TABS = [
   { id: 'ALL', label: 'Todas las OS' },
   { id: 'ISSUES', label: 'Equipos con novedad' },
+  { id: 'PARTS', label: 'Repuestos OS' },
 ] as const;
 type ListTab = (typeof LIST_TABS)[number]['id'];
 
@@ -165,6 +199,13 @@ function commercialStatusMeta(status?: string | null) {
   }
 }
 
+function partSummaryLabel(part: ServiceOrderPartSummary) {
+  const inv = part.inventoryItem;
+  if (inv?.sku) return `${inv.sku} - ${inv.name ?? ''}`.trim();
+  if (inv?.name) return inv.name;
+  return part.freeText || '(sin nombre)';
+}
+
 function normalizeStoredFilters(value: unknown): Filter[] {
   if (!Array.isArray(value)) return DEFAULT_FILTERS;
   const filters = value
@@ -205,6 +246,7 @@ export default function ServiceOrdersPage() {
   const [hydratedStorageKey, setHydratedStorageKey] = useState('');
 
   const [data, setData] = useState<Paginated<ServiceOrder> | null>(null);
+  const [partsData, setPartsData] = useState<Paginated<ServiceOrderPartSummary> | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string>('');
   const [savingCommercialId, setSavingCommercialId] = useState<string>('');
@@ -220,6 +262,7 @@ export default function ServiceOrdersPage() {
 
   const listPath = useMemo(() => {
     if (!auth.token || !auth.tenantSlug || !filtersHydrated) return null;
+    if (listTab === 'PARTS') return null;
 
     const qs = new URLSearchParams();
     for (const f of filters) {
@@ -245,6 +288,35 @@ export default function ServiceOrdersPage() {
     qs.set('size', String(PAGE_SIZE));
 
     return `/service-orders?${qs.toString()}`;
+  }, [auth.token, auth.tenantSlug, filtersHydrated, filters, dateRange.end, dateRange.start, listTab, statusTab, page]);
+
+  const partsPath = useMemo(() => {
+    if (!auth.token || !auth.tenantSlug || !filtersHydrated) return null;
+    if (listTab !== 'PARTS') return null;
+
+    const qs = new URLSearchParams();
+    for (const f of filters) {
+      const v = (f.value || '').trim();
+      if (!v) continue;
+      if (statusTab !== 'ALL' && f.field === 'status') continue;
+      if (f.field === 'month') {
+        const range = monthToRange(v);
+        if (!range) continue;
+        qs.set('start', range.start);
+        qs.set('end', range.end);
+        continue;
+      }
+      if (f.field === 'q' || f.field === 'status' || f.field === 'type') qs.append(f.field, v);
+    }
+    const rangeStart = dateInputToStartIso(dateRange.start);
+    const rangeEnd = dateInputToEndIso(dateRange.end);
+    if (rangeStart) qs.set('start', rangeStart);
+    if (rangeEnd) qs.set('end', rangeEnd);
+    if (statusTab !== 'ALL') qs.append('status', statusTab);
+    qs.set('page', String(page));
+    qs.set('size', String(PAGE_SIZE));
+
+    return `/service-orders/parts-summary?${qs.toString()}`;
   }, [auth.token, auth.tenantSlug, filtersHydrated, filters, dateRange.end, dateRange.start, listTab, statusTab, page]);
 
   const exportPath = useMemo(() => {
@@ -302,17 +374,19 @@ export default function ServiceOrdersPage() {
   }, [auth.token, auth.tenantSlug, filtersHydrated, filters, dateRange.end, dateRange.start, listTab, statusTab]);
 
   const items = data?.items ?? EMPTY_ITEMS;
+  const partItems = partsData?.items ?? [];
   const statusCounts = data?.statusCounts ?? {};
   const allStatusCount = useMemo(
     () => Object.values(statusCounts).reduce((acc, count) => acc + Number(count ?? 0), 0),
     [statusCounts]
   );
   const totalPages = useMemo(() => {
-    const total = data?.total ?? 0;
-    const size = data?.size ?? PAGE_SIZE;
+    const source = listTab === 'PARTS' ? partsData : data;
+    const total = source?.total ?? 0;
+    const size = source?.size ?? PAGE_SIZE;
     return Math.max(1, Math.ceil(total / size));
-  }, [data?.size, data?.total]);
-  const currentPage = data?.page ?? page;
+  }, [data, listTab, partsData]);
+  const currentPage = (listTab === 'PARTS' ? partsData?.page : data?.page) ?? page;
 
   useEffect(() => {
     if (!filtersStorageKey) return;
@@ -387,11 +461,28 @@ export default function ServiceOrdersPage() {
   }, [auth.token, auth.tenantSlug, listPath]);
 
   useEffect(() => {
-    if (!data) return;
-    if (data.total > 0 && currentPage > totalPages) {
+    if (!auth.token || !auth.tenantSlug || !partsPath) return;
+
+    setLoading(true);
+    setErr('');
+
+    const t = setTimeout(() => {
+      apiFetch<Paginated<ServiceOrderPartSummary>>(partsPath, { token: auth.token!, tenantSlug: auth.tenantSlug! })
+        .then((d) => setPartsData(d))
+        .catch((e: any) => setErr(e?.message ?? 'Error cargando repuestos de OS'))
+        .finally(() => setLoading(false));
+    }, 150);
+
+    return () => clearTimeout(t);
+  }, [auth.token, auth.tenantSlug, partsPath]);
+
+  useEffect(() => {
+    const source = listTab === 'PARTS' ? partsData : data;
+    if (!source) return;
+    if (source.total > 0 && currentPage > totalPages) {
       setPage(totalPages);
     }
-  }, [currentPage, data, totalPages]);
+  }, [currentPage, data, listTab, partsData, totalPages]);
 
   // Inicializa state de edición cuando llegan items nuevos
   useEffect(() => {
@@ -557,8 +648,10 @@ export default function ServiceOrdersPage() {
           <div className="text-sm text-gray-600">Filtra y programa rápidamente (asignar técnico + fecha/hora).</div>
           <div className="text-xs text-gray-500 mt-1">
             {loading ? 'Cargando…' : null}
-            {!loading && data ? `Total: ${data.total} · Página ${currentPage} de ${totalPages}` : null}
-            {!loading && !data ? 'Sin datos aún' : null}
+            {!loading && listTab !== 'PARTS' && data ? `Total: ${data.total} · Página ${currentPage} de ${totalPages}` : null}
+            {!loading && listTab === 'PARTS' && partsData ? `Total repuestos: ${partsData.total} · Página ${currentPage} de ${totalPages}` : null}
+            {!loading && listTab !== 'PARTS' && !data ? 'Sin datos aún' : null}
+            {!loading && listTab === 'PARTS' && !partsData ? 'Sin datos aún' : null}
           </div>
         </div>
 
@@ -566,22 +659,26 @@ export default function ServiceOrdersPage() {
           <Link href="/service-orders/new" className="px-3 py-2 border rounded text-sm bg-black text-white">
             Nueva OS
           </Link>
-          <button
-            type="button"
-            className="px-3 py-2 border rounded text-sm"
-            onClick={exportFilteredResults}
-            disabled={exporting}
-          >
-            {exporting ? 'Exportando...' : 'Exportar Excel'}
-          </button>
-          <button
-            type="button"
-            className="px-3 py-2 border rounded text-sm"
-            onClick={exportFilteredReport}
-            disabled={exportingReport}
-          >
-            {exportingReport ? 'Generando...' : 'Exportar reporte'}
-          </button>
+          {listTab !== 'PARTS' ? (
+            <>
+              <button
+                type="button"
+                className="px-3 py-2 border rounded text-sm"
+                onClick={exportFilteredResults}
+                disabled={exporting}
+              >
+                {exporting ? 'Exportando...' : 'Exportar Excel'}
+              </button>
+              <button
+                type="button"
+                className="px-3 py-2 border rounded text-sm"
+                onClick={exportFilteredReport}
+                disabled={exportingReport}
+              >
+                {exportingReport ? 'Generando...' : 'Exportar reporte'}
+              </button>
+            </>
+          ) : null}
           <Link href="/calendar" className="px-3 py-2 border rounded text-sm">
             Calendario
           </Link>
@@ -610,7 +707,11 @@ export default function ServiceOrdersPage() {
             );
           })}
           <div className="text-xs text-gray-500 ml-auto">
-            {listTab === 'ISSUES' ? 'Mostrando equipos/OS con novedad.' : 'Mostrando todas las órdenes de servicio.'}
+            {listTab === 'ISSUES'
+              ? 'Mostrando equipos/OS con novedad.'
+              : listTab === 'PARTS'
+                ? 'Mostrando repuestos por cambiar y cambiados registrados en OS.'
+                : 'Mostrando todas las órdenes de servicio.'}
           </div>
         </div>
       </div>
@@ -802,7 +903,7 @@ export default function ServiceOrdersPage() {
         </div>
 
         <div className="text-xs text-gray-500">
-          Tip: puedes agregar varios filtros. El filtro "Mes" y el rango de fechas usan la fecha programada. Las novedades se consultan desde la pestaña "Equipos con novedad".
+          Tip: puedes agregar varios filtros. El filtro "Mes" y el rango de fechas usan la fecha programada. En "Repuestos OS" aplican texto, status, tipo y fechas.
         </div>
       </div>
 
@@ -821,7 +922,7 @@ export default function ServiceOrdersPage() {
                 }`}
               >
                 <span>{t}</span>
-                {data ? (
+                {listTab !== 'PARTS' && data ? (
                   <span className={`text-[11px] px-1.5 py-0.5 rounded ${active ? 'bg-white/20' : 'bg-gray-100 text-gray-700'}`}>
                     {count}
                   </span>
@@ -830,11 +931,104 @@ export default function ServiceOrdersPage() {
             );
           })}
           <div className="text-xs text-gray-500 ml-auto">
-            Mostrando {items.length} resultados en esta página
+            Mostrando {listTab === 'PARTS' ? partItems.length : items.length} resultados en esta página
           </div>
         </div>
       </div>
 
+      {listTab === 'PARTS' ? (
+        <div className="border rounded overflow-auto">
+          <table className="min-w-[1180px] w-full text-sm">
+            <thead className="bg-gray-50">
+              <tr>
+                <th className="text-left p-2 border-b">Estado</th>
+                <th className="text-left p-2 border-b">Repuesto</th>
+                <th className="text-left p-2 border-b">Cantidad</th>
+                <th className="text-left p-2 border-b">OS</th>
+                <th className="text-left p-2 border-b">Cliente / Serie</th>
+                <th className="text-left p-2 border-b">Tipo OS</th>
+                <th className="text-left p-2 border-b">Fecha</th>
+                <th className="text-left p-2 border-b">Cambiado por</th>
+                <th className="text-left p-2 border-b">Relación</th>
+                <th className="text-left p-2 border-b">Notas</th>
+              </tr>
+            </thead>
+            <tbody>
+              {partItems.map((part) => {
+                const wo = part.workOrder;
+                const asset = wo?.asset;
+                const isReplaced = part.stage === 'REPLACED';
+                const refDate = isReplaced
+                  ? part.replacedAt || wo?.deliveredAt || wo?.completedAt || wo?.dueDate || part.createdAt
+                  : wo?.dueDate || part.createdAt;
+                const who = part.replacedByUser?.name || part.replacedByUser?.email || '-';
+
+                return (
+                  <tr key={part.id} className="hover:bg-gray-50">
+                    <td className="p-2 border-b whitespace-nowrap">
+                      <span
+                        className={`px-2 py-0.5 border rounded text-xs ${
+                          isReplaced
+                            ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                            : 'bg-amber-50 text-amber-800 border-amber-200'
+                        }`}
+                      >
+                        {isReplaced ? 'Cambiado' : 'Por cambiar'}
+                      </span>
+                    </td>
+                    <td className="p-2 border-b">
+                      <div className="font-medium">{partSummaryLabel(part)}</div>
+                      {part.inventoryItem?.model ? <div className="text-xs text-gray-600">{part.inventoryItem.model}</div> : null}
+                    </td>
+                    <td className="p-2 border-b whitespace-nowrap">{part.qty ?? 1}</td>
+                    <td className="p-2 border-b">
+                      {wo?.id ? (
+                        <Link className="font-medium underline" href={`/service-orders/${wo.id}`}>
+                          {wo.assetCode || wo.id.slice(-8)}
+                        </Link>
+                      ) : (
+                        '-'
+                      )}
+                      <div className="text-xs text-gray-600">{wo?.title || ''}</div>
+                      <div className="text-xs text-gray-500">{wo?.status || ''}</div>
+                    </td>
+                    <td className="p-2 border-b">
+                      <div>{asset?.customer || '-'}</div>
+                      <div className="text-xs text-gray-600">{asset?.serialNumber || '-'}</div>
+                    </td>
+                    <td className="p-2 border-b whitespace-nowrap">{wo?.serviceOrderType || '-'}</td>
+                    <td className="p-2 border-b whitespace-nowrap">{refDate ? String(refDate).slice(0, 10) : '-'}</td>
+                    <td className="p-2 border-b">{isReplaced ? who : '-'}</td>
+                    <td className="p-2 border-b">
+                      <div className="flex flex-col gap-1 text-xs">
+                        {part.sourceServiceOrderId ? (
+                          <Link className="underline text-sky-700" href={`/service-orders/${part.sourceServiceOrderId}`}>
+                            Origen OS {part.sourceServiceOrderId.slice(-8)}
+                          </Link>
+                        ) : null}
+                        {part.replacementServiceOrderId ? (
+                          <Link className="underline text-emerald-700" href={`/service-orders/${part.replacementServiceOrderId}`}>
+                            Cambiado en OS {part.replacementServiceOrderId.slice(-8)}
+                          </Link>
+                        ) : null}
+                        {!part.sourceServiceOrderId && !part.replacementServiceOrderId ? '-' : null}
+                      </div>
+                    </td>
+                    <td className="p-2 border-b">{part.notes || ''}</td>
+                  </tr>
+                );
+              })}
+              {partItems.length === 0 ? (
+                <tr>
+                  <td className="p-4 text-gray-600" colSpan={10}>
+                    Sin repuestos registrados.
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+      ) : (
       <div className="border rounded overflow-auto">
         <table className="min-w-[1220px] w-full text-sm">
           <thead className="bg-gray-50">
@@ -979,6 +1173,7 @@ export default function ServiceOrdersPage() {
           </tbody>
         </table>
       </div>
+      )}
 
       <div className="flex items-center justify-between gap-3 flex-wrap border rounded p-3">
         <div className="text-sm text-gray-600">

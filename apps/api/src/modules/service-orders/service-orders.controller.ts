@@ -67,6 +67,11 @@ export class ServiceOrdersController {
     return this.svc.listIssues(q);
   }
 
+  @Get('parts-summary')
+  listPartsSummary(@Query() q: ListServiceOrdersQuery) {
+    return this.svc.listPartsSummary(q);
+  }
+
   @Post()
   create(@Body() dto: CreateServiceOrderDto) {
     return this.svc.create(dto);

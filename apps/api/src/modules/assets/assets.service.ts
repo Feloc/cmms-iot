@@ -934,6 +934,18 @@ if (q.customer) where.customer = { contains: q.customer.trim(), mode: 'insensiti
       if (!executedAt) throw new BadRequestException('executedAt is required');
 
       const note = this.normalizeOptionalString(dto?.note);
+      const hasHourmeterReading = dto?.hourmeterReading !== undefined && dto?.hourmeterReading !== null && dto?.hourmeterReading !== '';
+      let hourmeterReading: number | null = null;
+      if (hasHourmeterReading) {
+        hourmeterReading = Number(dto.hourmeterReading);
+      }
+      if (hourmeterReading != null && (!Number.isFinite(hourmeterReading) || hourmeterReading < 0)) {
+        throw new BadRequestException('hourmeterReading must be a non-negative number');
+      }
+      const allowHourmeterDecrease = dto?.allowHourmeterDecrease === true;
+      if (allowHourmeterDecrease && !note) {
+        throw new BadRequestException('note is required when allowHourmeterDecrease=true');
+      }
 
       const record = await (tx as any).assetPreventiveMaintenance.create({
         data: {
@@ -949,6 +961,47 @@ if (q.customer) where.customer = { contains: q.customer.trim(), mode: 'insensiti
           pmPlan: { select: { id: true, name: true } },
         },
       });
+
+      let hourmeterRecord: any = null;
+      if (hourmeterReading != null) {
+        const previous = await (tx as any).assetMeterReading.findFirst({
+          where: { tenantId, assetId: asset.id, meterType: 'HOURMETER' },
+          orderBy: [{ readingAt: 'desc' }, { createdAt: 'desc' }],
+          select: { id: true, reading: true, readingAt: true },
+        });
+
+        if (previous && !allowHourmeterDecrease && hourmeterReading < Number(previous.reading)) {
+          throw new BadRequestException(
+            `El horómetro no puede disminuir. Última lectura: ${Number(previous.reading)} (${new Date(previous.readingAt).toISOString()}).`,
+          );
+        }
+
+        const deltaFromPrevious = previous ? Number(hourmeterReading - Number(previous.reading)) : null;
+        const hourmeterNote = note ? `Mantenimiento preventivo manual: ${note}` : 'Mantenimiento preventivo manual';
+        hourmeterRecord = await (tx as any).assetMeterReading.create({
+          data: {
+            tenantId,
+            assetId: asset.id,
+            meterType: 'HOURMETER',
+            source: allowHourmeterDecrease ? 'ADJUSTMENT' : 'MANUAL_OS',
+            phase: 'AFTER',
+            reading: hourmeterReading,
+            readingAt: executedAt,
+            note: hourmeterNote,
+            deltaFromPrevious,
+            createdByUserId: actorUserId,
+          },
+        });
+
+        await tx.$executeRaw`
+          UPDATE "Asset"
+          SET
+            "latestHourmeter" = ${hourmeterReading},
+            "latestHourmeterAt" = ${executedAt}
+          WHERE "id" = ${asset.id}
+            AND ("latestHourmeterAt" IS NULL OR "latestHourmeterAt" <= ${executedAt})
+        `;
+      }
 
       const plan = await (tx as any).assetMaintenancePlan.findFirst({
         where: { tenantId, assetId: asset.id, active: true },
@@ -978,6 +1031,15 @@ if (q.customer) where.customer = { contains: q.customer.trim(), mode: 'insensiti
           pmPlanId: record.pmPlanId ?? null,
           pmPlanName: record?.pmPlan?.name ?? null,
         },
+        hourmeterReading: hourmeterRecord
+          ? {
+              id: hourmeterRecord.id,
+              reading: Number(hourmeterRecord.reading),
+              readingAt: new Date(hourmeterRecord.readingAt).toISOString(),
+              source: hourmeterRecord.source,
+              phase: hourmeterRecord.phase,
+            }
+          : null,
         syncedPlan,
       };
     });
@@ -994,12 +1056,17 @@ if (q.customer) where.customer = { contains: q.customer.trim(), mode: 'insensiti
       } as any);
       if (!asset) throw new NotFoundException('Asset not found');
 
-      const safeLimit = Number.isFinite(Number(limit)) ? Math.min(500, Math.max(1, Number(limit))) : 200;
+      const requestedLimit = Number(limit);
+      const safeLimit = Number.isFinite(requestedLimit) && requestedLimit === 0
+        ? null
+        : Number.isFinite(requestedLimit)
+          ? Math.min(500, Math.max(1, requestedLimit))
+          : 200;
 
       const rows = await (tx as any).assetMeterReading.findMany({
         where: { tenantId, assetId, meterType: 'HOURMETER' },
         orderBy: [{ readingAt: 'desc' }, { createdAt: 'desc' }],
-        take: safeLimit,
+        ...(safeLimit == null ? {} : { take: safeLimit }),
         include: {
           workOrder: { select: { id: true, title: true, serviceOrderType: true, status: true } },
           createdByUser: { select: { id: true, name: true, email: true, role: true } },

@@ -39,6 +39,10 @@ type Part = {
   notes?: string | null;
   freeText?: string | null;
   inventoryItem?: InventoryItem | null;
+  sourceServiceOrderId?: string | null;
+  sourceServiceOrderPartId?: string | null;
+  replacementServiceOrderId?: string | null;
+  replacementServiceOrderPartId?: string | null;
 };
 
 type WorkLog = {
@@ -2870,6 +2874,20 @@ async function setTimestamp(key: TsKey, localValue: string) {
 	                      <span className="font-medium">{p.inventoryItem ? `${p.inventoryItem.sku} — ${p.inventoryItem.name}` : p.freeText ?? ''}</span>
 	                      <span className="text-gray-600"> · Qty: {p.qty}</span>
 	                    </div>
+	                    {p.sourceServiceOrderId || p.replacementServiceOrderId ? (
+	                      <div className="flex flex-wrap gap-2 text-xs">
+	                        {p.sourceServiceOrderId ? (
+	                          <a className="underline text-sky-700" href={`/service-orders/${p.sourceServiceOrderId}`}>
+	                            Origen OS {p.sourceServiceOrderId.slice(-8)}
+	                          </a>
+	                        ) : null}
+	                        {p.replacementServiceOrderId ? (
+	                          <a className="underline text-emerald-700" href={`/service-orders/${p.replacementServiceOrderId}`}>
+	                            Cambiado en OS {p.replacementServiceOrderId.slice(-8)}
+	                          </a>
+	                        ) : null}
+	                      </div>
+	                    ) : null}
 	                    <textarea
 	                      className="w-full rounded border px-2 py-1 text-sm"
 	                      rows={2}
@@ -2900,6 +2918,20 @@ async function setTimestamp(key: TsKey, localValue: string) {
 	                      <span className="text-gray-600"> · Qty: {p.qty}</span>
 	                      {p.replacedAt ? <span className="text-gray-600"> · {String(p.replacedAt).slice(0, 10)}</span> : null}
 	                    </div>
+	                    {p.sourceServiceOrderId || p.replacementServiceOrderId ? (
+	                      <div className="flex flex-wrap gap-2 text-xs">
+	                        {p.sourceServiceOrderId ? (
+	                          <a className="underline text-sky-700" href={`/service-orders/${p.sourceServiceOrderId}`}>
+	                            Origen OS {p.sourceServiceOrderId.slice(-8)}
+	                          </a>
+	                        ) : null}
+	                        {p.replacementServiceOrderId ? (
+	                          <a className="underline text-emerald-700" href={`/service-orders/${p.replacementServiceOrderId}`}>
+	                            Cambiado en OS {p.replacementServiceOrderId.slice(-8)}
+	                          </a>
+	                        ) : null}
+	                      </div>
+	                    ) : null}
 	                    <textarea
 	                      className="w-full rounded border px-2 py-1 text-sm"
 	                      rows={2}

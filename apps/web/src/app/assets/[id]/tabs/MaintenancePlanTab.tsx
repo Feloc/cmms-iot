@@ -65,6 +65,8 @@ export default function MaintenancePlanTab({
   const [active, setActive] = React.useState(true);
   const [manualPmPlanId, setManualPmPlanId] = React.useState('');
   const [manualExecutedAt, setManualExecutedAt] = React.useState('');
+  const [manualHourmeterReading, setManualHourmeterReading] = React.useState('');
+  const [manualAllowHourmeterDecrease, setManualAllowHourmeterDecrease] = React.useState(false);
   const [manualNote, setManualNote] = React.useState('');
 
   const configuredPlan = asset?.maintenancePlan ?? null;
@@ -226,6 +228,14 @@ export default function MaintenancePlanTab({
     try {
       if (!manualPmPlanId) throw new Error('Debes seleccionar el protocolo/PM Plan realizado');
       if (!manualExecutedAt) throw new Error('Debes seleccionar la fecha del mantenimiento realizado');
+      const normalizedHourmeterReading = manualHourmeterReading.trim();
+      if (normalizedHourmeterReading) {
+        const reading = Number(normalizedHourmeterReading);
+        if (!Number.isFinite(reading) || reading < 0) throw new Error('Ingresa un valor de horómetro válido (>= 0).');
+      }
+      if (manualAllowHourmeterDecrease && !manualNote.trim()) {
+        throw new Error('Para permitir una disminución del horómetro debes agregar una observación.');
+      }
 
       const res = await fetch(`${apiBase}/assets/${assetId}/preventive-maintenance-records`, {
         method: 'POST',
@@ -234,6 +244,8 @@ export default function MaintenancePlanTab({
         body: JSON.stringify({
           pmPlanId: manualPmPlanId,
           executedAt: new Date(`${manualExecutedAt}T00:00:00`).toISOString(),
+          hourmeterReading: normalizedHourmeterReading ? Number(normalizedHourmeterReading) : null,
+          allowHourmeterDecrease: manualAllowHourmeterDecrease || undefined,
           note: manualNote.trim() || null,
         }),
       });
@@ -244,10 +256,12 @@ export default function MaintenancePlanTab({
 
       setInfo(
         json?.syncedPlan
-          ? 'Mantenimiento manual registrado y usado como último mantenimiento del plan actual.'
-          : 'Mantenimiento manual registrado en el historial.',
+          ? `Mantenimiento manual registrado y usado como último mantenimiento del plan actual${json?.hourmeterReading ? ' con horómetro.' : '.'}`
+          : `Mantenimiento manual registrado en el historial${json?.hourmeterReading ? ' con horómetro.' : '.'}`,
       );
       setManualExecutedAt('');
+      setManualHourmeterReading('');
+      setManualAllowHourmeterDecrease(false);
       setManualNote('');
       await onUpdated?.();
       await loadFutureOrders();
@@ -484,7 +498,34 @@ export default function MaintenancePlanTab({
               onChange={(e) => setManualExecutedAt(e.target.value)}
             />
           </label>
+
+          <label className="space-y-1">
+            <span className="text-sm font-medium">Horómetro</span>
+            <input
+              type="number"
+              min={0}
+              step="0.01"
+              className="border rounded px-3 py-2 w-full"
+              value={manualHourmeterReading}
+              disabled={busy}
+              onChange={(e) => {
+                setManualHourmeterReading(e.target.value);
+                if (!e.target.value.trim()) setManualAllowHourmeterDecrease(false);
+              }}
+              placeholder="Ej. 1250"
+            />
+          </label>
         </div>
+
+        <label className="text-sm flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={manualAllowHourmeterDecrease}
+            disabled={busy || !manualHourmeterReading.trim()}
+            onChange={(e) => setManualAllowHourmeterDecrease(e.target.checked)}
+          />
+          Permitir ajuste si el horómetro es menor que la última lectura
+        </label>
 
         <label className="space-y-1 block">
           <span className="text-sm font-medium">Observación</span>
