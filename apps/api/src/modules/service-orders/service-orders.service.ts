@@ -39,6 +39,12 @@ type CommercialStatusNotification = {
   previousStatus?: string | null;
   nextStatus: string;
 };
+type SourcePartReplacementSyncResult = {
+  mode: 'already-synced' | 'updated-source' | 'split-source';
+  sourcePartId: string;
+  reflectedPartId?: string;
+  parentSync?: SourcePartReplacementSyncResult | null;
+} | null;
 
 @Injectable()
 export class ServiceOrdersService {
@@ -1940,7 +1946,13 @@ private async assertTechCanMutateServiceOrder(
       (this.prisma as any).serviceOrderPart.count({ where }),
     ]);
 
-    const assetCodes = Array.from(new Set((items ?? []).map((part: any) => String(part?.workOrder?.assetCode || '').trim()).filter(Boolean)));
+    const assetCodes: string[] = Array.from(
+      new Set<string>(
+        (items ?? [])
+          .map((part: any) => String(part?.workOrder?.assetCode || '').trim())
+          .filter((value: string): value is string => !!value),
+      ),
+    );
     const assets = await this.prisma.asset.findMany({
       where: { tenantId, code: { in: assetCodes } },
       select: { code: true, customer: true, name: true, brand: true, model: true, serialNumber: true },
@@ -3346,7 +3358,7 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
       replacedAt: Date;
       visitedPartIds?: Set<string>;
     },
-  ) {
+  ): Promise<SourcePartReplacementSyncResult> {
     const sourcePartId = String(args.sourcePartId || '').trim();
     if (!sourcePartId) return null;
     const visitedPartIds = args.visitedPartIds ?? new Set<string>();
@@ -3388,7 +3400,7 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
     };
 
     if (args.qtyReplaced === sourceQty) {
-      const parentSync = await this.syncSourcePartReplacement(tx, {
+      const parentSync: SourcePartReplacementSyncResult = await this.syncSourcePartReplacement(tx, {
         ...args,
         sourcePartId: source.sourceServiceOrderPartId,
         visitedPartIds,
@@ -3413,7 +3425,7 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
       return { mode: 'updated-source', sourcePartId: updated.id, parentSync };
     }
 
-    const parentSync = await this.syncSourcePartReplacement(tx, {
+    const parentSync: SourcePartReplacementSyncResult = await this.syncSourcePartReplacement(tx, {
       ...args,
       sourcePartId: source.sourceServiceOrderPartId,
       visitedPartIds,
