@@ -1972,6 +1972,249 @@ private async assertTechCanMutateServiceOrder(
     return { items: enriched, total, page, size };
   }
 
+  private serviceOrderPartLabel(part: any) {
+    const inv = part?.inventoryItem ?? null;
+    if (inv?.sku) return `${inv.sku} - ${inv.name ?? ''}`.trim();
+    if (inv?.name) return String(inv.name);
+    return String(part?.freeText ?? '').trim() || '(sin nombre)';
+  }
+
+  private serviceOrderPartRelationLabel(part: any) {
+    const labels: string[] = [];
+    if (part?.sourceServiceOrderId) labels.push(`Origen OS ${String(part.sourceServiceOrderId).slice(-8)}`);
+    if (part?.replacementServiceOrderId) labels.push(`Cambiado en OS ${String(part.replacementServiceOrderId).slice(-8)}`);
+    return labels.join(' | ');
+  }
+
+  private async collectPartsSummary(q: ListServiceOrdersQuery) {
+    const pageSize = 100;
+    let page = 1;
+    const allItems: any[] = [];
+    let total = 0;
+
+    while (true) {
+      const result = await this.listPartsSummary({ ...q, page, size: pageSize });
+      if (page === 1) total = result.total ?? 0;
+      allItems.push(...(result.items ?? []));
+      if (!result.items?.length || allItems.length >= total) break;
+      page += 1;
+    }
+
+    return { items: allItems, total };
+  }
+
+  async exportPartsSummary(q: ListServiceOrdersQuery) {
+    const { items } = await this.collectPartsSummary(q);
+
+    const rows = items.map((part: any) => {
+      const wo = part?.workOrder ?? null;
+      const asset = wo?.asset ?? null;
+      const isReplaced = String(part?.stage || 'REQUIRED') === 'REPLACED';
+      const refDate = isReplaced
+        ? part?.replacedAt || wo?.deliveredAt || wo?.completedAt || wo?.dueDate || part?.createdAt
+        : wo?.dueDate || part?.createdAt;
+
+      return {
+        'Estado': isReplaced ? 'Cambiado' : 'Por cambiar',
+        'Repuesto': this.serviceOrderPartLabel(part),
+        'Cantidad': part?.qty ?? 1,
+        'OS': wo?.assetCode ?? wo?.id ?? '',
+        'Título OS': wo?.title ?? '',
+        'Status OS': wo?.status ?? '',
+        'Tipo OS': wo?.serviceOrderType ?? '',
+        'Cliente': asset?.customer ?? '',
+        'Serie': asset?.serialNumber ?? '',
+        'Fecha': refDate ? new Date(refDate).toISOString() : '',
+        'Cambiado por': isReplaced ? (part?.replacedByUser?.name || part?.replacedByUser?.email || '') : '',
+        'Relación': this.serviceOrderPartRelationLabel(part),
+        'Notas': part?.notes ?? '',
+      };
+    });
+
+    const worksheet = XLSX.utils.json_to_sheet(rows);
+    worksheet['!cols'] = [
+      { wch: 14 },
+      { wch: 36 },
+      { wch: 10 },
+      { wch: 18 },
+      { wch: 34 },
+      { wch: 16 },
+      { wch: 16 },
+      { wch: 26 },
+      { wch: 22 },
+      { wch: 24 },
+      { wch: 24 },
+      { wch: 34 },
+      { wch: 40 },
+    ];
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Repuestos OS');
+
+    return {
+      filename: `repuestos-os-${new Date().toISOString().slice(0, 10)}.xlsx`,
+      buffer: XLSX.write(workbook, { bookType: 'xlsx', type: 'buffer' }),
+    };
+  }
+
+  private buildServiceOrderPartsReportHtml(args: {
+    tenant: any;
+    filters: Array<{ label: string; value: string }>;
+    items: any[];
+    total: number;
+  }) {
+    const { tenant, filters, items, total } = args;
+    const changedCount = items.filter((part) => String(part?.stage || 'REQUIRED') === 'REPLACED').length;
+    const pendingCount = items.filter((part) => String(part?.stage || 'REQUIRED') !== 'REPLACED').length;
+
+    const filterRows = filters.length
+      ? filters
+          .map(
+            (entry) => `
+              <tr>
+                <td class="label">${this.reportEscapeHtml(entry.label)}</td>
+                <td>${this.reportEscapeHtml(entry.value)}</td>
+              </tr>`,
+          )
+          .join('')
+      : `<tr><td class="muted" colspan="2">Sin filtros adicionales.</td></tr>`;
+
+    const tableRows = items.length
+      ? items
+          .map((part: any) => {
+            const wo = part?.workOrder ?? null;
+            const asset = wo?.asset ?? null;
+            const isReplaced = String(part?.stage || 'REQUIRED') === 'REPLACED';
+            const refDate = isReplaced
+              ? part?.replacedAt || wo?.deliveredAt || wo?.completedAt || wo?.dueDate || part?.createdAt
+              : wo?.dueDate || part?.createdAt;
+            const changedBy = isReplaced ? (part?.replacedByUser?.name || part?.replacedByUser?.email || '-') : '-';
+
+            return `
+              <tr>
+                <td>${isReplaced ? 'Cambiado' : 'Por cambiar'}</td>
+                <td>${this.reportEscapeHtml(this.serviceOrderPartLabel(part))}</td>
+                <td class="right">${this.reportEscapeHtml(part?.qty ?? 1)}</td>
+                <td>${this.reportEscapeHtml(wo?.assetCode ?? wo?.id ?? '-')}</td>
+                <td>${this.reportEscapeHtml(asset?.customer ?? '-')}</td>
+                <td>${this.reportEscapeHtml(wo?.serviceOrderType ?? '-')}</td>
+                <td>${this.reportEscapeHtml(refDate ? this.reportFmtDateTime(refDate) : '—')}</td>
+                <td>${this.reportEscapeHtml(changedBy)}</td>
+                <td>${this.reportEscapeHtml(this.serviceOrderPartRelationLabel(part) || '-')}</td>
+              </tr>`;
+          })
+          .join('')
+      : `<tr><td colspan="9" class="muted">Sin repuestos para exportar.</td></tr>`;
+
+    return `<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <title>Reporte Repuestos OS</title>
+  <style>
+    :root { --text: #111827; --muted: #6b7280; --line: #d1d5db; --bg: #f3f4f6; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: Arial, Helvetica, sans-serif; color: var(--text); font-size: 11px; line-height: 1.35; }
+    .page { padding: 20px; }
+    .header { display: flex; justify-content: space-between; gap: 16px; margin-bottom: 12px; }
+    .title { font-size: 22px; font-weight: 700; margin: 0 0 4px; }
+    .subtitle { font-size: 14px; font-weight: 700; margin: 0 0 8px; }
+    .muted { color: var(--muted); }
+    .card { border: 1px solid var(--line); border-radius: 6px; padding: 12px; margin: 10px 0; }
+    .summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+    .summary-box { border: 1px solid var(--line); border-radius: 6px; padding: 8px; }
+    .summary-box .k { font-size: 11px; color: var(--muted); }
+    .summary-box .v { font-size: 18px; font-weight: 700; margin-top: 4px; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { border: 1px solid var(--line); padding: 6px; vertical-align: top; }
+    th { background: var(--bg); text-align: left; }
+    .right { text-align: right; }
+    .label { width: 180px; background: #fafafa; font-weight: 700; }
+    .brand { display: flex; gap: 12px; align-items: center; }
+    .brand img { max-height: 48px; max-width: 220px; object-fit: contain; }
+    @media print { .page { padding: 0; } .card { break-inside: avoid; } tr { break-inside: avoid; } }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div class="header">
+      <div>
+        <div class="title">Reporte de Repuestos OS</div>
+        <div class="muted">Generado: ${this.reportEscapeHtml(this.reportFmtDateTime(new Date().toISOString()))}</div>
+      </div>
+    </div>
+
+    <section class="card">
+      <div class="brand">
+        ${tenant?.logoUrl ? `<img src="${this.reportEscapeHtml(tenant.logoUrl)}" alt="Logo" />` : ''}
+        <div>
+          <div class="subtitle">${this.reportEscapeHtml(tenant?.legalName ?? tenant?.name ?? 'Tenant')}</div>
+          <div class="muted">
+            ${tenant?.taxId ? `NIT: ${this.reportEscapeHtml(tenant.taxId)}` : ''}
+            ${tenant?.taxId && tenant?.phone ? ' · ' : ''}
+            ${tenant?.phone ? `Tel: ${this.reportEscapeHtml(tenant.phone)}` : ''}
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="summary">
+        <div class="summary-box"><div class="k">Total repuestos</div><div class="v">${this.reportEscapeHtml(total)}</div></div>
+        <div class="summary-box"><div class="k">Por cambiar</div><div class="v">${this.reportEscapeHtml(pendingCount)}</div></div>
+        <div class="summary-box"><div class="k">Cambiados</div><div class="v">${this.reportEscapeHtml(changedCount)}</div></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="subtitle">Filtros aplicados</div>
+      <table><tbody>${filterRows}</tbody></table>
+    </section>
+
+    <section class="card">
+      <div class="subtitle">Detalle</div>
+      <table>
+        <thead>
+          <tr>
+            <th>Estado</th>
+            <th>Repuesto</th>
+            <th>Cant.</th>
+            <th>OS</th>
+            <th>Cliente</th>
+            <th>Tipo OS</th>
+            <th>Fecha</th>
+            <th>Cambiado por</th>
+            <th>Relación</th>
+          </tr>
+        </thead>
+        <tbody>${tableRows}</tbody>
+      </table>
+    </section>
+  </div>
+</body>
+</html>`;
+  }
+
+  async exportPartsSummaryReport(q: ListServiceOrdersQuery) {
+    const { items, total } = await this.collectPartsSummary(q);
+    const tenantId = this.getTenantId();
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { name: true, legalName: true, taxId: true, phone: true, logoUrl: true },
+    });
+
+    const html = this.buildServiceOrderPartsReportHtml({
+      tenant,
+      filters: this.describeListFilters(q),
+      items,
+      total,
+    });
+
+    return {
+      filename: `reporte-repuestos-os-${new Date().toISOString().slice(0, 10)}.pdf`,
+      buffer: await this.renderReportPdfWithChromium(html),
+    };
+  }
+
   async exportList(q: ListServiceOrdersQuery) {
     const pageSize = 100;
     let page = 1;

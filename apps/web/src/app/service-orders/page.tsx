@@ -321,6 +321,7 @@ export default function ServiceOrdersPage() {
 
   const exportPath = useMemo(() => {
     if (!auth.token || !auth.tenantSlug || !filtersHydrated) return null;
+    const isPartsTab = listTab === 'PARTS';
 
     const qs = new URLSearchParams();
     for (const f of filters) {
@@ -334,20 +335,23 @@ export default function ServiceOrdersPage() {
         qs.set('end', range.end);
         continue;
       }
+      if (isPartsTab && f.field !== 'q' && f.field !== 'status' && f.field !== 'type') continue;
       qs.append(f.field, v);
     }
     const rangeStart = dateInputToStartIso(dateRange.start);
     const rangeEnd = dateInputToEndIso(dateRange.end);
     if (rangeStart) qs.set('start', rangeStart);
     if (rangeEnd) qs.set('end', rangeEnd);
-    if (listTab === 'ISSUES') qs.set('hasIssue', 'true');
+    if (!isPartsTab && listTab === 'ISSUES') qs.set('hasIssue', 'true');
     if (statusTab !== 'ALL') qs.append('status', statusTab);
 
+    if (isPartsTab) return `/service-orders/parts-summary/export?${qs.toString()}`;
     return `/service-orders/export?${qs.toString()}`;
   }, [auth.token, auth.tenantSlug, filtersHydrated, filters, dateRange.end, dateRange.start, listTab, statusTab]);
 
   const exportReportPath = useMemo(() => {
     if (!auth.token || !auth.tenantSlug || !filtersHydrated) return null;
+    const isPartsTab = listTab === 'PARTS';
 
     const qs = new URLSearchParams();
     for (const f of filters) {
@@ -361,15 +365,17 @@ export default function ServiceOrdersPage() {
         qs.set('end', range.end);
         continue;
       }
+      if (isPartsTab && f.field !== 'q' && f.field !== 'status' && f.field !== 'type') continue;
       qs.append(f.field, v);
     }
     const rangeStart = dateInputToStartIso(dateRange.start);
     const rangeEnd = dateInputToEndIso(dateRange.end);
     if (rangeStart) qs.set('start', rangeStart);
     if (rangeEnd) qs.set('end', rangeEnd);
-    if (listTab === 'ISSUES') qs.set('hasIssue', 'true');
+    if (!isPartsTab && listTab === 'ISSUES') qs.set('hasIssue', 'true');
     if (statusTab !== 'ALL') qs.append('status', statusTab);
 
+    if (isPartsTab) return `/service-orders/parts-summary/export-report?${qs.toString()}`;
     return `/service-orders/export-report?${qs.toString()}`;
   }, [auth.token, auth.tenantSlug, filtersHydrated, filters, dateRange.end, dateRange.start, listTab, statusTab]);
 
@@ -566,7 +572,7 @@ export default function ServiceOrdersPage() {
       const blob = await res.blob();
       const disposition = res.headers.get('content-disposition') || '';
       const match = disposition.match(/filename="?([^"]+)"?/i);
-      const filename = match?.[1] || 'service-orders.xlsx';
+      const filename = match?.[1] || (listTab === 'PARTS' ? 'repuestos-os.xlsx' : 'service-orders.xlsx');
       const url = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
@@ -602,7 +608,7 @@ export default function ServiceOrdersPage() {
       const blob = await res.blob();
       const disposition = res.headers.get('content-disposition') || '';
       const match = disposition.match(/filename="?([^"]+)"?/i);
-      const filename = match?.[1] || 'service-orders-report.pdf';
+      const filename = match?.[1] || (listTab === 'PARTS' ? 'reporte-repuestos-os.pdf' : 'service-orders-report.pdf');
       const url = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
@@ -659,26 +665,22 @@ export default function ServiceOrdersPage() {
           <Link href="/service-orders/new" className="px-3 py-2 border rounded text-sm bg-black text-white">
             Nueva OS
           </Link>
-          {listTab !== 'PARTS' ? (
-            <>
-              <button
-                type="button"
-                className="px-3 py-2 border rounded text-sm"
-                onClick={exportFilteredResults}
-                disabled={exporting}
-              >
-                {exporting ? 'Exportando...' : 'Exportar Excel'}
-              </button>
-              <button
-                type="button"
-                className="px-3 py-2 border rounded text-sm"
-                onClick={exportFilteredReport}
-                disabled={exportingReport}
-              >
-                {exportingReport ? 'Generando...' : 'Exportar reporte'}
-              </button>
-            </>
-          ) : null}
+          <button
+            type="button"
+            className="px-3 py-2 border rounded text-sm"
+            onClick={exportFilteredResults}
+            disabled={exporting}
+          >
+            {exporting ? 'Exportando...' : 'Exportar Excel'}
+          </button>
+          <button
+            type="button"
+            className="px-3 py-2 border rounded text-sm"
+            onClick={exportFilteredReport}
+            disabled={exportingReport}
+          >
+            {exportingReport ? 'Generando...' : 'Exportar reporte'}
+          </button>
           <Link href="/calendar" className="px-3 py-2 border rounded text-sm">
             Calendario
           </Link>
