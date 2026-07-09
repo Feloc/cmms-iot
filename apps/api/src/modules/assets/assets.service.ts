@@ -6,6 +6,7 @@ import { CreateAssetDto } from './dto/create-asset.dto';
 import { UpdateAssetDto } from './dto/update-asset.dto';
 import { GenerateAssetMaintenancePlanDto, MaintenanceFrequencyUnit, UpsertAssetMaintenancePlanDto } from './dto/maintenance-plan.dto';
 import { CreatePreventiveMaintenanceRecordDto } from './dto/create-preventive-maintenance-record.dto';
+import { randomUUID } from 'crypto';
 
 
 type FindAllQuery = {
@@ -28,6 +29,7 @@ type FindAllQuery = {
 
 type Unit = MaintenanceFrequencyUnit;
 type HourmeterBucket = 'day' | 'week' | 'month';
+type ServiceOrderIssueNoteStage = 'PENDING' | 'EXECUTED';
 
 @Injectable()
 export class AssetsService {
@@ -55,6 +57,194 @@ export class AssetsService {
   private getUserId(): string | null {
     const ctx = tenantStorage.getStore();
     return ctx?.userId ? String(ctx.userId) : null;
+  }
+
+  private readonly SERVICE_ORDER_FINAL_STATUSES = ['COMPLETED', 'CLOSED', 'CANCELED'] as const;
+
+  private isFinalServiceOrderStatus(status: any): boolean {
+    return this.SERVICE_ORDER_FINAL_STATUSES.includes(String(status || '').toUpperCase() as any);
+  }
+
+  private normalizeIssueNoteStage(value: any): ServiceOrderIssueNoteStage {
+    return String(value || '').trim().toUpperCase() === 'EXECUTED' ? 'EXECUTED' : 'PENDING';
+  }
+
+  private normalizeIssueNotes(value: any): any[] {
+    const raw = Array.isArray(value) ? value : [];
+    return raw
+      .map((note: any) => ({
+        ...(note && typeof note === 'object' ? note : {}),
+        id: String(note?.id || '').trim(),
+        text: String(note?.text || '').trim(),
+        stage: this.normalizeIssueNoteStage(note?.stage),
+      }))
+      .filter((note: any) => note.id && note.text);
+  }
+
+  private issueNoteKey(serviceOrderId: any, noteId: any) {
+    const soId = String(serviceOrderId || '').trim();
+    const nId = String(noteId || '').trim();
+    return soId && nId ? `${soId}:${nId}` : '';
+  }
+
+  private async attachPendingCarryoversToServiceOrder(
+    tx: any,
+    tenantId: string,
+    destination: { id: string; assetCode: string; formData?: any },
+    reason: string,
+  ): Promise<{ copiedParts: number; copiedIssueNotes: number }> {
+    const assetCode = String(destination?.assetCode || '').trim();
+    if (!assetCode) return { copiedParts: 0, copiedIssueNotes: 0 };
+
+    const destinationPartRows = await tx.serviceOrderPart.findMany({
+      where: { tenantId, workOrderId: destination.id },
+      select: { sourceServiceOrderPartId: true },
+    });
+    const destinationSourcePartIds = new Set(
+      (destinationPartRows ?? [])
+        .map((part: any) => String(part?.sourceServiceOrderPartId || '').trim())
+        .filter(Boolean),
+    );
+
+    const sourcePartRows = await tx.serviceOrderPart.findMany({
+      where: {
+        tenantId,
+        stage: 'REQUIRED' as any,
+        workOrderId: { not: destination.id },
+        workOrder: {
+          tenantId,
+          kind: 'SERVICE_ORDER',
+          assetCode,
+          status: { not: 'CANCELED' as any },
+        },
+      },
+      orderBy: [{ createdAt: 'asc' }],
+      select: {
+        id: true,
+        workOrderId: true,
+        inventoryItemId: true,
+        freeText: true,
+        qty: true,
+        notes: true,
+        sourceServiceOrderPartId: true,
+        workOrder: { select: { id: true, status: true } },
+      },
+    });
+    const delegatedSourcePartIds = new Set<string>();
+    const activeCarrierPartIds = new Set<string>();
+    for (const part of sourcePartRows ?? []) {
+      const sourcePartId = String((part as any).sourceServiceOrderPartId || '').trim();
+      if (sourcePartId) delegatedSourcePartIds.add(sourcePartId);
+      if (!this.isFinalServiceOrderStatus((part as any).workOrder?.status)) {
+        activeCarrierPartIds.add(String((part as any).id || ''));
+        if (sourcePartId) activeCarrierPartIds.add(sourcePartId);
+      }
+    }
+
+    let copiedParts = 0;
+    for (const part of sourcePartRows ?? []) {
+      const partId = String((part as any).id || '').trim();
+      if (!partId) continue;
+      if (!this.isFinalServiceOrderStatus((part as any).workOrder?.status)) continue;
+      if (delegatedSourcePartIds.has(partId)) continue;
+      if (activeCarrierPartIds.has(partId)) continue;
+      if (destinationSourcePartIds.has(partId)) continue;
+
+      await tx.serviceOrderPart.create({
+        data: {
+          tenantId,
+          workOrderId: destination.id,
+          inventoryItemId: (part as any).inventoryItemId ?? undefined,
+          freeText: (part as any).freeText ?? undefined,
+          qty: (part as any).qty ?? 1,
+          notes: (part as any).notes ?? undefined,
+          stage: 'REQUIRED' as any,
+          sourceServiceOrderId: (part as any).workOrderId,
+          sourceServiceOrderPartId: partId,
+        } as any,
+      });
+      copiedParts += 1;
+    }
+
+    const destinationFormData = destination?.formData && typeof destination.formData === 'object' ? destination.formData : {};
+    const destinationNotes = this.normalizeIssueNotes((destinationFormData as any).issueNotes);
+    const destinationSourceNoteKeys = new Set(
+      destinationNotes
+        .map((note: any) => this.issueNoteKey(note?.sourceServiceOrderId, note?.sourceIssueNoteId))
+        .filter(Boolean),
+    );
+
+    const serviceOrders = await tx.workOrder.findMany({
+      where: {
+        tenantId,
+        kind: 'SERVICE_ORDER',
+        assetCode,
+        id: { not: destination.id },
+        status: { not: 'CANCELED' as any },
+      },
+      orderBy: [{ createdAt: 'asc' }],
+      select: { id: true, status: true, formData: true },
+    });
+    const delegatedIssueNoteKeys = new Set<string>();
+    const activeCarrierIssueNoteKeys = new Set<string>();
+    const pendingIssueNoteCandidates: Array<{ serviceOrderId: string; status: string; note: any }> = [];
+    for (const order of serviceOrders ?? []) {
+      const formData = (order as any).formData && typeof (order as any).formData === 'object' ? (order as any).formData : {};
+      const notes = this.normalizeIssueNotes((formData as any).issueNotes);
+      for (const note of notes) {
+        const noteKey = this.issueNoteKey((order as any).id, note.id);
+        const sourceKey = this.issueNoteKey(note?.sourceServiceOrderId, note?.sourceIssueNoteId);
+        if (sourceKey) delegatedIssueNoteKeys.add(sourceKey);
+        if (note.stage === 'PENDING') {
+          pendingIssueNoteCandidates.push({ serviceOrderId: String((order as any).id), status: String((order as any).status || ''), note });
+          if (!this.isFinalServiceOrderStatus((order as any).status)) {
+            activeCarrierIssueNoteKeys.add(noteKey);
+            if (sourceKey) activeCarrierIssueNoteKeys.add(sourceKey);
+          }
+        }
+      }
+    }
+
+    let copiedIssueNotes = 0;
+    const nextDestinationNotes = [...destinationNotes];
+    for (const candidate of pendingIssueNoteCandidates) {
+      const noteKey = this.issueNoteKey(candidate.serviceOrderId, candidate.note.id);
+      if (!noteKey) continue;
+      if (!this.isFinalServiceOrderStatus(candidate.status)) continue;
+      if (delegatedIssueNoteKeys.has(noteKey)) continue;
+      if (activeCarrierIssueNoteKeys.has(noteKey)) continue;
+      if (destinationSourceNoteKeys.has(noteKey)) continue;
+
+      nextDestinationNotes.push({
+        ...candidate.note,
+        id: randomUUID(),
+        stage: 'PENDING',
+        sourceServiceOrderId: candidate.serviceOrderId,
+        sourceIssueNoteId: candidate.note.id,
+        executedAt: null,
+        executedByUserId: null,
+        executedByName: null,
+        executedServiceOrderId: null,
+        executedIssueNoteId: null,
+        copiedAt: new Date().toISOString(),
+        copiedReason: reason,
+      });
+      copiedIssueNotes += 1;
+    }
+
+    if (copiedIssueNotes > 0) {
+      await tx.workOrder.update({
+        where: { id: destination.id },
+        data: {
+          formData: {
+            ...(destinationFormData as any),
+            issueNotes: nextDestinationNotes,
+          },
+        } as any,
+      });
+    }
+
+    return { copiedParts, copiedIssueNotes };
   }
 
   private async withTenantRLS<T>(fn: (tx: Prisma.TransactionClient) => Promise<T>): Promise<T> {
@@ -505,7 +695,7 @@ export class AssetsService {
 
     for (let i = overlap; i < candidates.length; i += 1) {
       const due = candidates[i];
-      await tx.workOrder.create({
+      const created = await tx.workOrder.create({
         data: {
           tenantId,
           kind: 'SERVICE_ORDER',
@@ -527,6 +717,11 @@ export class AssetsService {
           },
         } as any,
       });
+      await this.attachPendingCarryoversToServiceOrder(tx, tenantId, {
+        id: created.id,
+        assetCode: created.assetCode,
+        formData: (created as any).formData,
+      }, 'automatic-preventive-plan-sync');
       createdCount += 1;
     }
 
@@ -1789,6 +1984,13 @@ if (q.customer) where.customer = { contains: q.customer.trim(), mode: 'insensiti
 
       const created: Array<{ id: string; dueDate: string }> = [];
       for (const due of candidates) {
+        const formData = {
+          autoGeneratedPm: true,
+          generatedBy: 'ASSET_MAINTENANCE_PLAN',
+          generatedAt: new Date().toISOString(),
+          generatedFromAssetId: asset.id,
+          generatedFromPlanId: plan.id,
+        };
         const wo = await tx.workOrder.create({
           data: {
             tenantId,
@@ -1801,16 +2003,15 @@ if (q.customer) where.customer = { contains: q.customer.trim(), mode: 'insensiti
             dueDate: due,
             status: 'SCHEDULED' as any,
             durationMin: Number(plan.pmPlan?.defaultDurationMin ?? 60),
-            formData: {
-              autoGeneratedPm: true,
-              generatedBy: 'ASSET_MAINTENANCE_PLAN',
-              generatedAt: new Date().toISOString(),
-              generatedFromAssetId: asset.id,
-              generatedFromPlanId: plan.id,
-            },
+            formData,
           } as any,
-          select: { id: true, dueDate: true },
+          select: { id: true, dueDate: true, assetCode: true, formData: true },
         });
+        await this.attachPendingCarryoversToServiceOrder(tx, tenantId, {
+          id: wo.id,
+          assetCode: wo.assetCode,
+          formData: (wo as any).formData,
+        }, 'automatic-preventive-plan-generate');
         created.push({ id: wo.id, dueDate: wo.dueDate ? new Date(wo.dueDate).toISOString() : due.toISOString() });
       }
 

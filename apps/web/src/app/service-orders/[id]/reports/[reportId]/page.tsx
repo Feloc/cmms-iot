@@ -336,6 +336,10 @@ export default function ServiceOrderReportPage() {
       createdAt: note?.createdAt ?? null,
       createdByName: note?.createdByName ? String(note.createdByName) : null,
       createdByUserId: note?.createdByUserId ? String(note.createdByUserId) : null,
+      stage: String(note?.stage || '').toUpperCase() === 'EXECUTED' ? 'EXECUTED' : 'PENDING',
+      executedAt: note?.executedAt ?? null,
+      executedByName: note?.executedByName ? String(note.executedByName) : null,
+      executedByUserId: note?.executedByUserId ? String(note.executedByUserId) : null,
     }))
     .filter((note: any) => note.id && note.text)
     .sort((a: any, b: any) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')));
@@ -551,7 +555,17 @@ export default function ServiceOrderReportPage() {
           <ul className="list-disc pl-5 text-sm space-y-2">
             {issueNotes.map((note: any) => (
               <li key={note.id}>
-                <div className="whitespace-pre-wrap">{note.text}</div>
+                <div className="whitespace-pre-wrap">
+                  <span className={note.stage === 'EXECUTED' ? 'font-medium text-emerald-700' : 'font-medium text-amber-700'}>
+                    {note.stage === 'EXECUTED' ? 'Ejecutada' : 'Pendiente'}:
+                  </span>{' '}
+                  {note.text}
+                </div>
+                {note.stage === 'EXECUTED' ? (
+                  <div className="text-xs text-gray-500">
+                    {note.executedByName || note.executedByUserId || 'Usuario'} · {fmtDateTime(note.executedAt)}
+                  </div>
+                ) : null}
               </li>
             ))}
           </ul>

@@ -45,6 +45,7 @@ type SourcePartReplacementSyncResult = {
   reflectedPartId?: string;
   parentSync?: SourcePartReplacementSyncResult | null;
 } | null;
+type ServiceOrderIssueNoteStage = 'PENDING' | 'EXECUTED';
 
 @Injectable()
 export class ServiceOrdersService {
@@ -293,7 +294,7 @@ export class ServiceOrdersService {
 
     for (let i = overlap; i < candidates.length; i += 1) {
       const due = candidates[i];
-      await tx.workOrder.create({
+      const created = await tx.workOrder.create({
         data: {
           tenantId,
           kind: 'SERVICE_ORDER',
@@ -313,6 +314,11 @@ export class ServiceOrdersService {
           },
         } as any,
       });
+      await this.attachPendingCarryoversToServiceOrder(tx, tenantId, {
+        id: created.id,
+        assetCode: created.assetCode,
+        formData: (created as any).formData,
+      }, 'automatic-preventive-reschedule');
     }
 
     for (let i = overlap; i < autoRows.length; i += 1) {
@@ -337,6 +343,21 @@ export class ServiceOrdersService {
 
   private readonly ISSUE_OPEN_STATUSES = ['OPEN', 'IN_PROGRESS', 'WAITING_PARTS'] as const;
   private readonly ISSUE_CLOSED_STATUSES = ['RESOLVED', 'VERIFIED', 'CANCELED'] as const;
+  private readonly SERVICE_ORDER_FINAL_STATUSES = ['COMPLETED', 'CLOSED', 'CANCELED'] as const;
+
+  private isFinalServiceOrderStatus(status: any): boolean {
+    return this.SERVICE_ORDER_FINAL_STATUSES.includes(String(status || '').toUpperCase() as any);
+  }
+
+  private isCanceledServiceOrderStatus(status: any): boolean {
+    return String(status || '').toUpperCase() === 'CANCELED';
+  }
+
+  private issueNoteKey(serviceOrderId: any, noteId: any) {
+    const soId = String(serviceOrderId || '').trim();
+    const nId = String(noteId || '').trim();
+    return soId && nId ? `${soId}:${nId}` : '';
+  }
 
   private truthy(v: any): boolean {
     const s = String(v ?? '').trim().toLowerCase();
@@ -450,6 +471,286 @@ export class ServiceOrdersService {
       isUnresolved: this.ISSUE_OPEN_STATUSES.includes(String(row?.status || '').toUpperCase() as any),
       isClosed: this.ISSUE_CLOSED_STATUSES.includes(String(row?.status || '').toUpperCase() as any),
     };
+  }
+
+  private normalizeIssueNoteStage(value: any): ServiceOrderIssueNoteStage {
+    return String(value || '').trim().toUpperCase() === 'EXECUTED' ? 'EXECUTED' : 'PENDING';
+  }
+
+  private normalizeIssueNotes(value: any): any[] {
+    const raw = Array.isArray(value) ? value : [];
+    return raw
+      .map((note: any) => ({
+        ...(note && typeof note === 'object' ? note : {}),
+        id: String(note?.id || '').trim(),
+        text: String(note?.text || '').trim(),
+        stage: this.normalizeIssueNoteStage(note?.stage),
+      }))
+      .filter((note: any) => note.id && note.text);
+  }
+
+  private async syncSourceIssueNoteExecution(
+    tx: any,
+    tenantId: string,
+    currentServiceOrderId: string,
+    note: any,
+    finalServiceOrderId = currentServiceOrderId,
+    finalIssueNoteId = String(note?.id || '').trim() || null,
+  ): Promise<void> {
+    const sourceServiceOrderId = String(note?.sourceServiceOrderId || '').trim();
+    const sourceIssueNoteId = String(note?.sourceIssueNoteId || '').trim();
+    if (!sourceServiceOrderId || !sourceIssueNoteId) return;
+
+    const source = await tx.workOrder.findFirst({
+      where: { id: sourceServiceOrderId, tenantId, kind: 'SERVICE_ORDER' },
+      select: { id: true, formData: true },
+    });
+    if (!source) return;
+
+    const sourceFormData = source.formData && typeof source.formData === 'object' ? source.formData : {};
+    const sourceNotes = this.normalizeIssueNotes((sourceFormData as any).issueNotes);
+    const sourceNote = sourceNotes.find((item: any) => String(item?.id || '') === sourceIssueNoteId);
+    if (!sourceNote) return;
+
+    const updatedSourceNote = {
+      ...sourceNote,
+      stage: 'EXECUTED',
+      executedAt: note?.executedAt ?? new Date().toISOString(),
+      executedByUserId: note?.executedByUserId ?? null,
+      executedByName: note?.executedByName ?? null,
+      executedServiceOrderId: finalServiceOrderId,
+      executedIssueNoteId: finalIssueNoteId,
+    };
+
+    await tx.workOrder.update({
+      where: { id: source.id },
+      data: {
+        formData: {
+          ...(sourceFormData as any),
+          issueNotes: sourceNotes.map((item: any) => (item.id === sourceIssueNoteId ? updatedSourceNote : item)),
+        },
+      } as any,
+    });
+
+    await this.syncSourceIssueNoteExecution(tx, tenantId, source.id, updatedSourceNote, finalServiceOrderId, finalIssueNoteId);
+  }
+
+  private async revertSourceIssueNoteExecution(
+    tx: any,
+    tenantId: string,
+    currentServiceOrderId: string,
+    note: any,
+    finalServiceOrderId = currentServiceOrderId,
+    finalIssueNoteId = String(note?.id || '').trim() || null,
+  ): Promise<void> {
+    const sourceServiceOrderId = String(note?.sourceServiceOrderId || '').trim();
+    const sourceIssueNoteId = String(note?.sourceIssueNoteId || '').trim();
+    if (!sourceServiceOrderId || !sourceIssueNoteId) return;
+
+    const source = await tx.workOrder.findFirst({
+      where: { id: sourceServiceOrderId, tenantId, kind: 'SERVICE_ORDER' },
+      select: { id: true, formData: true },
+    });
+    if (!source) return;
+
+    const sourceFormData = source.formData && typeof source.formData === 'object' ? source.formData : {};
+    const sourceNotes = this.normalizeIssueNotes((sourceFormData as any).issueNotes);
+    const sourceNote = sourceNotes.find((item: any) => String(item?.id || '') === sourceIssueNoteId);
+    if (!sourceNote) return;
+
+    const shouldRevert =
+      String(sourceNote?.executedServiceOrderId || '') === finalServiceOrderId ||
+      String(sourceNote?.executedIssueNoteId || '') === String(finalIssueNoteId || '');
+    if (!shouldRevert) return;
+
+    const updatedSourceNote = {
+      ...sourceNote,
+      stage: 'PENDING',
+      executedAt: null,
+      executedByUserId: null,
+      executedByName: null,
+      executedServiceOrderId: null,
+      executedIssueNoteId: null,
+    };
+
+    await tx.workOrder.update({
+      where: { id: source.id },
+      data: {
+        formData: {
+          ...(sourceFormData as any),
+          issueNotes: sourceNotes.map((item: any) => (item.id === sourceIssueNoteId ? updatedSourceNote : item)),
+        },
+      } as any,
+    });
+
+    await this.revertSourceIssueNoteExecution(tx, tenantId, source.id, updatedSourceNote, finalServiceOrderId, finalIssueNoteId);
+  }
+
+  private async attachPendingCarryoversToServiceOrder(
+    tx: any,
+    tenantId: string,
+    destination: { id: string; assetCode: string; formData?: any },
+    reason: string,
+  ): Promise<{ copiedParts: number; copiedIssueNotes: number }> {
+    const assetCode = String(destination?.assetCode || '').trim();
+    if (!assetCode) return { copiedParts: 0, copiedIssueNotes: 0 };
+
+    const destinationPartRows = await tx.serviceOrderPart.findMany({
+      where: { tenantId, workOrderId: destination.id },
+      select: { sourceServiceOrderPartId: true },
+    });
+    const destinationSourcePartIds = new Set(
+      (destinationPartRows ?? [])
+        .map((part: any) => String(part?.sourceServiceOrderPartId || '').trim())
+        .filter(Boolean),
+    );
+
+    const sourcePartRows = await tx.serviceOrderPart.findMany({
+      where: {
+        tenantId,
+        stage: 'REQUIRED' as any,
+        workOrderId: { not: destination.id },
+        workOrder: {
+          tenantId,
+          kind: 'SERVICE_ORDER',
+          assetCode,
+          status: { not: 'CANCELED' as any },
+        },
+      },
+      orderBy: [{ createdAt: 'asc' }],
+      select: {
+        id: true,
+        workOrderId: true,
+        inventoryItemId: true,
+        freeText: true,
+        qty: true,
+        notes: true,
+        sourceServiceOrderPartId: true,
+        workOrder: { select: { id: true, status: true } },
+      },
+    });
+    const delegatedSourcePartIds = new Set<string>();
+    const activeCarrierPartIds = new Set<string>();
+    for (const part of sourcePartRows ?? []) {
+      const sourcePartId = String((part as any).sourceServiceOrderPartId || '').trim();
+      if (sourcePartId) delegatedSourcePartIds.add(sourcePartId);
+      if (!this.isFinalServiceOrderStatus((part as any).workOrder?.status)) {
+        activeCarrierPartIds.add(String((part as any).id || ''));
+        if (sourcePartId) activeCarrierPartIds.add(sourcePartId);
+      }
+    }
+
+    let copiedParts = 0;
+    for (const part of sourcePartRows ?? []) {
+      const partId = String((part as any).id || '').trim();
+      if (!partId) continue;
+      if (this.isCanceledServiceOrderStatus((part as any).workOrder?.status)) continue;
+      if (!this.isFinalServiceOrderStatus((part as any).workOrder?.status)) continue;
+      if (delegatedSourcePartIds.has(partId)) continue;
+      if (activeCarrierPartIds.has(partId)) continue;
+      if (destinationSourcePartIds.has(partId)) continue;
+
+      await tx.serviceOrderPart.create({
+        data: {
+          tenantId,
+          workOrderId: destination.id,
+          inventoryItemId: (part as any).inventoryItemId ?? undefined,
+          freeText: (part as any).freeText ?? undefined,
+          qty: (part as any).qty ?? 1,
+          notes: (part as any).notes ?? undefined,
+          stage: 'REQUIRED' as any,
+          sourceServiceOrderId: (part as any).workOrderId,
+          sourceServiceOrderPartId: partId,
+        } as any,
+      });
+      copiedParts += 1;
+    }
+
+    const destinationFormData = destination?.formData && typeof destination.formData === 'object' ? destination.formData : {};
+    const destinationNotes = this.normalizeIssueNotes((destinationFormData as any).issueNotes);
+    const destinationSourceNoteKeys = new Set(
+      destinationNotes
+        .map((note: any) => this.issueNoteKey(note?.sourceServiceOrderId, note?.sourceIssueNoteId))
+        .filter(Boolean),
+    );
+
+    const serviceOrders = await tx.workOrder.findMany({
+      where: {
+        tenantId,
+        kind: 'SERVICE_ORDER',
+        assetCode,
+        id: { not: destination.id },
+        status: { not: 'CANCELED' as any },
+      },
+      orderBy: [{ createdAt: 'asc' }],
+      select: { id: true, status: true, formData: true },
+    });
+    const delegatedIssueNoteKeys = new Set<string>();
+    const activeCarrierIssueNoteKeys = new Set<string>();
+    const pendingIssueNoteCandidates: Array<{ serviceOrderId: string; status: string; note: any }> = [];
+    for (const order of serviceOrders ?? []) {
+      const formData = (order as any).formData && typeof (order as any).formData === 'object' ? (order as any).formData : {};
+      const notes = this.normalizeIssueNotes((formData as any).issueNotes);
+      for (const note of notes) {
+        const noteKey = this.issueNoteKey((order as any).id, note.id);
+        const sourceKey = this.issueNoteKey(note?.sourceServiceOrderId, note?.sourceIssueNoteId);
+        if (sourceKey) delegatedIssueNoteKeys.add(sourceKey);
+        if (note.stage === 'PENDING') {
+          pendingIssueNoteCandidates.push({ serviceOrderId: String((order as any).id), status: String((order as any).status || ''), note });
+          if (!this.isFinalServiceOrderStatus((order as any).status)) {
+            activeCarrierIssueNoteKeys.add(noteKey);
+            if (sourceKey) activeCarrierIssueNoteKeys.add(sourceKey);
+          }
+        }
+      }
+    }
+
+    let copiedIssueNotes = 0;
+    const nextDestinationNotes = [...destinationNotes];
+    for (const candidate of pendingIssueNoteCandidates) {
+      const noteKey = this.issueNoteKey(candidate.serviceOrderId, candidate.note.id);
+      if (!noteKey) continue;
+      if (!this.isFinalServiceOrderStatus(candidate.status)) continue;
+      if (delegatedIssueNoteKeys.has(noteKey)) continue;
+      if (activeCarrierIssueNoteKeys.has(noteKey)) continue;
+      if (destinationSourceNoteKeys.has(noteKey)) continue;
+
+      nextDestinationNotes.push({
+        ...candidate.note,
+        id: randomUUID(),
+        stage: 'PENDING',
+        sourceServiceOrderId: candidate.serviceOrderId,
+        sourceIssueNoteId: candidate.note.id,
+        executedAt: null,
+        executedByUserId: null,
+        executedByName: null,
+        executedServiceOrderId: null,
+        executedIssueNoteId: null,
+        copiedAt: new Date().toISOString(),
+        copiedReason: reason,
+      });
+      copiedIssueNotes += 1;
+    }
+
+    if (copiedIssueNotes > 0) {
+      await tx.workOrder.update({
+        where: { id: destination.id },
+        data: {
+          formData: {
+            ...(destinationFormData as any),
+            issueNotes: nextDestinationNotes,
+          },
+        } as any,
+      });
+    }
+
+    if (copiedParts > 0 || copiedIssueNotes > 0) {
+      await this.appendAuditMany(tx, tenantId, destination.id, [
+        this.buildAuditEntry(this.getUserId(), 'pendingCarryovers', reason, null, { copiedParts, copiedIssueNotes }),
+      ]);
+    }
+
+    return { copiedParts, copiedIssueNotes };
   }
 
 
@@ -1339,6 +1640,7 @@ private async assertTechCanMutateServiceOrder(
           title: true,
           description: true,
           status: true,
+          formData: true,
         },
       });
       if (!source) throw new NotFoundException('Service order not found');
@@ -1385,6 +1687,22 @@ private async assertTechCanMutateServiceOrder(
       }
 
       const title = String(dto?.title || '').trim() || `CORRECTIVO por novedad ${source.assetCode} (${source.id})`;
+      const sourceFormData = source.formData && typeof source.formData === 'object' ? (source.formData as any) : {};
+      const sourcePendingIssueNotes = this.normalizeIssueNotes(sourceFormData.issueNotes)
+        .filter((note: any) => this.normalizeIssueNoteStage(note?.stage) !== 'EXECUTED');
+      const copiedIssueNotes = sourcePendingIssueNotes.map((note: any) => ({
+        ...note,
+        id: randomUUID(),
+        stage: 'PENDING',
+        sourceServiceOrderId: source.id,
+        sourceIssueNoteId: note.id,
+        executedAt: null,
+        executedByUserId: null,
+        executedByName: null,
+        executedServiceOrderId: null,
+        executedIssueNoteId: null,
+        copiedAt: new Date().toISOString(),
+      }));
       const description =
         String(dto?.description || '').trim() ||
         issueRow?.followUpNote ||
@@ -1409,6 +1727,7 @@ private async assertTechCanMutateServiceOrder(
             sourceServiceOrderId: source.id,
             sourceIssueId: issue.id,
             generatedAt: new Date().toISOString(),
+            issueNotes: copiedIssueNotes,
           },
         } as any,
         select: { id: true, title: true, status: true, serviceOrderType: true, dueDate: true },
@@ -1451,6 +1770,18 @@ private async assertTechCanMutateServiceOrder(
         copiedParts.push({ sourcePartId: part.id, correctivePartId: createdPart.id });
       }
 
+      const additionalCarryovers = await this.attachPendingCarryoversToServiceOrder(tx, tenantId, {
+        id: corrective.id,
+        assetCode: source.assetCode,
+        formData: {
+          generatedFromIssue: true,
+          sourceServiceOrderId: source.id,
+          sourceIssueId: issue.id,
+          generatedAt: new Date().toISOString(),
+          issueNotes: copiedIssueNotes,
+        },
+      }, 'corrective-service-order-create');
+
       await (tx as any).serviceOrderIssue.update({
         where: { id: issue.id },
         data: {
@@ -1470,6 +1801,8 @@ private async assertTechCanMutateServiceOrder(
         this.buildAuditEntry(actorUserId, 'issue', 'create-corrective', null, {
           correctiveId: corrective.id,
           copiedRequiredParts: copiedParts.length,
+          copiedIssueNotes: copiedIssueNotes.length,
+          additionalCarryovers,
         }),
       ]);
 
@@ -2653,21 +2986,31 @@ return { ...(so as any), workLogs: enrichedLogs, formData, asset: asset ?? null,
 
     const title = dto.title?.trim() || `OS ${dto.serviceOrderType} - ${asset.code}`;
 
-    return this.prisma.workOrder.create({
-      data: {
-        tenantId,
-        kind: 'SERVICE_ORDER',
-        serviceOrderType: dto.serviceOrderType as any,
-        commercialStatus:
-          (dto as any).commercialStatus === undefined || (dto as any).commercialStatus === null || String((dto as any).commercialStatus).trim() === ''
-            ? undefined
-            : this.normalizeCommercialStatus((dto as any).commercialStatus),
-        pmPlanId: dto.pmPlanId ?? undefined,
-        assetCode: asset.code,
-        title,
-        description: dto.description,
-        dueDate: dto.dueDate ? this.coerceDate(dto.dueDate) : undefined,
-      } as any,
+    return this.prisma.$transaction(async (tx) => {
+      const created = await tx.workOrder.create({
+        data: {
+          tenantId,
+          kind: 'SERVICE_ORDER',
+          serviceOrderType: dto.serviceOrderType as any,
+          commercialStatus:
+            (dto as any).commercialStatus === undefined || (dto as any).commercialStatus === null || String((dto as any).commercialStatus).trim() === ''
+              ? undefined
+              : this.normalizeCommercialStatus((dto as any).commercialStatus),
+          pmPlanId: dto.pmPlanId ?? undefined,
+          assetCode: asset.code,
+          title,
+          description: dto.description,
+          dueDate: dto.dueDate ? this.coerceDate(dto.dueDate) : undefined,
+        } as any,
+      });
+
+      await this.attachPendingCarryoversToServiceOrder(tx, tenantId, {
+        id: created.id,
+        assetCode: created.assetCode,
+        formData: (created as any).formData,
+      }, 'manual-service-order-create');
+
+      return tx.workOrder.findFirst({ where: { id: created.id, tenantId, kind: 'SERVICE_ORDER' } });
     });
   }
 
@@ -3450,6 +3793,21 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
         where: { id },
         data: { formData: dto.formData } as any,
       });
+
+      const prevIssueNotes = this.normalizeIssueNotes(prevFormData.issueNotes);
+      const nextIssueNotes = this.normalizeIssueNotes(nextFormData.issueNotes);
+      const prevIssueNoteById = new Map(prevIssueNotes.map((note: any) => [String(note.id), note]));
+      for (const nextNote of nextIssueNotes) {
+        const prevNote = prevIssueNoteById.get(String(nextNote.id));
+        const prevStage = this.normalizeIssueNoteStage(prevNote?.stage);
+        const nextStage = this.normalizeIssueNoteStage(nextNote?.stage);
+        if (prevStage === nextStage) continue;
+        if (nextStage === 'EXECUTED') {
+          await this.syncSourceIssueNoteExecution(tx, tenantId, id, nextNote);
+        } else {
+          await this.revertSourceIssueNoteExecution(tx, tenantId, id, nextNote);
+        }
+      }
 
       const diffs = this.diffFormData(prevFormData, nextFormData);
       const entries = diffs.map((d) => this.buildAuditEntry(actorUserId, d.field, d.part, d.from, d.to));
@@ -5218,6 +5576,10 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
         createdAt: note?.createdAt ?? null,
         createdByName: note?.createdByName ? String(note.createdByName) : null,
         createdByUserId: note?.createdByUserId ? String(note.createdByUserId) : null,
+        stage: this.normalizeIssueNoteStage(note?.stage),
+        executedAt: note?.executedAt ?? null,
+        executedByName: note?.executedByName ? String(note.executedByName) : null,
+        executedByUserId: note?.executedByUserId ? String(note.executedByUserId) : null,
       }))
       .filter((note: any) => note.id && note.text)
       .sort((a: any, b: any) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')));
@@ -5456,7 +5818,10 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
           ${issueNotes
             .map((note: any) => `
               <li>
+                <b>${note.stage === 'EXECUTED' ? 'Ejecutada' : 'Pendiente'}:</b>
                 ${this.reportEscapeHtmlWithBreaks(note.text)}
+                ${note.stage === 'EXECUTED' && note.executedAt ? `<span class="muted"> · ${this.reportEscapeHtml(this.reportFmtDate(note.executedAt))}</span>` : ''}
+                ${note.stage === 'EXECUTED' && (note.executedByName || note.executedByUserId) ? `<span class="muted"> · Por: ${this.reportEscapeHtml(note.executedByName || note.executedByUserId)}</span>` : ''}
               </li>`)
             .join('')}
         </ul>

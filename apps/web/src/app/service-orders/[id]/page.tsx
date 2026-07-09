@@ -81,6 +81,14 @@ type GeneralIssueNote = {
   createdAt: string;
   createdByUserId?: string | null;
   createdByName?: string | null;
+  stage?: 'PENDING' | 'EXECUTED';
+  executedAt?: string | null;
+  executedByUserId?: string | null;
+  executedByName?: string | null;
+  sourceServiceOrderId?: string | null;
+  sourceIssueNoteId?: string | null;
+  executedServiceOrderId?: string | null;
+  executedIssueNoteId?: string | null;
 };
 
 type WorkOrderReportRow = {
@@ -543,6 +551,14 @@ export default function ServiceOrderDetailPage() {
         createdAt: String(note?.createdAt || ''),
         createdByUserId: note?.createdByUserId ? String(note.createdByUserId) : null,
         createdByName: note?.createdByName ? String(note.createdByName) : null,
+        stage: String(note?.stage || '').toUpperCase() === 'EXECUTED' ? 'EXECUTED' : 'PENDING',
+        executedAt: note?.executedAt ? String(note.executedAt) : null,
+        executedByUserId: note?.executedByUserId ? String(note.executedByUserId) : null,
+        executedByName: note?.executedByName ? String(note.executedByName) : null,
+        sourceServiceOrderId: note?.sourceServiceOrderId ? String(note.sourceServiceOrderId) : null,
+        sourceIssueNoteId: note?.sourceIssueNoteId ? String(note.sourceIssueNoteId) : null,
+        executedServiceOrderId: note?.executedServiceOrderId ? String(note.executedServiceOrderId) : null,
+        executedIssueNoteId: note?.executedIssueNoteId ? String(note.executedIssueNoteId) : null,
       }))
       .filter((note: GeneralIssueNote) => note.id && note.text)
       .sort((a: GeneralIssueNote, b: GeneralIssueNote) => String(b.createdAt).localeCompare(String(a.createdAt)));
@@ -1433,6 +1449,7 @@ async function setTimestamp(key: TsKey, localValue: string) {
       const note: GeneralIssueNote = {
         id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         text,
+        stage: 'PENDING',
         createdAt: new Date().toISOString(),
         createdByUserId: currentUserId ?? null,
         createdByName: (session as any)?.user?.name || (session as any)?.user?.email || null,
@@ -1468,6 +1485,52 @@ async function setTimestamp(key: TsKey, localValue: string) {
       if (applyWorkLogBlockIfPresent(parsed)) return;
       if (parsed.status === 403 || parsed.status === 409) setUiInfo(parsed.message);
       else setUiErr(parsed.message || 'Error eliminando novedad');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function setIssueNoteStage(noteId: string, stage: 'PENDING' | 'EXECUTED') {
+    if (techBlocked) {
+      setUiInfo('Tienes un WorkLog abierto en otra OS. Debes cerrarlo antes de modificar esta OS.');
+      return;
+    }
+
+    setBusy(true);
+    setUiErr('');
+    setUiInfo('');
+    try {
+      const currentFd = data?.formData && typeof data.formData === 'object' ? (data.formData as any) : {};
+      const existing = Array.isArray(currentFd.issueNotes) ? currentFd.issueNotes : [];
+      const actorName = (session as any)?.user?.name || (session as any)?.user?.email || null;
+      await saveIssueNotes(
+        existing.map((note: any) => {
+          if (String(note?.id || '') !== noteId) return note;
+          if (stage === 'EXECUTED') {
+            return {
+              ...note,
+              stage,
+              executedAt: new Date().toISOString(),
+              executedByUserId: currentUserId ?? null,
+              executedByName: actorName,
+            };
+          }
+          return {
+            ...note,
+            stage,
+            executedAt: null,
+            executedByUserId: null,
+            executedByName: null,
+            executedServiceOrderId: null,
+            executedIssueNoteId: null,
+          };
+        }),
+      );
+    } catch (e: any) {
+      const parsed = parseApiError(e);
+      if (applyWorkLogBlockIfPresent(parsed)) return;
+      if (parsed.status === 403 || parsed.status === 409) setUiInfo(parsed.message);
+      else setUiErr(parsed.message || 'Error actualizando novedad');
     } finally {
       setBusy(false);
     }
@@ -1639,6 +1702,8 @@ async function setTimestamp(key: TsKey, localValue: string) {
   const hasIssueOpen = !!data.hasIssue || !!issue;
   const linkedCorrectiveId = String(issue?.resolutionWorkOrderId || '');
   const quoteItems = (quotesData?.items ?? []) as QuoteSummary[];
+  const pendingIssueNotes = issueNotes.filter((note) => note.stage !== 'EXECUTED');
+  const executedIssueNotes = issueNotes.filter((note) => note.stage === 'EXECUTED');
 
   return (
     <div className="w-full max-w-none p-4 space-y-6">
@@ -2645,27 +2710,101 @@ async function setTimestamp(key: TsKey, localValue: string) {
               </div>
 
               {issueNotes.length > 0 ? (
-                <div className="space-y-2">
-                  {issueNotes.map((note) => (
-                    <div key={note.id} className="flex items-start justify-between gap-3 rounded border px-3 py-2">
-                      <div className="min-w-0 space-y-1">
-                        <div className="whitespace-pre-wrap text-sm text-gray-800">{note.text}</div>
-                        <div className="text-xs text-gray-500">
-                          {note.createdByName || note.createdByUserId || 'Usuario'} · {fmtDateTime(note.createdAt)}
-                        </div>
-                      </div>
-                      {(isAdmin || isTech) ? (
-                        <button
-                          type="button"
-                          className={actionButtonClass('danger', 'sm')}
-                          disabled={busy || techBlocked}
-                          onClick={() => removeIssueNote(note.id)}
-                        >
-                          Quitar
-                        </button>
-                      ) : null}
+                <div className="grid gap-3 lg:grid-cols-2">
+                  <div className="space-y-2">
+                    <div className="text-sm font-medium">
+                      Novedades pendientes
+                      <span className="ml-2 text-xs text-gray-500">{pendingIssueNotes.length}</span>
                     </div>
-                  ))}
+                    {pendingIssueNotes.length > 0 ? pendingIssueNotes.map((note) => (
+                      <div key={note.id} className="flex items-start justify-between gap-3 rounded border px-3 py-2 bg-amber-50/40">
+                        <div className="min-w-0 space-y-1">
+                          <div className="whitespace-pre-wrap text-sm text-gray-800">{note.text}</div>
+                          <div className="text-xs text-gray-500">
+                            {note.createdByName || note.createdByUserId || 'Usuario'} · {fmtDateTime(note.createdAt)}
+                          </div>
+                          {note.sourceServiceOrderId ? (
+                            <a className="text-xs underline text-sky-700" href={`/service-orders/${note.sourceServiceOrderId}`}>
+                              Origen OS {note.sourceServiceOrderId.slice(-8)}
+                            </a>
+                          ) : null}
+                        </div>
+                        {(isAdmin || isTech) ? (
+                          <div className="flex items-center gap-2 shrink-0">
+                            <button
+                              type="button"
+                              className={actionButtonClass('secondary', 'sm')}
+                              disabled={busy || techBlocked}
+                              onClick={() => setIssueNoteStage(note.id, 'EXECUTED')}
+                            >
+                              Marcar ejecutada
+                            </button>
+                            <button
+                              type="button"
+                              className={actionButtonClass('danger', 'sm')}
+                              disabled={busy || techBlocked}
+                              onClick={() => removeIssueNote(note.id)}
+                            >
+                              Quitar
+                            </button>
+                          </div>
+                        ) : null}
+                      </div>
+                    )) : (
+                      <div className="text-sm text-gray-600">Sin novedades pendientes.</div>
+                    )}
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="text-sm font-medium">
+                      Novedades ejecutadas
+                      <span className="ml-2 text-xs text-gray-500">{executedIssueNotes.length}</span>
+                    </div>
+                    {executedIssueNotes.length > 0 ? executedIssueNotes.map((note) => (
+                      <div key={note.id} className="flex items-start justify-between gap-3 rounded border px-3 py-2 bg-emerald-50/40">
+                        <div className="min-w-0 space-y-1">
+                          <div className="whitespace-pre-wrap text-sm text-gray-800">{note.text}</div>
+                          <div className="text-xs text-gray-500">
+                            {note.executedByName || note.executedByUserId || 'Usuario'} · {fmtDateTime(note.executedAt || note.createdAt)}
+                          </div>
+                          <div className="flex flex-wrap gap-x-3 gap-y-1">
+                            {note.sourceServiceOrderId ? (
+                              <a className="text-xs underline text-sky-700" href={`/service-orders/${note.sourceServiceOrderId}`}>
+                                Origen OS {note.sourceServiceOrderId.slice(-8)}
+                              </a>
+                            ) : null}
+                            {note.executedServiceOrderId ? (
+                              <a className="text-xs underline text-emerald-700" href={`/service-orders/${note.executedServiceOrderId}`}>
+                                Ejecutada en OS {note.executedServiceOrderId.slice(-8)}
+                              </a>
+                            ) : null}
+                          </div>
+                        </div>
+                        {(isAdmin || isTech) ? (
+                          <div className="flex items-center gap-2 shrink-0">
+                            <button
+                              type="button"
+                              className={actionButtonClass('secondary', 'sm')}
+                              disabled={busy || techBlocked}
+                              onClick={() => setIssueNoteStage(note.id, 'PENDING')}
+                            >
+                              Reabrir
+                            </button>
+                            <button
+                              type="button"
+                              className={actionButtonClass('danger', 'sm')}
+                              disabled={busy || techBlocked}
+                              onClick={() => removeIssueNote(note.id)}
+                            >
+                              Quitar
+                            </button>
+                          </div>
+                        ) : null}
+                      </div>
+                    )) : (
+                      <div className="text-sm text-gray-600">Sin novedades ejecutadas.</div>
+                    )}
+                  </div>
                 </div>
               ) : (
                 <div className="text-sm text-gray-600">Sin novedades adicionales.</div>
