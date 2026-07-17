@@ -66,6 +66,29 @@ type ServiceOrderPartSummary = {
   } | null;
 };
 
+type ServiceOrderIssueNoteSummary = {
+  id: string;
+  text: string;
+  stage: 'PENDING' | 'EXECUTED';
+  createdAt?: string | null;
+  createdByUserId?: string | null;
+  createdByName?: string | null;
+  executedAt?: string | null;
+  executedByUserId?: string | null;
+  executedByName?: string | null;
+  sourceServiceOrderId?: string | null;
+  executedServiceOrderId?: string | null;
+  workOrder?: {
+    id: string;
+    title?: string | null;
+    assetCode?: string | null;
+    status?: string | null;
+    serviceOrderType?: string | null;
+    dueDate?: string | null;
+    asset?: { customer?: string | null; serialNumber?: string | null } | null;
+  } | null;
+};
+
 type Paginated<T> = { items: T[]; total: number; page: number; size: number; statusCounts?: Record<string, number> };
 type CommercialStatus =
   | 'NO_MANAGEMENT'
@@ -121,6 +144,7 @@ const LIST_TABS = [
   { id: 'ALL', label: 'Todas las OS' },
   { id: 'ISSUES', label: 'Equipos con novedad' },
   { id: 'PARTS', label: 'Repuestos OS' },
+  { id: 'ISSUE_NOTES', label: 'Novedades OS' },
 ] as const;
 type ListTab = (typeof LIST_TABS)[number]['id'];
 
@@ -247,6 +271,7 @@ export default function ServiceOrdersPage() {
 
   const [data, setData] = useState<Paginated<ServiceOrder> | null>(null);
   const [partsData, setPartsData] = useState<Paginated<ServiceOrderPartSummary> | null>(null);
+  const [issueNotesData, setIssueNotesData] = useState<Paginated<ServiceOrderIssueNoteSummary> | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string>('');
   const [savingCommercialId, setSavingCommercialId] = useState<string>('');
@@ -262,7 +287,7 @@ export default function ServiceOrdersPage() {
 
   const listPath = useMemo(() => {
     if (!auth.token || !auth.tenantSlug || !filtersHydrated) return null;
-    if (listTab === 'PARTS') return null;
+    if (listTab === 'PARTS' || listTab === 'ISSUE_NOTES') return null;
 
     const qs = new URLSearchParams();
     for (const f of filters) {
@@ -319,9 +344,39 @@ export default function ServiceOrdersPage() {
     return `/service-orders/parts-summary?${qs.toString()}`;
   }, [auth.token, auth.tenantSlug, filtersHydrated, filters, dateRange.end, dateRange.start, listTab, statusTab, page]);
 
+  const issueNotesPath = useMemo(() => {
+    if (!auth.token || !auth.tenantSlug || !filtersHydrated || listTab !== 'ISSUE_NOTES') return null;
+    const qs = new URLSearchParams();
+    for (const filter of filters) {
+      const value = (filter.value || '').trim();
+      if (!value) continue;
+      if (statusTab !== 'ALL' && filter.field === 'status') continue;
+      if (filter.field === 'month') {
+        const range = monthToRange(value);
+        if (range) {
+          qs.set('start', range.start);
+          qs.set('end', range.end);
+        }
+        continue;
+      }
+      if (filter.field === 'q' || filter.field === 'status' || filter.field === 'type' || filter.field === 'issueStatus') {
+        qs.append(filter.field, value);
+      }
+    }
+    const rangeStart = dateInputToStartIso(dateRange.start);
+    const rangeEnd = dateInputToEndIso(dateRange.end);
+    if (rangeStart) qs.set('start', rangeStart);
+    if (rangeEnd) qs.set('end', rangeEnd);
+    if (statusTab !== 'ALL') qs.append('status', statusTab);
+    qs.set('page', String(page));
+    qs.set('size', String(PAGE_SIZE));
+    return `/service-orders/issue-notes-summary?${qs.toString()}`;
+  }, [auth.token, auth.tenantSlug, filtersHydrated, filters, dateRange.end, dateRange.start, listTab, statusTab, page]);
+
   const exportPath = useMemo(() => {
     if (!auth.token || !auth.tenantSlug || !filtersHydrated) return null;
     const isPartsTab = listTab === 'PARTS';
+    const isIssueNotesTab = listTab === 'ISSUE_NOTES';
 
     const qs = new URLSearchParams();
     for (const f of filters) {
@@ -336,6 +391,7 @@ export default function ServiceOrdersPage() {
         continue;
       }
       if (isPartsTab && f.field !== 'q' && f.field !== 'status' && f.field !== 'type') continue;
+      if (isIssueNotesTab && !['q', 'status', 'type', 'issueStatus'].includes(f.field)) continue;
       qs.append(f.field, v);
     }
     const rangeStart = dateInputToStartIso(dateRange.start);
@@ -346,12 +402,14 @@ export default function ServiceOrdersPage() {
     if (statusTab !== 'ALL') qs.append('status', statusTab);
 
     if (isPartsTab) return `/service-orders/parts-summary/export?${qs.toString()}`;
+    if (isIssueNotesTab) return `/service-orders/issue-notes-summary/export?${qs.toString()}`;
     return `/service-orders/export?${qs.toString()}`;
   }, [auth.token, auth.tenantSlug, filtersHydrated, filters, dateRange.end, dateRange.start, listTab, statusTab]);
 
   const exportReportPath = useMemo(() => {
     if (!auth.token || !auth.tenantSlug || !filtersHydrated) return null;
     const isPartsTab = listTab === 'PARTS';
+    const isIssueNotesTab = listTab === 'ISSUE_NOTES';
 
     const qs = new URLSearchParams();
     for (const f of filters) {
@@ -366,6 +424,7 @@ export default function ServiceOrdersPage() {
         continue;
       }
       if (isPartsTab && f.field !== 'q' && f.field !== 'status' && f.field !== 'type') continue;
+      if (isIssueNotesTab && !['q', 'status', 'type', 'issueStatus'].includes(f.field)) continue;
       qs.append(f.field, v);
     }
     const rangeStart = dateInputToStartIso(dateRange.start);
@@ -376,23 +435,25 @@ export default function ServiceOrdersPage() {
     if (statusTab !== 'ALL') qs.append('status', statusTab);
 
     if (isPartsTab) return `/service-orders/parts-summary/export-report?${qs.toString()}`;
+    if (isIssueNotesTab) return `/service-orders/issue-notes-summary/export-report?${qs.toString()}`;
     return `/service-orders/export-report?${qs.toString()}`;
   }, [auth.token, auth.tenantSlug, filtersHydrated, filters, dateRange.end, dateRange.start, listTab, statusTab]);
 
   const items = data?.items ?? EMPTY_ITEMS;
   const partItems = partsData?.items ?? [];
+  const issueNoteItems = issueNotesData?.items ?? [];
   const statusCounts = data?.statusCounts ?? {};
   const allStatusCount = useMemo(
     () => Object.values(statusCounts).reduce((acc, count) => acc + Number(count ?? 0), 0),
     [statusCounts]
   );
   const totalPages = useMemo(() => {
-    const source = listTab === 'PARTS' ? partsData : data;
+    const source = listTab === 'PARTS' ? partsData : listTab === 'ISSUE_NOTES' ? issueNotesData : data;
     const total = source?.total ?? 0;
     const size = source?.size ?? PAGE_SIZE;
     return Math.max(1, Math.ceil(total / size));
-  }, [data, listTab, partsData]);
-  const currentPage = (listTab === 'PARTS' ? partsData?.page : data?.page) ?? page;
+  }, [data, issueNotesData, listTab, partsData]);
+  const currentPage = (listTab === 'PARTS' ? partsData?.page : listTab === 'ISSUE_NOTES' ? issueNotesData?.page : data?.page) ?? page;
 
   useEffect(() => {
     if (!filtersStorageKey) return;
@@ -483,12 +544,28 @@ export default function ServiceOrdersPage() {
   }, [auth.token, auth.tenantSlug, partsPath]);
 
   useEffect(() => {
-    const source = listTab === 'PARTS' ? partsData : data;
+    if (!auth.token || !auth.tenantSlug || !issueNotesPath) return;
+    setLoading(true);
+    setErr('');
+    const timeout = setTimeout(() => {
+      apiFetch<Paginated<ServiceOrderIssueNoteSummary>>(issueNotesPath, {
+        token: auth.token!,
+        tenantSlug: auth.tenantSlug!,
+      })
+        .then((response) => setIssueNotesData(response))
+        .catch((error: any) => setErr(error?.message ?? 'Error cargando novedades de OS'))
+        .finally(() => setLoading(false));
+    }, 150);
+    return () => clearTimeout(timeout);
+  }, [auth.token, auth.tenantSlug, issueNotesPath]);
+
+  useEffect(() => {
+    const source = listTab === 'PARTS' ? partsData : listTab === 'ISSUE_NOTES' ? issueNotesData : data;
     if (!source) return;
     if (source.total > 0 && currentPage > totalPages) {
       setPage(totalPages);
     }
-  }, [currentPage, data, listTab, partsData, totalPages]);
+  }, [currentPage, data, issueNotesData, listTab, partsData, totalPages]);
 
   // Inicializa state de edición cuando llegan items nuevos
   useEffect(() => {
@@ -572,7 +649,7 @@ export default function ServiceOrdersPage() {
       const blob = await res.blob();
       const disposition = res.headers.get('content-disposition') || '';
       const match = disposition.match(/filename="?([^"]+)"?/i);
-      const filename = match?.[1] || (listTab === 'PARTS' ? 'repuestos-os.xlsx' : 'service-orders.xlsx');
+      const filename = match?.[1] || (listTab === 'PARTS' ? 'repuestos-os.xlsx' : listTab === 'ISSUE_NOTES' ? 'novedades-os.xlsx' : 'service-orders.xlsx');
       const url = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
@@ -608,7 +685,7 @@ export default function ServiceOrdersPage() {
       const blob = await res.blob();
       const disposition = res.headers.get('content-disposition') || '';
       const match = disposition.match(/filename="?([^"]+)"?/i);
-      const filename = match?.[1] || (listTab === 'PARTS' ? 'reporte-repuestos-os.pdf' : 'service-orders-report.pdf');
+      const filename = match?.[1] || (listTab === 'PARTS' ? 'reporte-repuestos-os.pdf' : listTab === 'ISSUE_NOTES' ? 'reporte-novedades-os.pdf' : 'service-orders-report.pdf');
       const url = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
@@ -654,10 +731,12 @@ export default function ServiceOrdersPage() {
           <div className="text-sm text-gray-600">Filtra y programa rápidamente (asignar técnico + fecha/hora).</div>
           <div className="text-xs text-gray-500 mt-1">
             {loading ? 'Cargando…' : null}
-            {!loading && listTab !== 'PARTS' && data ? `Total: ${data.total} · Página ${currentPage} de ${totalPages}` : null}
+            {!loading && listTab !== 'PARTS' && listTab !== 'ISSUE_NOTES' && data ? `Total: ${data.total} · Página ${currentPage} de ${totalPages}` : null}
             {!loading && listTab === 'PARTS' && partsData ? `Total repuestos: ${partsData.total} · Página ${currentPage} de ${totalPages}` : null}
-            {!loading && listTab !== 'PARTS' && !data ? 'Sin datos aún' : null}
+            {!loading && listTab === 'ISSUE_NOTES' && issueNotesData ? `Total novedades: ${issueNotesData.total} · Página ${currentPage} de ${totalPages}` : null}
+            {!loading && listTab !== 'PARTS' && listTab !== 'ISSUE_NOTES' && !data ? 'Sin datos aún' : null}
             {!loading && listTab === 'PARTS' && !partsData ? 'Sin datos aún' : null}
+            {!loading && listTab === 'ISSUE_NOTES' && !issueNotesData ? 'Sin datos aún' : null}
           </div>
         </div>
 
@@ -713,6 +792,8 @@ export default function ServiceOrdersPage() {
               ? 'Mostrando equipos/OS con novedad.'
               : listTab === 'PARTS'
                 ? 'Mostrando repuestos por cambiar y cambiados registrados en OS.'
+                : listTab === 'ISSUE_NOTES'
+                  ? 'Mostrando novedades pendientes y ejecutadas, sin duplicar su cadena entre OS.'
                 : 'Mostrando todas las órdenes de servicio.'}
           </div>
         </div>
@@ -744,6 +825,11 @@ export default function ServiceOrdersPage() {
             <button className="px-2 py-1 border rounded text-sm" onClick={() => addFilter('technicianId')} type="button">
               + Técnico
             </button>
+            {listTab === 'ISSUE_NOTES' ? (
+              <button className="px-2 py-1 border rounded text-sm" onClick={() => addFilter('issueStatus')} type="button">
+                + Estado novedad
+              </button>
+            ) : null}
           </div>
         </div>
 
@@ -883,7 +969,15 @@ export default function ServiceOrdersPage() {
                 </select>
               ) : null}
 
-              {f.field === 'issueStatus' ? (
+              {f.field === 'issueStatus' && listTab === 'ISSUE_NOTES' ? (
+                <select className="border rounded px-2 py-2 text-sm" value={f.value} onChange={(e) => setFilterValue(f.id, e.target.value)}>
+                  <option value="">(cualquiera)</option>
+                  <option value="PENDING">Pendiente</option>
+                  <option value="EXECUTED">Ejecutada</option>
+                </select>
+              ) : null}
+
+              {f.field === 'issueStatus' && listTab !== 'ISSUE_NOTES' ? (
                 <select className="border rounded px-2 py-2 text-sm" value={f.value} onChange={(e) => setFilterValue(f.id, e.target.value)}>
                   <option value="">(cualquiera)</option>
                   <option value="OPEN">OPEN</option>
@@ -905,7 +999,7 @@ export default function ServiceOrdersPage() {
         </div>
 
         <div className="text-xs text-gray-500">
-          Tip: puedes agregar varios filtros. El filtro "Mes" y el rango de fechas usan la fecha programada. En "Repuestos OS" aplican texto, status, tipo y fechas.
+          Tip: puedes agregar varios filtros. El filtro "Mes" y el rango de fechas usan la fecha programada. En los resúmenes aplican texto, status, tipo y fechas.
         </div>
       </div>
 
@@ -924,7 +1018,7 @@ export default function ServiceOrdersPage() {
                 }`}
               >
                 <span>{t}</span>
-                {listTab !== 'PARTS' && data ? (
+                {listTab !== 'PARTS' && listTab !== 'ISSUE_NOTES' && data ? (
                   <span className={`text-[11px] px-1.5 py-0.5 rounded ${active ? 'bg-white/20' : 'bg-gray-100 text-gray-700'}`}>
                     {count}
                   </span>
@@ -933,7 +1027,7 @@ export default function ServiceOrdersPage() {
             );
           })}
           <div className="text-xs text-gray-500 ml-auto">
-            Mostrando {listTab === 'PARTS' ? partItems.length : items.length} resultados en esta página
+            Mostrando {listTab === 'PARTS' ? partItems.length : listTab === 'ISSUE_NOTES' ? issueNoteItems.length : items.length} resultados en esta página
           </div>
         </div>
       </div>
@@ -1026,6 +1120,73 @@ export default function ServiceOrdersPage() {
                     Sin repuestos registrados.
                   </td>
                 </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+      ) : listTab === 'ISSUE_NOTES' ? (
+        <div className="border rounded overflow-auto">
+          <table className="min-w-[1050px] w-full text-sm">
+            <thead className="bg-gray-50">
+              <tr>
+                <th className="text-left p-2 border-b">Estado</th>
+                <th className="text-left p-2 border-b">Novedad</th>
+                <th className="text-left p-2 border-b">OS</th>
+                <th className="text-left p-2 border-b">Cliente / Serie</th>
+                <th className="text-left p-2 border-b">Tipo OS</th>
+                <th className="text-left p-2 border-b">Fecha</th>
+                <th className="text-left p-2 border-b">Responsable</th>
+                <th className="text-left p-2 border-b">Trazabilidad</th>
+              </tr>
+            </thead>
+            <tbody>
+              {issueNoteItems.map((note) => {
+                const workOrder = note.workOrder;
+                const executed = note.stage === 'EXECUTED';
+                return (
+                  <tr key={`${workOrder?.id || 'os'}:${note.id}`} className="hover:bg-gray-50">
+                    <td className="p-2 border-b whitespace-nowrap">
+                      <span className={`px-2 py-0.5 border rounded text-xs ${executed ? 'bg-emerald-50 text-emerald-800 border-emerald-200' : 'bg-amber-50 text-amber-800 border-amber-200'}`}>
+                        {executed ? 'Ejecutada' : 'Pendiente'}
+                      </span>
+                    </td>
+                    <td className="p-2 border-b max-w-[420px] whitespace-pre-wrap">{note.text}</td>
+                    <td className="p-2 border-b">
+                      {workOrder?.id ? (
+                        <Link className="font-medium underline" href={`/service-orders/${workOrder.id}`}>
+                          {workOrder.assetCode || workOrder.id.slice(-8)}
+                        </Link>
+                      ) : '-'}
+                      <div className="text-xs text-gray-600">{workOrder?.title || ''}</div>
+                      <div className="text-xs text-gray-500">{workOrder?.status || ''}</div>
+                    </td>
+                    <td className="p-2 border-b">
+                      <div>{workOrder?.asset?.customer || '-'}</div>
+                      <div className="text-xs text-gray-600">{workOrder?.asset?.serialNumber || '-'}</div>
+                    </td>
+                    <td className="p-2 border-b whitespace-nowrap">{workOrder?.serviceOrderType || '-'}</td>
+                    <td className="p-2 border-b whitespace-nowrap">{fmt(executed ? note.executedAt : note.createdAt)}</td>
+                    <td className="p-2 border-b">{executed ? note.executedByName || note.executedByUserId || '-' : note.createdByName || note.createdByUserId || '-'}</td>
+                    <td className="p-2 border-b">
+                      <div className="flex flex-col gap-1 text-xs">
+                        {note.sourceServiceOrderId ? (
+                          <Link className="underline text-sky-700" href={`/service-orders/${note.sourceServiceOrderId}`}>
+                            Origen OS {note.sourceServiceOrderId.slice(-8)}
+                          </Link>
+                        ) : null}
+                        {executed && note.executedServiceOrderId && note.executedServiceOrderId !== workOrder?.id ? (
+                          <Link className="underline text-emerald-700" href={`/service-orders/${note.executedServiceOrderId}`}>
+                            Ejecutada en OS {note.executedServiceOrderId.slice(-8)}
+                          </Link>
+                        ) : null}
+                        {!note.sourceServiceOrderId && !note.executedServiceOrderId ? '-' : null}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+              {issueNoteItems.length === 0 ? (
+                <tr><td className="p-4 text-gray-600" colSpan={8}>Sin novedades registradas.</td></tr>
               ) : null}
             </tbody>
           </table>

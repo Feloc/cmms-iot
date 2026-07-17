@@ -6,11 +6,13 @@ import { ServiceOrdersService } from './service-orders.service';
 import { PrismaService } from '../../prisma.service';
 import { InventoryModule } from '../inventory/inventory.module';
 import { TelegramNotifierService } from '../notifications/telegram-notifier.service';
+import { ServiceOrderCarryoverService } from './service-order-carryover.service';
 
 @Module({
   imports: [InventoryModule],
   controllers: [ServiceOrdersController],
-  providers: [ServiceOrdersService, PrismaService, TelegramNotifierService],
+  providers: [ServiceOrdersService, ServiceOrderCarryoverService, PrismaService, TelegramNotifierService],
+  exports: [ServiceOrderCarryoverService],
 })
 export class ServiceOrdersModule implements OnModuleInit {
   async onModuleInit() {

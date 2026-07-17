@@ -8,6 +8,7 @@ import { getAuthFromSession } from '@/lib/auth';
 import { useApiSWR } from '@/lib/swr';
 import { apiBase, apiFetch } from '@/lib/api';
 import { cn } from '@/lib/utils';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { SignatureCanvas } from '@/components/SignatureCanvas';
 import { ServiceOrderImagesGallery } from '@/components/ServiceOrderImagesGallery';
 import { ServiceOrderFilesSection } from '@/components/ServiceOrderFilesSection';
@@ -43,6 +44,9 @@ type Part = {
   sourceServiceOrderPartId?: string | null;
   replacementServiceOrderId?: string | null;
   replacementServiceOrderPartId?: string | null;
+  delegatedServiceOrderId?: string | null;
+  delegatedServiceOrderPartId?: string | null;
+  delegatedServiceOrder?: { id: string; title?: string | null; status?: string | null; dueDate?: string | null } | null;
 };
 
 type WorkLog = {
@@ -89,6 +93,9 @@ type GeneralIssueNote = {
   sourceIssueNoteId?: string | null;
   executedServiceOrderId?: string | null;
   executedIssueNoteId?: string | null;
+  delegatedServiceOrderId?: string | null;
+  delegatedIssueNoteId?: string | null;
+  delegatedServiceOrder?: { id: string; title?: string | null; status?: string | null; dueDate?: string | null } | null;
 };
 
 type WorkOrderReportRow = {
@@ -441,6 +448,8 @@ export default function ServiceOrderDetailPage() {
   const [partPhotoUrls, setPartPhotoUrls] = useState<Record<string, string>>({});
   const [partPhotoBusyById, setPartPhotoBusyById] = useState<Record<string, boolean>>({});
   const [partPhotoPreview, setPartPhotoPreview] = useState<{ url: string; label: string } | null>(null);
+  const [partReplacementTarget, setPartReplacementTarget] = useState<Part | null>(null);
+  const [partReplacementQty, setPartReplacementQty] = useState('1');
   const [issueNoteText, setIssueNoteText] = useState('');
   const [hourmeterReading, setHourmeterReading] = useState<string>('');
   const [hourmeterPhase, setHourmeterPhase] = useState<'BEFORE' | 'AFTER' | 'OTHER'>('OTHER');
@@ -559,6 +568,9 @@ export default function ServiceOrderDetailPage() {
         sourceIssueNoteId: note?.sourceIssueNoteId ? String(note.sourceIssueNoteId) : null,
         executedServiceOrderId: note?.executedServiceOrderId ? String(note.executedServiceOrderId) : null,
         executedIssueNoteId: note?.executedIssueNoteId ? String(note.executedIssueNoteId) : null,
+        delegatedServiceOrderId: note?.delegatedServiceOrderId ? String(note.delegatedServiceOrderId) : null,
+        delegatedIssueNoteId: note?.delegatedIssueNoteId ? String(note.delegatedIssueNoteId) : null,
+        delegatedServiceOrder: note?.delegatedServiceOrder ?? null,
       }))
       .filter((note: GeneralIssueNote) => note.id && note.text)
       .sort((a: GeneralIssueNote, b: GeneralIssueNote) => String(b.createdAt).localeCompare(String(a.createdAt)));
@@ -810,7 +822,9 @@ const invPath = useMemo(() => {
     auth.token,
     auth.tenantSlug,
   );
-  const requiredParts = (data?.serviceOrderParts ?? []).filter((p) => (p as any).stage !== 'REPLACED');
+  const allRequiredParts = (data?.serviceOrderParts ?? []).filter((p) => (p as any).stage !== 'REPLACED');
+  const requiredParts = allRequiredParts.filter((part) => !part.delegatedServiceOrderId);
+  const delegatedRequiredParts = allRequiredParts.filter((part) => !!part.delegatedServiceOrderId);
   const replacedParts = (data?.serviceOrderParts ?? []).filter((p) => (p as any).stage === 'REPLACED');
   const partPhotoKey = useMemo(
     () => (data?.serviceOrderParts ?? []).map((p) => p.id).sort().join('|'),
@@ -1287,7 +1301,7 @@ async function setTimestamp(key: TsKey, localValue: string) {
     }
   }
 
-  async function markPartReplaced(part: Part) {
+  function openPartReplacementDialog(part: Part) {
     if (techBlocked) {
       setUiInfo('Tienes un WorkLog abierto en otra OS. Debes cerrarlo antes de modificar esta OS.');
       return;
@@ -1298,12 +1312,17 @@ async function setTimestamp(key: TsKey, localValue: string) {
     }
     const max = Number(part.qty ?? 0);
     if (!isFinite(max) || max <= 0) return;
+    setPartReplacementTarget(part);
+    setPartReplacementQty(String(max));
+  }
 
-    const raw = window.prompt(`Cantidad a marcar como cambiada (max ${max}):`, String(max));
-    if (raw === null) return;
-    const qtyReplaced = Number(raw);
+  async function confirmPartReplacement() {
+    const part = partReplacementTarget;
+    if (!part) return;
+    const max = Number(part.qty ?? 0);
+    const qtyReplaced = Number(partReplacementQty);
     if (!isFinite(qtyReplaced) || qtyReplaced <= 0 || qtyReplaced > max) {
-      setUiErr('Cantidad inválida');
+      setUiErr(`La cantidad debe estar entre 1 y ${max}.`);
       return;
     }
 
@@ -1316,6 +1335,7 @@ async function setTimestamp(key: TsKey, localValue: string) {
         tenantSlug: auth.tenantSlug!,
         body: { qtyReplaced },
       });
+      setPartReplacementTarget(null);
       await mutate();
     } catch (e: any) {
       const parsed = parseApiError(e);
@@ -1702,7 +1722,8 @@ async function setTimestamp(key: TsKey, localValue: string) {
   const hasIssueOpen = !!data.hasIssue || !!issue;
   const linkedCorrectiveId = String(issue?.resolutionWorkOrderId || '');
   const quoteItems = (quotesData?.items ?? []) as QuoteSummary[];
-  const pendingIssueNotes = issueNotes.filter((note) => note.stage !== 'EXECUTED');
+  const pendingIssueNotes = issueNotes.filter((note) => note.stage !== 'EXECUTED' && !note.delegatedServiceOrderId);
+  const delegatedIssueNotes = issueNotes.filter((note) => note.stage !== 'EXECUTED' && !!note.delegatedServiceOrderId);
   const executedIssueNotes = issueNotes.filter((note) => note.stage === 'EXECUTED');
 
   return (
@@ -2805,6 +2826,28 @@ async function setTimestamp(key: TsKey, localValue: string) {
                       <div className="text-sm text-gray-600">Sin novedades ejecutadas.</div>
                     )}
                   </div>
+
+                  {delegatedIssueNotes.length > 0 ? (
+                    <div className="space-y-2 lg:col-span-2">
+                      <div className="text-sm font-medium">
+                        Novedades delegadas a otra OS
+                        <span className="ml-2 text-xs text-gray-500">{delegatedIssueNotes.length}</span>
+                      </div>
+                      {delegatedIssueNotes.map((note) => (
+                        <div key={note.id} className="flex items-start justify-between gap-3 rounded border px-3 py-2 bg-sky-50/40">
+                          <div className="min-w-0 space-y-1">
+                            <div className="whitespace-pre-wrap text-sm text-gray-800">{note.text}</div>
+                            <div className="text-xs text-gray-500">
+                              Registrada por {note.createdByName || note.createdByUserId || 'Usuario'} · {fmtDateTime(note.createdAt)}
+                            </div>
+                          </div>
+                          <a className="shrink-0 text-xs underline text-sky-700" href={`/service-orders/${note.delegatedServiceOrderId}`}>
+                            Atender en OS {note.delegatedServiceOrderId?.slice(-8)}
+                          </a>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
               ) : (
                 <div className="text-sm text-gray-600">Sin novedades adicionales.</div>
@@ -3038,7 +3081,7 @@ async function setTimestamp(key: TsKey, localValue: string) {
 	                  </div>
 	                  <div className="flex items-center gap-3 md:justify-end">
 	                    {(canChangeStatus) ? (
-	                      <button type="button" className={actionButtonClass('success', 'sm')} onClick={() => markPartReplaced(p)}>Marcar como cambiado</button>
+	                      <button type="button" className={actionButtonClass('success', 'sm')} onClick={() => openPartReplacementDialog(p)}>Marcar como cambiado</button>
 	                    ) : null}
 	                    <button type="button" className={actionButtonClass('danger', 'sm')} onClick={() => removePart(p.id)}>Quitar</button>
 	                  </div>
@@ -3046,6 +3089,29 @@ async function setTimestamp(key: TsKey, localValue: string) {
 	              ))}
 	              {requiredParts.length === 0 && <div className="text-sm text-gray-600">Sin repuestos necesarios.</div>}
 	            </div>
+
+              {delegatedRequiredParts.length > 0 ? (
+                <div className="space-y-2">
+                  <div className="text-sm font-medium">
+                    Repuestos delegados a otra OS
+                    <span className="ml-2 text-xs text-gray-500">{delegatedRequiredParts.length}</span>
+                  </div>
+                  {delegatedRequiredParts.map((part) => (
+                    <div key={part.id} className="flex items-start justify-between gap-3 rounded border bg-sky-50/40 px-3 py-2">
+                      <div className="min-w-0">
+                        <div className="text-sm font-medium">
+                          {part.inventoryItem ? `${part.inventoryItem.sku} — ${part.inventoryItem.name}` : part.freeText ?? ''}
+                          <span className="font-normal text-gray-600"> · Qty: {part.qty}</span>
+                        </div>
+                        {part.notes ? <div className="mt-1 whitespace-pre-wrap text-xs text-gray-600">{part.notes}</div> : null}
+                      </div>
+                      <a className="shrink-0 text-xs underline text-sky-700" href={`/service-orders/${part.delegatedServiceOrderId}`}>
+                        Atender en OS {part.delegatedServiceOrderId?.slice(-8)}
+                      </a>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
 
 	            <div className="space-y-2">
 	              <div className="text-sm font-medium">Repuestos cambiados (historial)</div>
@@ -3201,6 +3267,52 @@ async function setTimestamp(key: TsKey, localValue: string) {
           </ul>
         </section>
       ) : null}
+
+      <Dialog open={!!partReplacementTarget} onOpenChange={(open) => !open && !busy && setPartReplacementTarget(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Registrar cambio de repuesto</DialogTitle>
+            <DialogDescription>
+              {partReplacementTarget?.inventoryItem
+                ? `${partReplacementTarget.inventoryItem.sku} — ${partReplacementTarget.inventoryItem.name}`
+                : partReplacementTarget?.freeText || 'Repuesto'}
+            </DialogDescription>
+          </DialogHeader>
+          <label className="space-y-1">
+            <span className="text-sm font-medium">Cantidad cambiada</span>
+            <input
+              type="number"
+              min="1"
+              max={partReplacementTarget?.qty ?? 1}
+              step="any"
+              className="w-full rounded border px-3 py-2"
+              value={partReplacementQty}
+              onChange={(event) => setPartReplacementQty(event.target.value)}
+              disabled={busy}
+              autoFocus
+            />
+            <div className="text-xs text-gray-500">Pendiente actual: {partReplacementTarget?.qty ?? 0}</div>
+          </label>
+          <DialogFooter>
+            <button
+              type="button"
+              className={actionButtonClass('secondary')}
+              onClick={() => setPartReplacementTarget(null)}
+              disabled={busy}
+            >
+              Cancelar
+            </button>
+            <button
+              type="button"
+              className={actionButtonClass('success')}
+              onClick={confirmPartReplacement}
+              disabled={busy}
+            >
+              Confirmar cambio
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {partPhotoPreview ? (
         <div className="fixed inset-0 z-50">

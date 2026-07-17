@@ -67,6 +67,33 @@ export class ServiceOrdersController {
     return this.svc.listIssues(q);
   }
 
+  @Get('issue-notes-summary/export')
+  async exportIssueNotesSummary(
+    @Query() q: ListServiceOrdersQuery,
+    @Res() res: Response,
+  ) {
+    const file = await this.svc.exportIssueNotesSummary(q);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${file.filename}"`);
+    res.send(file.buffer);
+  }
+
+  @Get('issue-notes-summary/export-report')
+  async exportIssueNotesSummaryReport(
+    @Query() q: ListServiceOrdersQuery,
+    @Res() res: Response,
+  ) {
+    const file = await this.svc.exportIssueNotesSummaryReport(q);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${file.filename}"`);
+    res.send(file.buffer);
+  }
+
+  @Get('issue-notes-summary')
+  listIssueNotesSummary(@Query() q: ListServiceOrdersQuery) {
+    return this.svc.listIssueNotesSummary(q);
+  }
+
   @Get('parts-summary/export')
   async exportPartsSummary(
     @Query() q: ListServiceOrdersQuery,

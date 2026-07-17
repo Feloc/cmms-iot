@@ -67,7 +67,44 @@ SQL
   done
 }
 
+prepare_service_order_part_links() {
+  part_table_exists="$(psql "$PSQL_DATABASE_URL" -v ON_ERROR_STOP=1 -Atqc "SELECT CASE WHEN to_regclass('public.\"ServiceOrderPart\"') IS NULL THEN 0 ELSE 1 END")"
+  if [ "${part_table_exists}" != "1" ]; then
+    return 0
+  fi
+
+  source_column_exists="$(psql "$PSQL_DATABASE_URL" -v ON_ERROR_STOP=1 -Atqc "SELECT CASE WHEN EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'ServiceOrderPart' AND column_name = 'sourceServiceOrderId') THEN 1 ELSE 0 END")"
+  if [ "${source_column_exists}" != "1" ]; then
+    return 0
+  fi
+
+  echo "[api] Cleaning orphaned service-order part links before Prisma schema sync"
+  psql "$PSQL_DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+UPDATE public."ServiceOrderPart" AS part
+SET "sourceServiceOrderId" = NULL
+WHERE part."sourceServiceOrderId" IS NOT NULL
+  AND NOT EXISTS (SELECT 1 FROM public."WorkOrder" AS work_order WHERE work_order."id" = part."sourceServiceOrderId");
+
+UPDATE public."ServiceOrderPart" AS part
+SET "replacementServiceOrderId" = NULL
+WHERE part."replacementServiceOrderId" IS NOT NULL
+  AND NOT EXISTS (SELECT 1 FROM public."WorkOrder" AS work_order WHERE work_order."id" = part."replacementServiceOrderId");
+
+UPDATE public."ServiceOrderPart" AS part
+SET "sourceServiceOrderPartId" = NULL
+WHERE part."sourceServiceOrderPartId" IS NOT NULL
+  AND NOT EXISTS (SELECT 1 FROM public."ServiceOrderPart" AS source_part WHERE source_part."id" = part."sourceServiceOrderPartId");
+
+UPDATE public."ServiceOrderPart" AS part
+SET "replacementServiceOrderPartId" = NULL
+WHERE part."replacementServiceOrderPartId" IS NOT NULL
+  AND NOT EXISTS (SELECT 1 FROM public."ServiceOrderPart" AS replacement_part WHERE replacement_part."id" = part."replacementServiceOrderPartId");
+SQL
+}
+
 cd "$APP_ROOT"
+
+prepare_service_order_part_links
 
 # Ensure Prisma client exists (should be generated during npm ci)
 # Apply schema:

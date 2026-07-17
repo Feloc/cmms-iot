@@ -29,6 +29,7 @@ import { pathToFileURL } from 'url';
 import * as XLSX from 'xlsx';
 import { InventoryLedgerService } from '../inventory/inventory-ledger.service';
 import { TelegramNotifierService } from '../notifications/telegram-notifier.service';
+import { ServiceOrderCarryoverService } from './service-order-carryover.service';
 
 type Unit = 'DAY' | 'MONTH' | 'YEAR';
 type CommercialStatusNotification = {
@@ -49,10 +50,13 @@ type ServiceOrderIssueNoteStage = 'PENDING' | 'EXECUTED';
 
 @Injectable()
 export class ServiceOrdersService {
+  private readonly projectedIssueNoteTenants = new Set<string>();
+
   constructor(
     private prisma: PrismaService,
     private inventoryLedger: InventoryLedgerService,
     private telegramNotifier: TelegramNotifierService,
+    private carryoverService: ServiceOrderCarryoverService,
   ) {}
 
   private getTenantId(): string {
@@ -318,6 +322,8 @@ export class ServiceOrdersService {
         id: created.id,
         assetCode: created.assetCode,
         formData: (created as any).formData,
+        dueDate: (created as any).dueDate,
+        createdAt: (created as any).createdAt,
       }, 'automatic-preventive-reschedule');
     }
 
@@ -343,16 +349,6 @@ export class ServiceOrdersService {
 
   private readonly ISSUE_OPEN_STATUSES = ['OPEN', 'IN_PROGRESS', 'WAITING_PARTS'] as const;
   private readonly ISSUE_CLOSED_STATUSES = ['RESOLVED', 'VERIFIED', 'CANCELED'] as const;
-  private readonly SERVICE_ORDER_FINAL_STATUSES = ['COMPLETED', 'CLOSED', 'CANCELED'] as const;
-
-  private isFinalServiceOrderStatus(status: any): boolean {
-    return this.SERVICE_ORDER_FINAL_STATUSES.includes(String(status || '').toUpperCase() as any);
-  }
-
-  private isCanceledServiceOrderStatus(status: any): boolean {
-    return String(status || '').toUpperCase() === 'CANCELED';
-  }
-
   private issueNoteKey(serviceOrderId: any, noteId: any) {
     const soId = String(serviceOrderId || '').trim();
     const nId = String(noteId || '').trim();
@@ -489,6 +485,21 @@ export class ServiceOrdersService {
       .filter((note: any) => note.id && note.text);
   }
 
+  private async ensureIssueNoteProjectionForTenant(tenantId: string): Promise<void> {
+    if (this.projectedIssueNoteTenants.has(tenantId)) return;
+    await this.prisma.$transaction(
+      async (tx) => {
+        const orders = await tx.workOrder.findMany({
+          where: { tenantId, kind: 'SERVICE_ORDER' },
+          select: { id: true, formData: true },
+        });
+        await this.carryoverService.projectIssueNotesForOrders(tx, tenantId, orders);
+      },
+      { maxWait: 10_000, timeout: 120_000 },
+    );
+    this.projectedIssueNoteTenants.add(tenantId);
+  }
+
   private async syncSourceIssueNoteExecution(
     tx: any,
     tenantId: string,
@@ -496,10 +507,14 @@ export class ServiceOrdersService {
     note: any,
     finalServiceOrderId = currentServiceOrderId,
     finalIssueNoteId = String(note?.id || '').trim() || null,
+    visitedNoteKeys = new Set<string>(),
   ): Promise<void> {
     const sourceServiceOrderId = String(note?.sourceServiceOrderId || '').trim();
     const sourceIssueNoteId = String(note?.sourceIssueNoteId || '').trim();
     if (!sourceServiceOrderId || !sourceIssueNoteId) return;
+    const sourceKey = this.issueNoteKey(sourceServiceOrderId, sourceIssueNoteId);
+    if (visitedNoteKeys.has(sourceKey)) throw new ConflictException('Se detectó una relación circular entre novedades de OS');
+    visitedNoteKeys.add(sourceKey);
 
     const source = await tx.workOrder.findFirst({
       where: { id: sourceServiceOrderId, tenantId, kind: 'SERVICE_ORDER' },
@@ -521,18 +536,30 @@ export class ServiceOrdersService {
       executedServiceOrderId: finalServiceOrderId,
       executedIssueNoteId: finalIssueNoteId,
     };
+    const updatedSourceNotes = sourceNotes.map((item: any) =>
+      item.id === sourceIssueNoteId ? updatedSourceNote : item,
+    );
 
     await tx.workOrder.update({
       where: { id: source.id },
       data: {
         formData: {
           ...(sourceFormData as any),
-          issueNotes: sourceNotes.map((item: any) => (item.id === sourceIssueNoteId ? updatedSourceNote : item)),
+          issueNotes: updatedSourceNotes,
         },
       } as any,
     });
+    await this.carryoverService.syncIssueNotesForWorkOrder(tx, tenantId, source.id, updatedSourceNotes);
 
-    await this.syncSourceIssueNoteExecution(tx, tenantId, source.id, updatedSourceNote, finalServiceOrderId, finalIssueNoteId);
+    await this.syncSourceIssueNoteExecution(
+      tx,
+      tenantId,
+      source.id,
+      updatedSourceNote,
+      finalServiceOrderId,
+      finalIssueNoteId,
+      visitedNoteKeys,
+    );
   }
 
   private async revertSourceIssueNoteExecution(
@@ -542,10 +569,14 @@ export class ServiceOrdersService {
     note: any,
     finalServiceOrderId = currentServiceOrderId,
     finalIssueNoteId = String(note?.id || '').trim() || null,
+    visitedNoteKeys = new Set<string>(),
   ): Promise<void> {
     const sourceServiceOrderId = String(note?.sourceServiceOrderId || '').trim();
     const sourceIssueNoteId = String(note?.sourceIssueNoteId || '').trim();
     if (!sourceServiceOrderId || !sourceIssueNoteId) return;
+    const sourceKey = this.issueNoteKey(sourceServiceOrderId, sourceIssueNoteId);
+    if (visitedNoteKeys.has(sourceKey)) throw new ConflictException('Se detectó una relación circular entre novedades de OS');
+    visitedNoteKeys.add(sourceKey);
 
     const source = await tx.workOrder.findFirst({
       where: { id: sourceServiceOrderId, tenantId, kind: 'SERVICE_ORDER' },
@@ -572,185 +603,94 @@ export class ServiceOrdersService {
       executedServiceOrderId: null,
       executedIssueNoteId: null,
     };
+    const updatedSourceNotes = sourceNotes.map((item: any) =>
+      item.id === sourceIssueNoteId ? updatedSourceNote : item,
+    );
 
     await tx.workOrder.update({
       where: { id: source.id },
       data: {
         formData: {
           ...(sourceFormData as any),
-          issueNotes: sourceNotes.map((item: any) => (item.id === sourceIssueNoteId ? updatedSourceNote : item)),
+          issueNotes: updatedSourceNotes,
         },
       } as any,
     });
+    await this.carryoverService.syncIssueNotesForWorkOrder(tx, tenantId, source.id, updatedSourceNotes);
 
-    await this.revertSourceIssueNoteExecution(tx, tenantId, source.id, updatedSourceNote, finalServiceOrderId, finalIssueNoteId);
+    await this.revertSourceIssueNoteExecution(
+      tx,
+      tenantId,
+      source.id,
+      updatedSourceNote,
+      finalServiceOrderId,
+      finalIssueNoteId,
+      visitedNoteKeys,
+    );
   }
 
   private async attachPendingCarryoversToServiceOrder(
     tx: any,
     tenantId: string,
-    destination: { id: string; assetCode: string; formData?: any },
+    destination: { id: string; assetCode: string; formData?: any; dueDate?: any; createdAt?: any },
     reason: string,
   ): Promise<{ copiedParts: number; copiedIssueNotes: number }> {
-    const assetCode = String(destination?.assetCode || '').trim();
-    if (!assetCode) return { copiedParts: 0, copiedIssueNotes: 0 };
+    const result = await this.carryoverService.attachPending(tx, tenantId, destination, reason);
 
-    const destinationPartRows = await tx.serviceOrderPart.findMany({
-      where: { tenantId, workOrderId: destination.id },
-      select: { sourceServiceOrderPartId: true },
-    });
-    const destinationSourcePartIds = new Set(
-      (destinationPartRows ?? [])
-        .map((part: any) => String(part?.sourceServiceOrderPartId || '').trim())
-        .filter(Boolean),
-    );
-
-    const sourcePartRows = await tx.serviceOrderPart.findMany({
-      where: {
-        tenantId,
-        stage: 'REQUIRED' as any,
-        workOrderId: { not: destination.id },
-        workOrder: {
-          tenantId,
-          kind: 'SERVICE_ORDER',
-          assetCode,
-          status: { not: 'CANCELED' as any },
-        },
-      },
-      orderBy: [{ createdAt: 'asc' }],
-      select: {
-        id: true,
-        workOrderId: true,
-        inventoryItemId: true,
-        freeText: true,
-        qty: true,
-        notes: true,
-        sourceServiceOrderPartId: true,
-        workOrder: { select: { id: true, status: true } },
-      },
-    });
-    const delegatedSourcePartIds = new Set<string>();
-    const activeCarrierPartIds = new Set<string>();
-    for (const part of sourcePartRows ?? []) {
-      const sourcePartId = String((part as any).sourceServiceOrderPartId || '').trim();
-      if (sourcePartId) delegatedSourcePartIds.add(sourcePartId);
-      if (!this.isFinalServiceOrderStatus((part as any).workOrder?.status)) {
-        activeCarrierPartIds.add(String((part as any).id || ''));
-        if (sourcePartId) activeCarrierPartIds.add(sourcePartId);
-      }
-    }
-
-    let copiedParts = 0;
-    for (const part of sourcePartRows ?? []) {
-      const partId = String((part as any).id || '').trim();
-      if (!partId) continue;
-      if (this.isCanceledServiceOrderStatus((part as any).workOrder?.status)) continue;
-      if (!this.isFinalServiceOrderStatus((part as any).workOrder?.status)) continue;
-      if (delegatedSourcePartIds.has(partId)) continue;
-      if (activeCarrierPartIds.has(partId)) continue;
-      if (destinationSourcePartIds.has(partId)) continue;
-
-      await tx.serviceOrderPart.create({
-        data: {
-          tenantId,
-          workOrderId: destination.id,
-          inventoryItemId: (part as any).inventoryItemId ?? undefined,
-          freeText: (part as any).freeText ?? undefined,
-          qty: (part as any).qty ?? 1,
-          notes: (part as any).notes ?? undefined,
-          stage: 'REQUIRED' as any,
-          sourceServiceOrderId: (part as any).workOrderId,
-          sourceServiceOrderPartId: partId,
-        } as any,
-      });
-      copiedParts += 1;
-    }
-
-    const destinationFormData = destination?.formData && typeof destination.formData === 'object' ? destination.formData : {};
-    const destinationNotes = this.normalizeIssueNotes((destinationFormData as any).issueNotes);
-    const destinationSourceNoteKeys = new Set(
-      destinationNotes
-        .map((note: any) => this.issueNoteKey(note?.sourceServiceOrderId, note?.sourceIssueNoteId))
-        .filter(Boolean),
-    );
-
-    const serviceOrders = await tx.workOrder.findMany({
-      where: {
-        tenantId,
-        kind: 'SERVICE_ORDER',
-        assetCode,
-        id: { not: destination.id },
-        status: { not: 'CANCELED' as any },
-      },
-      orderBy: [{ createdAt: 'asc' }],
-      select: { id: true, status: true, formData: true },
-    });
-    const delegatedIssueNoteKeys = new Set<string>();
-    const activeCarrierIssueNoteKeys = new Set<string>();
-    const pendingIssueNoteCandidates: Array<{ serviceOrderId: string; status: string; note: any }> = [];
-    for (const order of serviceOrders ?? []) {
-      const formData = (order as any).formData && typeof (order as any).formData === 'object' ? (order as any).formData : {};
-      const notes = this.normalizeIssueNotes((formData as any).issueNotes);
-      for (const note of notes) {
-        const noteKey = this.issueNoteKey((order as any).id, note.id);
-        const sourceKey = this.issueNoteKey(note?.sourceServiceOrderId, note?.sourceIssueNoteId);
-        if (sourceKey) delegatedIssueNoteKeys.add(sourceKey);
-        if (note.stage === 'PENDING') {
-          pendingIssueNoteCandidates.push({ serviceOrderId: String((order as any).id), status: String((order as any).status || ''), note });
-          if (!this.isFinalServiceOrderStatus((order as any).status)) {
-            activeCarrierIssueNoteKeys.add(noteKey);
-            if (sourceKey) activeCarrierIssueNoteKeys.add(sourceKey);
-          }
-        }
-      }
-    }
-
-    let copiedIssueNotes = 0;
-    const nextDestinationNotes = [...destinationNotes];
-    for (const candidate of pendingIssueNoteCandidates) {
-      const noteKey = this.issueNoteKey(candidate.serviceOrderId, candidate.note.id);
-      if (!noteKey) continue;
-      if (!this.isFinalServiceOrderStatus(candidate.status)) continue;
-      if (delegatedIssueNoteKeys.has(noteKey)) continue;
-      if (activeCarrierIssueNoteKeys.has(noteKey)) continue;
-      if (destinationSourceNoteKeys.has(noteKey)) continue;
-
-      nextDestinationNotes.push({
-        ...candidate.note,
-        id: randomUUID(),
-        stage: 'PENDING',
-        sourceServiceOrderId: candidate.serviceOrderId,
-        sourceIssueNoteId: candidate.note.id,
-        executedAt: null,
-        executedByUserId: null,
-        executedByName: null,
-        executedServiceOrderId: null,
-        executedIssueNoteId: null,
-        copiedAt: new Date().toISOString(),
-        copiedReason: reason,
-      });
-      copiedIssueNotes += 1;
-    }
-
-    if (copiedIssueNotes > 0) {
-      await tx.workOrder.update({
-        where: { id: destination.id },
-        data: {
-          formData: {
-            ...(destinationFormData as any),
-            issueNotes: nextDestinationNotes,
-          },
-        } as any,
-      });
-    }
-
-    if (copiedParts > 0 || copiedIssueNotes > 0) {
+    if (result.copiedParts > 0 || result.copiedIssueNotes > 0) {
       await this.appendAuditMany(tx, tenantId, destination.id, [
-        this.buildAuditEntry(this.getUserId(), 'pendingCarryovers', reason, null, { copiedParts, copiedIssueNotes }),
+        this.buildAuditEntry(this.getUserId(), 'pendingCarryovers', reason, null, result),
       ]);
     }
 
-    return { copiedParts, copiedIssueNotes };
+    return result;
+  }
+
+  private async assertServiceOrderCanBeCanceled(
+    tx: any,
+    tenantId: string,
+    serviceOrderId: string,
+    formData: any,
+  ): Promise<void> {
+    const issueNotes = this.normalizeIssueNotes(formData?.issueNotes);
+    await this.carryoverService.syncIssueNotesForWorkOrder(tx, tenantId, serviceOrderId, issueNotes);
+
+    const [replacedPart, executedIssueNote] = await Promise.all([
+      tx.serviceOrderPart.findFirst({
+        where: {
+          tenantId,
+          workOrderId: serviceOrderId,
+          stage: 'REPLACED',
+          OR: [
+            { replacementServiceOrderId: null },
+            { replacementServiceOrderId: serviceOrderId },
+          ],
+        },
+        select: { id: true },
+      }),
+      tx.serviceOrderIssueNote.findFirst({
+        where: {
+          tenantId,
+          workOrderId: serviceOrderId,
+          stage: 'EXECUTED',
+          OR: [
+            { executedServiceOrderId: null },
+            { executedServiceOrderId: serviceOrderId },
+          ],
+        },
+        select: { id: true },
+      }),
+    ]);
+
+    if (replacedPart || executedIssueNote) {
+      const reasons = [
+        replacedPart ? 'repuestos cambiados' : '',
+        executedIssueNote ? 'novedades ejecutadas' : '',
+      ].filter(Boolean).join(' y ');
+      throw new ConflictException(
+        `La OS tiene ${reasons}. Revierta esas ejecuciones antes de cancelarla para conservar la trazabilidad.`,
+      );
+    }
   }
 
 
@@ -1503,7 +1443,7 @@ private async assertTechCanMutateServiceOrder(
     if (issue?.resolutionWorkOrderId) {
       const corrective = await this.prisma.workOrder.findFirst({
         where: { tenantId, id: issue.resolutionWorkOrderId, kind: 'SERVICE_ORDER' },
-        select: { id: true, title: true, status: true, serviceOrderType: true, dueDate: true },
+        select: { id: true, title: true, status: true, serviceOrderType: true, dueDate: true, createdAt: true },
       });
       if (corrective) correctiveById.set(corrective.id, corrective);
     }
@@ -1630,6 +1570,7 @@ private async assertTechCanMutateServiceOrder(
     await this.assertAdmin();
     const tenantId = this.getTenantId();
     const actorUserId = this.getUserId();
+    await this.ensureIssueNoteProjectionForTenant(tenantId);
 
     const result = await this.prisma.$transaction(async (tx) => {
       const source = await tx.workOrder.findFirst({
@@ -1640,7 +1581,6 @@ private async assertTechCanMutateServiceOrder(
           title: true,
           description: true,
           status: true,
-          formData: true,
         },
       });
       if (!source) throw new NotFoundException('Service order not found');
@@ -1666,6 +1606,11 @@ private async assertTechCanMutateServiceOrder(
           tenantId,
           workOrderId: id,
           stage: 'REQUIRED' as any,
+          delegatedParts: {
+            none: {
+              workOrder: { tenantId, kind: 'SERVICE_ORDER', status: { not: 'CANCELED' } },
+            },
+          },
         },
         orderBy: { createdAt: 'asc' },
         select: {
@@ -1687,15 +1632,25 @@ private async assertTechCanMutateServiceOrder(
       }
 
       const title = String(dto?.title || '').trim() || `CORRECTIVO por novedad ${source.assetCode} (${source.id})`;
-      const sourceFormData = source.formData && typeof source.formData === 'object' ? (source.formData as any) : {};
-      const sourcePendingIssueNotes = this.normalizeIssueNotes(sourceFormData.issueNotes)
-        .filter((note: any) => this.normalizeIssueNoteStage(note?.stage) !== 'EXECUTED');
-      const copiedIssueNotes = sourcePendingIssueNotes.map((note: any) => ({
-        ...note,
+      const sourcePendingIssueNoteRecords = await tx.serviceOrderIssueNote.findMany({
+        where: {
+          tenantId,
+          workOrderId: source.id,
+          stage: 'PENDING',
+          delegatedRecords: {
+            none: {
+              workOrder: { tenantId, kind: 'SERVICE_ORDER', status: { not: 'CANCELED' } },
+            },
+          },
+        },
+        orderBy: [{ createdAt: 'asc' }, { noteId: 'asc' }],
+      });
+      const copiedIssueNotes = sourcePendingIssueNoteRecords.map((record: any) => ({
+        ...this.carryoverService.issueNoteRecordToJson(record),
         id: randomUUID(),
         stage: 'PENDING',
         sourceServiceOrderId: source.id,
-        sourceIssueNoteId: note.id,
+        sourceIssueNoteId: record.noteId,
         executedAt: null,
         executedByUserId: null,
         executedByName: null,
@@ -1730,7 +1685,7 @@ private async assertTechCanMutateServiceOrder(
             issueNotes: copiedIssueNotes,
           },
         } as any,
-        select: { id: true, title: true, status: true, serviceOrderType: true, dueDate: true },
+        select: { id: true, title: true, status: true, serviceOrderType: true, dueDate: true, createdAt: true },
       });
 
       const technicianId = String(dto?.technicianId || '').trim();
@@ -1773,6 +1728,8 @@ private async assertTechCanMutateServiceOrder(
       const additionalCarryovers = await this.attachPendingCarryoversToServiceOrder(tx, tenantId, {
         id: corrective.id,
         assetCode: source.assetCode,
+        dueDate: corrective.dueDate,
+        createdAt: (corrective as any).createdAt,
         formData: {
           generatedFromIssue: true,
           sourceServiceOrderId: source.id,
@@ -2203,7 +2160,14 @@ private async assertTechCanMutateServiceOrder(
           status: { not: 'CANCELED' },
         },
       },
-      select: { sourceServiceOrderPartId: true },
+      select: {
+        id: true,
+        sourceServiceOrderPartId: true,
+        stage: true,
+        replacementServiceOrderPartId: true,
+        createdAt: true,
+        workOrder: { select: { dueDate: true, createdAt: true } },
+      },
     });
     const delegatedSourcePartIds = Array.from(
       new Set<string>(
@@ -2212,6 +2176,27 @@ private async assertTechCanMutateServiceOrder(
           .filter(Boolean),
       ),
     );
+    const delegatedRowsBySourceId = new Map<string, any[]>();
+    for (const row of delegatedSourcePartRows ?? []) {
+      if (row?.replacementServiceOrderPartId) continue;
+      const sourceId = String(row?.sourceServiceOrderPartId || '').trim();
+      if (!sourceId) continue;
+      const siblings = delegatedRowsBySourceId.get(sourceId) ?? [];
+      siblings.push(row);
+      delegatedRowsBySourceId.set(sourceId, siblings);
+    }
+    const duplicateDelegatedPartIds: string[] = [];
+    for (const siblings of delegatedRowsBySourceId.values()) {
+      if (siblings.length < 2) continue;
+      siblings.sort((left, right) => {
+        const stageDelta = (right.stage === 'REPLACED' ? 1 : 0) - (left.stage === 'REPLACED' ? 1 : 0);
+        if (stageDelta) return stageDelta;
+        const leftDate = new Date(left.workOrder?.dueDate ?? left.workOrder?.createdAt ?? left.createdAt ?? 0).getTime();
+        const rightDate = new Date(right.workOrder?.dueDate ?? right.workOrder?.createdAt ?? right.createdAt ?? 0).getTime();
+        return rightDate - leftDate;
+      });
+      duplicateDelegatedPartIds.push(...siblings.slice(1).map((row) => String(row.id)));
+    }
     if (delegatedSourcePartIds.length > 0) {
       (where as any).AND = [
         ...(((where as any).AND as any[]) ?? []),
@@ -2245,6 +2230,12 @@ private async assertTechCanMutateServiceOrder(
             ],
           },
         },
+      ];
+    }
+    if (duplicateDelegatedPartIds.length > 0) {
+      (where as any).AND = [
+        ...(((where as any).AND as any[]) ?? []),
+        { id: { notIn: duplicateDelegatedPartIds } },
       ];
     }
 
@@ -2303,6 +2294,236 @@ private async assertTechCanMutateServiceOrder(
     }));
 
     return { items: enriched, total, page, size };
+  }
+
+  async listIssueNotesSummary(q: ListServiceOrdersQuery) {
+    const tenantId = this.getTenantId();
+    await this.ensureIssueNoteProjectionForTenant(tenantId);
+    const page = Math.max(1, Number(q.page ?? 1) || 1);
+    const size = Math.min(200, Math.max(1, Number(q.size ?? 50) || 50));
+    const workOrderWhere: Prisma.WorkOrderWhereInput = { tenantId, kind: 'SERVICE_ORDER' };
+
+    const statuses = normalizeQueryArray(q.status);
+    if (statuses.length === 1) workOrderWhere.status = statuses[0] as any;
+    else if (statuses.length > 1) workOrderWhere.status = { in: statuses } as any;
+
+    const types = normalizeQueryArray(q.type);
+    if (types.length === 1) workOrderWhere.serviceOrderType = types[0] as any;
+    else if (types.length > 1) workOrderWhere.serviceOrderType = { in: types } as any;
+
+    const start = this.coerceDate(q.start ?? undefined);
+    const end = this.coerceDate(q.end ?? undefined);
+    if (start || end) {
+      workOrderWhere.dueDate = {};
+      if (start) (workOrderWhere.dueDate as any).gte = start;
+      if (end) (workOrderWhere.dueDate as any).lte = end;
+    }
+
+    const workOrderSelect = {
+      id: true,
+      title: true,
+      assetCode: true,
+      status: true,
+      serviceOrderType: true,
+      dueDate: true,
+      createdAt: true,
+    } as const;
+    const [records, allActiveRecords] = await this.prisma.$transaction([
+      this.prisma.serviceOrderIssueNote.findMany({
+        where: { tenantId, workOrder: workOrderWhere },
+        include: { workOrder: { select: workOrderSelect } },
+      }),
+      this.prisma.serviceOrderIssueNote.findMany({
+        where: {
+          tenantId,
+          workOrder: { tenantId, kind: 'SERVICE_ORDER', status: { not: 'CANCELED' } },
+        },
+        select: {
+          id: true,
+          workOrderId: true,
+          noteId: true,
+          sourceRecordId: true,
+          sourceServiceOrderId: true,
+          sourceIssueNoteId: true,
+        },
+      }),
+    ]);
+
+    const activeRecordById = new Map<string, any>();
+    const delegatedSourceRecordIds = new Set<string>();
+    for (const record of allActiveRecords) {
+      activeRecordById.set(String(record.id), record);
+      const sourceRecordId =
+        String(record.sourceRecordId || '').trim() ||
+        this.issueNoteKey(record.sourceServiceOrderId, record.sourceIssueNoteId);
+      if (sourceRecordId) delegatedSourceRecordIds.add(sourceRecordId);
+    }
+
+    const assetCodes: string[] = Array.from(
+      new Set<string>(
+        records
+          .map((record: any) => String(record?.workOrder?.assetCode || '').trim())
+          .filter((value: string): value is string => !!value),
+      ),
+    );
+    const assets = await this.prisma.asset.findMany({
+      where: { tenantId, code: { in: assetCodes } },
+      select: { code: true, customer: true, name: true, brand: true, model: true, serialNumber: true },
+    });
+    const assetByCode = new Map(assets.map((asset) => [String(asset.code || '').trim(), asset]));
+    const stageFilters = new Set(
+      normalizeQueryArray(q.issueStatus)
+        .map((value) => String(value || '').trim().toUpperCase())
+        .filter((value) => value === 'PENDING' || value === 'EXECUTED'),
+    );
+    const search = String(q.q ?? '').trim().toLocaleLowerCase('es');
+    let rows: any[] = [];
+
+    for (const record of records) {
+      const note = this.carryoverService.issueNoteRecordToJson(record);
+      const recordId = String(record.id);
+      if (note.stage === 'PENDING' && delegatedSourceRecordIds.has(recordId)) continue;
+      const executionRecordId =
+        String(record.executedRecordId || '').trim() ||
+        this.issueNoteKey(record.executedServiceOrderId, record.executedIssueNoteId);
+      if (note.stage === 'EXECUTED' && executionRecordId && executionRecordId !== recordId) continue;
+      if (stageFilters.size > 0 && !stageFilters.has(note.stage)) continue;
+
+      const order = record.workOrder;
+      const asset = assetByCode.get(String(order.assetCode || '').trim()) ?? null;
+      const haystack = [
+        note.text,
+        note.createdByName,
+        note.executedByName,
+        order.title,
+        order.assetCode,
+        order.status,
+        order.serviceOrderType,
+        asset?.customer,
+        asset?.serialNumber,
+        asset?.name,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLocaleLowerCase('es');
+      if (search && !haystack.includes(search)) continue;
+
+      rows.push({
+        ...note,
+        _recordId: recordId,
+        _sourceRecordId:
+          String(record.sourceRecordId || '').trim() ||
+          this.issueNoteKey(record.sourceServiceOrderId, record.sourceIssueNoteId),
+        workOrder: { ...order, asset },
+      });
+    }
+
+    const canonicalByRootKey = new Map<string, any>();
+    for (const row of rows) {
+      let rootKey = String(row._recordId);
+      let sourceRecordId = String(row._sourceRecordId || '').trim();
+      const visited = new Set<string>();
+      while (sourceRecordId && !visited.has(sourceRecordId)) {
+        visited.add(sourceRecordId);
+        rootKey = sourceRecordId;
+        const sourceRecord = activeRecordById.get(sourceRecordId);
+        sourceRecordId = sourceRecord
+          ? String(sourceRecord.sourceRecordId || '').trim() ||
+            this.issueNoteKey(sourceRecord.sourceServiceOrderId, sourceRecord.sourceIssueNoteId)
+          : '';
+      }
+      const current = canonicalByRootKey.get(rootKey);
+      if (!current) {
+        canonicalByRootKey.set(rootKey, row);
+        continue;
+      }
+      const rowExecuted = row.stage === 'EXECUTED' ? 1 : 0;
+      const currentExecuted = current.stage === 'EXECUTED' ? 1 : 0;
+      const rowDate = new Date(row.executedAt || row.createdAt || row.workOrder?.dueDate || 0).getTime();
+      const currentDate = new Date(current.executedAt || current.createdAt || current.workOrder?.dueDate || 0).getTime();
+      if (rowExecuted > currentExecuted || (rowExecuted === currentExecuted && rowDate > currentDate)) {
+        canonicalByRootKey.set(rootKey, row);
+      }
+    }
+    rows = Array.from(canonicalByRootKey.values());
+
+    rows.sort((left, right) => {
+      if (left.stage !== right.stage) return left.stage === 'PENDING' ? -1 : 1;
+      const leftDate = String(left.executedAt || left.createdAt || left.workOrder?.dueDate || '');
+      const rightDate = String(right.executedAt || right.createdAt || right.workOrder?.dueDate || '');
+      return rightDate.localeCompare(leftDate);
+    });
+
+    const total = rows.length;
+    const skip = (page - 1) * size;
+    const items = rows.slice(skip, skip + size).map(({ _recordId, _sourceRecordId, ...row }) => row);
+    return { items, total, page, size };
+  }
+
+  private async collectIssueNotesSummary(q: ListServiceOrdersQuery) {
+    const first = await this.listIssueNotesSummary({ ...q, page: 1, size: 200 });
+    const items = [...first.items];
+    let page = 2;
+    while (items.length < first.total) {
+      const next = await this.listIssueNotesSummary({ ...q, page, size: 200 });
+      if (!next.items.length) break;
+      items.push(...next.items);
+      page += 1;
+    }
+    return { items, total: first.total };
+  }
+
+  async exportIssueNotesSummary(q: ListServiceOrdersQuery) {
+    const { items } = await this.collectIssueNotesSummary(q);
+    const rows = items.map((note: any) => ({
+      'Estado': note.stage === 'EXECUTED' ? 'Ejecutada' : 'Pendiente',
+      'Novedad': note.text ?? '',
+      'OS': note.workOrder?.assetCode ?? note.workOrder?.id ?? '',
+      'Título OS': note.workOrder?.title ?? '',
+      'Status OS': note.workOrder?.status ?? '',
+      'Tipo OS': note.workOrder?.serviceOrderType ?? '',
+      'Cliente': note.workOrder?.asset?.customer ?? '',
+      'Serie': note.workOrder?.asset?.serialNumber ?? '',
+      'Creada': note.createdAt ? new Date(note.createdAt).toISOString() : '',
+      'Creada por': note.createdByName ?? note.createdByUserId ?? '',
+      'Ejecutada': note.executedAt ? new Date(note.executedAt).toISOString() : '',
+      'Ejecutada por': note.executedByName ?? note.executedByUserId ?? '',
+      'OS origen': note.sourceServiceOrderId ?? '',
+      'OS ejecución': note.executedServiceOrderId ?? note.workOrder?.id ?? '',
+    }));
+    const worksheet = XLSX.utils.json_to_sheet(rows);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Novedades OS');
+    return {
+      filename: `novedades-os-${new Date().toISOString().slice(0, 10)}.xlsx`,
+      buffer: XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer,
+    };
+  }
+
+  async exportIssueNotesSummaryReport(q: ListServiceOrdersQuery) {
+    const { items, total } = await this.collectIssueNotesSummary(q);
+    const pending = items.filter((note: any) => note.stage !== 'EXECUTED').length;
+    const executed = items.filter((note: any) => note.stage === 'EXECUTED').length;
+    const rows = items.length
+      ? items.map((note: any) => `<tr>
+          <td>${note.stage === 'EXECUTED' ? 'Ejecutada' : 'Pendiente'}</td>
+          <td>${this.reportEscapeHtml(note.text ?? '')}</td>
+          <td>${this.reportEscapeHtml(note.workOrder?.assetCode ?? '-')}</td>
+          <td>${this.reportEscapeHtml(note.workOrder?.asset?.customer ?? '-')}</td>
+          <td>${this.reportEscapeHtml(note.workOrder?.serviceOrderType ?? '-')}</td>
+          <td>${this.reportEscapeHtml(this.reportFmtDateTime(note.executedAt || note.createdAt))}</td>
+        </tr>`).join('')
+      : '<tr><td colspan="6">Sin novedades para exportar.</td></tr>';
+    const html = `<!doctype html><html lang="es"><head><meta charset="utf-8" />
+      <style>body{font-family:Arial,sans-serif;font-size:11px;color:#111827;padding:20px}h1{font-size:22px}table{width:100%;border-collapse:collapse;margin-top:16px}th,td{border:1px solid #d1d5db;padding:6px;text-align:left;vertical-align:top}th{background:#f3f4f6}.summary{display:flex;gap:20px;margin:12px 0}</style>
+      </head><body><h1>Reporte de Novedades OS</h1><div>Generado: ${this.reportEscapeHtml(this.reportFmtDateTime(new Date().toISOString()))}</div>
+      <div class="summary"><b>Total: ${total}</b><b>Pendientes: ${pending}</b><b>Ejecutadas: ${executed}</b></div>
+      <table><thead><tr><th>Estado</th><th>Novedad</th><th>OS</th><th>Cliente</th><th>Tipo OS</th><th>Fecha</th></tr></thead><tbody>${rows}</tbody></table>
+      </body></html>`;
+    return {
+      filename: `reporte-novedades-os-${new Date().toISOString().slice(0, 10)}.pdf`,
+      buffer: await this.renderReportPdfWithChromium(html),
+    };
   }
 
   private serviceOrderPartLabel(part: any) {
@@ -2966,7 +3187,87 @@ private async assertTechCanMutateServiceOrder(
   const enrichedLogs = workLogs.map((w: any) => ({ ...w, user: userById.get(w.userId) ?? null }));
   const enrichedAudit = audit.map((a: any) => ({ ...a, user: userById.get(a?.byUserId) ?? null }));
 
-  const formData = { ...(rawFormData ?? {}), _audit: enrichedAudit };
+  const currentParts = ((so as any).serviceOrderParts ?? []) as any[];
+  const currentPartIds = currentParts.map((part: any) => String(part?.id || '')).filter(Boolean);
+  const delegatedParts = currentPartIds.length
+    ? await (this.prisma as any).serviceOrderPart.findMany({
+        where: {
+          tenantId,
+          sourceServiceOrderPartId: { in: currentPartIds },
+          workOrder: { tenantId, kind: 'SERVICE_ORDER', status: { not: 'CANCELED' } },
+        },
+        orderBy: [{ createdAt: 'desc' }],
+        select: {
+          id: true,
+          sourceServiceOrderPartId: true,
+          workOrderId: true,
+          workOrder: { select: { id: true, title: true, status: true, dueDate: true } },
+        },
+      })
+    : [];
+  const delegatedPartBySourceId = new Map<string, any>();
+  for (const child of delegatedParts ?? []) {
+    const sourceId = String(child?.sourceServiceOrderPartId || '');
+    if (sourceId && !delegatedPartBySourceId.has(sourceId)) delegatedPartBySourceId.set(sourceId, child);
+  }
+  const serviceOrderParts = currentParts.map((part: any) => {
+    const delegated = delegatedPartBySourceId.get(String(part.id));
+    return delegated
+      ? {
+          ...part,
+          delegatedServiceOrderId: delegated.workOrderId,
+          delegatedServiceOrderPartId: delegated.id,
+          delegatedServiceOrder: delegated.workOrder ?? null,
+        }
+      : part;
+  });
+
+  await this.ensureIssueNoteProjectionForTenant(tenantId);
+  const currentIssueNoteRecords = await this.prisma.serviceOrderIssueNote.findMany({
+    where: { tenantId, workOrderId: id },
+    orderBy: [{ createdAt: 'asc' }, { noteId: 'asc' }],
+  });
+  const currentIssueNoteRecordIds = currentIssueNoteRecords.map((record: any) => String(record.id));
+  const delegatedIssueNotes = currentIssueNoteRecordIds.length > 0
+    ? await this.prisma.serviceOrderIssueNote.findMany({
+        where: {
+          tenantId,
+          workOrderId: { not: id },
+          workOrder: { tenantId, kind: 'SERVICE_ORDER', status: { not: 'CANCELED' } },
+          OR: [
+            { sourceRecordId: { in: currentIssueNoteRecordIds } },
+            { sourceServiceOrderId: id },
+          ],
+        },
+        orderBy: [{ createdAt: 'desc' }],
+        select: {
+          id: true,
+          noteId: true,
+          sourceRecordId: true,
+          sourceServiceOrderId: true,
+          sourceIssueNoteId: true,
+          workOrderId: true,
+          workOrder: { select: { id: true, title: true, status: true, dueDate: true } },
+        },
+      })
+    : [];
+  const delegatedIssueNoteBySourceKey = new Map<string, any>();
+  for (const child of delegatedIssueNotes) {
+    const sourceKey =
+      String(child.sourceRecordId || '').trim() ||
+      this.issueNoteKey(child.sourceServiceOrderId, child.sourceIssueNoteId);
+    if (!sourceKey || delegatedIssueNoteBySourceKey.has(sourceKey)) continue;
+    delegatedIssueNoteBySourceKey.set(sourceKey, {
+      delegatedServiceOrderId: child.workOrderId,
+      delegatedIssueNoteId: child.noteId,
+      delegatedServiceOrder: child.workOrder ?? null,
+    });
+  }
+  const issueNotes = currentIssueNoteRecords.map((record: any) => ({
+    ...this.carryoverService.issueNoteRecordToJson(record),
+    ...(delegatedIssueNoteBySourceKey.get(String(record.id)) ?? {}),
+  }));
+  const formData = { ...(rawFormData ?? {}), issueNotes, _audit: enrichedAudit };
 
   const actorUserId = this.getUserId();
 const actor = await this.prisma.user.findFirst({ where: { id: actorUserId, tenantId }, select: { role: true } });
@@ -2975,7 +3276,7 @@ const openWorkLogElsewhere =
 
 const _meta = openWorkLogElsewhere ? { openWorkLogElsewhere } : {};
 
-return { ...(so as any), workLogs: enrichedLogs, formData, asset: asset ?? null, _meta };
+return { ...(so as any), serviceOrderParts, workLogs: enrichedLogs, formData, asset: asset ?? null, _meta };
 }
 
   async create(dto: CreateServiceOrderDto) {
@@ -3008,6 +3309,8 @@ return { ...(so as any), workLogs: enrichedLogs, formData, asset: asset ?? null,
         id: created.id,
         assetCode: created.assetCode,
         formData: (created as any).formData,
+        dueDate: (created as any).dueDate,
+        createdAt: (created as any).createdAt,
       }, 'manual-service-order-create');
 
       return tx.workOrder.findFirst({ where: { id: created.id, tenantId, kind: 'SERVICE_ORDER' } });
@@ -3040,6 +3343,7 @@ return { ...(so as any), workLogs: enrichedLogs, formData, asset: asset ?? null,
         pmPlanId: true,
         hasIssue: true,
         durationMin: true,
+        formData: true,
       },
     } as any);
     if (!current) throw new NotFoundException('Service order not found');
@@ -3112,6 +3416,13 @@ return { ...(so as any), workLogs: enrichedLogs, formData, asset: asset ?? null,
       throw new BadRequestException('Commercial status requires the service order to be scheduled or in execution');
     }
 
+    const previousStatus = String(current.status || 'OPEN').toUpperCase();
+    if (applyStatus && effectiveStatus === 'CANCELED' && previousStatus !== 'CANCELED') {
+      const currentFormData =
+        current.formData && typeof current.formData === 'object' ? current.formData : {};
+      await this.assertServiceOrderCanBeCanceled(tx, tenantId, id, currentFormData);
+    }
+
     const data: any = {
       ...(dto.assetCode !== undefined ? { assetCode: String(dto.assetCode).trim() } : {}),
       ...(dto.title !== undefined ? { title: dto.title } : {}),
@@ -3128,6 +3439,21 @@ return { ...(so as any), workLogs: enrichedLogs, formData, asset: asset ?? null,
     const updated = hasChanges
       ? await tx.workOrder.update({ where: { id }, data } as any)
       : await tx.workOrder.findFirst({ where: { id, tenantId, kind: 'SERVICE_ORDER' } });
+    const nextAssetCode = String((updated as any)?.assetCode || current.assetCode || '').trim();
+    const assetChanged = nextAssetCode !== String(current.assetCode || '').trim();
+    const statusChanged = applyStatus && effectiveStatus !== previousStatus;
+    const carryoverReconcile = assetChanged || statusChanged
+      ? await this.carryoverService.reconcileAssetTimelines(
+          tx,
+          tenantId,
+          [current.assetCode, nextAssetCode],
+          assetChanged && statusChanged
+            ? 'service-order-status-and-asset-change'
+            : assetChanged
+              ? 'service-order-asset-change'
+              : 'service-order-status-change',
+        )
+      : null;
 
     // Sincroniza el registro robusto de novedad con el toggle hasIssue.
     if ((dto as any).hasIssue !== undefined) {
@@ -3230,6 +3556,26 @@ return { ...(so as any), workLogs: enrichedLogs, formData, asset: asset ?? null,
       if (prev !== next) auditEntries.push(this.buildAuditEntry(actorUserId, field, undefined, prev, next));
     }
 
+    if (
+      carryoverReconcile &&
+      (carryoverReconcile.copiedParts ||
+        carryoverReconcile.copiedIssueNotes ||
+        carryoverReconcile.removedParts ||
+        carryoverReconcile.removedIssueNotes)
+    ) {
+      auditEntries.push(this.buildAuditEntry(
+        actorUserId,
+        'pendingCarryovers',
+        assetChanged && statusChanged
+          ? 'status-and-asset-change:reconcile'
+          : assetChanged
+            ? 'asset-change:reconcile'
+            : 'status-change:reconcile',
+        null,
+        carryoverReconcile,
+      ));
+    }
+
     if (auditEntries.length) {
       await this.appendAuditMany(tx, tenantId, id, auditEntries);
     }
@@ -3253,7 +3599,7 @@ return { ...(so as any), workLogs: enrichedLogs, formData, asset: asset ?? null,
 
     if (infoMessage) return { ...(updated as any), _info: infoMessage };
     return updated;
-  });
+  }, { maxWait: 10_000, timeout: 120_000 });
 
   const notification = commercialStatusNotification as CommercialStatusNotification | null;
   if (notification) {
@@ -3365,6 +3711,14 @@ if (dto.dueDate === null) {
     const updated = Object.keys(data).length
       ? await tx.workOrder.update({ where: { id }, data })
       : wo;
+    const carryoverReconcile = dto.dueDate !== undefined
+      ? await this.carryoverService.reconcileAssetTimelines(
+          tx,
+          tenantId,
+          [wo.assetCode],
+          'service-order-schedule-change',
+        )
+      : null;
 
     // ---- Audit trail ----
     const auditEntries: any[] = [];
@@ -3401,12 +3755,22 @@ if (dto.dueDate === null) {
       }
     }
 
+    if (
+      carryoverReconcile &&
+      (carryoverReconcile.copiedParts ||
+        carryoverReconcile.copiedIssueNotes ||
+        carryoverReconcile.removedParts ||
+        carryoverReconcile.removedIssueNotes)
+    ) {
+      auditEntries.push(this.buildAuditEntry(actorUserId, 'pendingCarryovers', 'schedule:reconcile', null, carryoverReconcile));
+    }
+
     if (auditEntries.length) {
       await this.appendAuditMany(tx, tenantId, id, auditEntries);
     }
 
     return updated;
-  });
+  }, { maxWait: 10_000, timeout: 120_000 });
 }
 async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
   const { tenantId } = await this.assertSo(id);
@@ -3416,6 +3780,7 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
     const current = await tx.workOrder.findFirst({
       where: { id, tenantId, kind: 'SERVICE_ORDER' },
       select: {
+        assetCode: true,
         status: true,
         formData: true,
         takenAt: true,
@@ -3501,6 +3866,14 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
     if (['COMPLETED', 'CLOSED'].includes(statusAfter) && !['COMPLETED', 'CLOSED'].includes(prevStatus)) {
       await this.realignPreventivePlanFutureOrders(tx, tenantId, id);
     }
+    const carryoverReconcile = statusAfter !== prevStatus
+      ? await this.carryoverService.reconcileAssetTimelines(
+          tx,
+          tenantId,
+          [current.assetCode],
+          'service-order-timestamp-status-change',
+        )
+      : null;
 
     // ---- Audit trail ----
     const auditEntries: any[] = [];
@@ -3521,6 +3894,21 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
       const nextS = String((data as any).status || '').toUpperCase();
       if (prevS !== nextS) auditEntries.push(this.buildAuditEntry(actorUserId, 'status', 'auto(timestamps)', prevS, nextS));
     }
+    if (
+      carryoverReconcile &&
+      (carryoverReconcile.copiedParts ||
+        carryoverReconcile.copiedIssueNotes ||
+        carryoverReconcile.removedParts ||
+        carryoverReconcile.removedIssueNotes)
+    ) {
+      auditEntries.push(this.buildAuditEntry(
+        actorUserId,
+        'pendingCarryovers',
+        'timestamp-status:reconcile',
+        null,
+        carryoverReconcile,
+      ));
+    }
 
     if ((data as any).commercialStatus !== undefined) {
       const prevCommercial = (current as any).commercialStatus ?? null;
@@ -3535,7 +3923,7 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
     }
 
     return updated;
-  });
+  }, { maxWait: 10_000, timeout: 120_000 });
 }
 
   // ---------------------------
@@ -3777,7 +4165,7 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
     return this.prisma.$transaction(async (tx) => {
       const current = await tx.workOrder.findFirst({
         where: { id, tenantId, kind: 'SERVICE_ORDER' },
-        select: { formData: true },
+        select: { assetCode: true, formData: true },
       });
       if (!current) throw new NotFoundException('Service order not found');
 
@@ -3789,14 +4177,55 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
       const nextFormData =
         dto.formData && typeof dto.formData === 'object' ? (dto.formData as any) : {};
 
+      const prevIssueNotes = this.normalizeIssueNotes(prevFormData.issueNotes);
+      const nextIssueNotes = this.normalizeIssueNotes(nextFormData.issueNotes);
+      const prevIssueNoteById = new Map(prevIssueNotes.map((note: any) => [String(note.id), note]));
+      const nextIssueNoteIds = new Set(nextIssueNotes.map((note: any) => String(note.id)));
+      const removedIssueNotes = prevIssueNotes.filter((note: any) => !nextIssueNoteIds.has(String(note.id)));
+      if (removedIssueNotes.length > 0) {
+        const relatedOrders = await tx.workOrder.findMany({
+          where: {
+            tenantId,
+            kind: 'SERVICE_ORDER',
+            assetCode: current.assetCode,
+            id: { not: id },
+            status: { not: 'CANCELED' as any },
+          },
+          select: { id: true, formData: true },
+        });
+        await this.carryoverService.projectIssueNotesForOrders(tx, tenantId, [
+          { id, formData: prevFormData },
+          ...relatedOrders,
+        ]);
+        const removedRecordIds = removedIssueNotes.map((note: any) => this.issueNoteKey(id, note.id));
+        const delegated = await tx.serviceOrderIssueNote.findFirst({
+          where: {
+            tenantId,
+            workOrderId: { not: id },
+            workOrder: { tenantId, kind: 'SERVICE_ORDER', status: { not: 'CANCELED' } },
+            OR: [
+              { sourceRecordId: { in: removedRecordIds } },
+              {
+                sourceServiceOrderId: id,
+                sourceIssueNoteId: { in: removedIssueNotes.map((note: any) => String(note.id)) },
+              },
+            ],
+          },
+          select: { workOrderId: true },
+        });
+        if (delegated) {
+          throw new ConflictException(
+            `La novedad está delegada a la OS ${delegated.workOrderId} y no se puede eliminar desde su origen`,
+          );
+        }
+      }
+
       const updated = await tx.workOrder.update({
         where: { id },
         data: { formData: dto.formData } as any,
       });
+      await this.carryoverService.syncIssueNotesForWorkOrder(tx, tenantId, id, nextIssueNotes);
 
-      const prevIssueNotes = this.normalizeIssueNotes(prevFormData.issueNotes);
-      const nextIssueNotes = this.normalizeIssueNotes(nextFormData.issueNotes);
-      const prevIssueNoteById = new Map(prevIssueNotes.map((note: any) => [String(note.id), note]));
       for (const nextNote of nextIssueNotes) {
         const prevNote = prevIssueNoteById.get(String(nextNote.id));
         const prevStage = this.normalizeIssueNoteStage(prevNote?.stage);
@@ -3809,8 +4238,20 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
         }
       }
 
+      const hasNewOrReopenedPendingNote = nextIssueNotes.some((nextNote: any) => {
+        if (this.normalizeIssueNoteStage(nextNote?.stage) !== 'PENDING') return false;
+        const prevNote = prevIssueNoteById.get(String(nextNote.id));
+        return !prevNote || this.normalizeIssueNoteStage(prevNote?.stage) === 'EXECUTED';
+      });
+      const forwarded = hasNewOrReopenedPendingNote
+        ? await this.carryoverService.carryForwardFromSource(tx, tenantId, id, 'pending-note-added-or-reopened')
+        : null;
+
       const diffs = this.diffFormData(prevFormData, nextFormData);
       const entries = diffs.map((d) => this.buildAuditEntry(actorUserId, d.field, d.part, d.from, d.to));
+      if (forwarded && (forwarded.copiedParts || forwarded.copiedIssueNotes)) {
+        entries.push(this.buildAuditEntry(actorUserId, 'pendingCarryovers', 'pending-note:forward', null, forwarded));
+      }
       if (entries.length) await this.appendAuditMany(tx, tenantId, id, entries);
 
       return updated;
@@ -3910,9 +4351,17 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
         });
       }
 
-      await this.appendAuditMany(tx, tenantId, id, [
+      const forwarded = String((created as any).stage || 'REQUIRED') === 'REQUIRED'
+        ? await this.carryoverService.carryForwardFromSource(tx, tenantId, id, 'pending-part-added')
+        : null;
+
+      const auditEntries = [
         this.buildAuditEntry(actorUserId, 'parts', 'add', null, { id: created.id, qty: created.qty, stage: (created as any).stage, item: itemLabel }),
-      ]);
+      ];
+      if (forwarded && (forwarded.copiedParts || forwarded.copiedIssueNotes)) {
+        auditEntries.push(this.buildAuditEntry(actorUserId, 'pendingCarryovers', 'pending-part:forward', null, forwarded));
+      }
+      await this.appendAuditMany(tx, tenantId, id, auditEntries);
 
       return created;
     });
@@ -4292,6 +4741,18 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
 
       const role = await this.getCurrentUserRole(tx, tenantId, actorUserId);
       await this.assertTechCanMutateServiceOrder(tx, tenantId, actorUserId, id, role);
+
+      const delegatedChild = await tx.serviceOrderPart.findFirst({
+        where: {
+          tenantId,
+          sourceServiceOrderPartId: partId,
+          workOrder: { tenantId, kind: 'SERVICE_ORDER', status: { not: 'CANCELED' as any } },
+        },
+        select: { workOrderId: true },
+      });
+      if (delegatedChild) {
+        throw new ConflictException(`El repuesto está delegado a la OS ${delegatedChild.workOrderId} y no se puede eliminar desde su origen`);
+      }
 
       if (part.inventoryItemId && String((part as any).stage || 'REQUIRED') === 'REPLACED') {
         await this.inventoryLedger.reverseOutstandingForReference(tx, {

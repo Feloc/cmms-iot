@@ -35,6 +35,11 @@ enum ServiceOrderPartStage {
   REPLACED
 }
 
+enum ServiceOrderIssueNoteStage {
+  PENDING
+  EXECUTED
+}
+
 enum PartType {
   PART
   ASSEMBLY
@@ -128,6 +133,7 @@ model Tenant {
   workOrders WorkOrder[]
   assignments WOAssignment[]
   serviceOrderParts ServiceOrderPart[]
+  serviceOrderIssueNotes ServiceOrderIssueNote[]
   workLog    WorkLog[]
   inventory  InventoryItem[]
   inventoryApplicabilities InventoryItemApplicability[]
@@ -435,6 +441,11 @@ model WorkOrder {
 
   assignments WOAssignment[]
   serviceOrderParts ServiceOrderPart[]
+  sourceLinkedServiceOrderParts ServiceOrderPart[] @relation("ServiceOrderPartSourceOrder")
+  replacementLinkedServiceOrderParts ServiceOrderPart[] @relation("ServiceOrderPartReplacementOrder")
+  serviceOrderIssueNotes ServiceOrderIssueNote[]
+  sourceLinkedServiceOrderIssueNotes ServiceOrderIssueNote[] @relation("ServiceOrderIssueNoteSourceOrder")
+  executedLinkedServiceOrderIssueNotes ServiceOrderIssueNote[] @relation("ServiceOrderIssueNoteExecutedOrder")
   workLogs    WorkLog[]
   reports     WorkOrderReport[]
   workOrderResolutions WorkOrderResolution[]
@@ -1238,6 +1249,53 @@ model AssetPreventiveMaintenance {
   @@index([tenantId, source, executedAt(sort: Desc)])
 }
 
+model ServiceOrderIssueNote {
+  id        String @id
+  tenantId  String
+  tenant    Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  workOrderId String
+  workOrder   WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+
+  noteId String
+  text   String
+  stage  ServiceOrderIssueNoteStage @default(PENDING)
+
+  createdAt       DateTime @default(now())
+  createdByUserId String?
+  createdByName   String?
+
+  executedAt       DateTime?
+  executedByUserId String?
+  executedByName   String?
+
+  sourceServiceOrderId String?
+  sourceIssueNoteId     String?
+  sourceRecordId        String?
+  sourceServiceOrder    WorkOrder? @relation("ServiceOrderIssueNoteSourceOrder", fields: [sourceServiceOrderId], references: [id], onDelete: SetNull)
+  sourceRecord          ServiceOrderIssueNote? @relation("ServiceOrderIssueNoteSourceRecord", fields: [sourceRecordId], references: [id], onDelete: SetNull)
+  delegatedRecords      ServiceOrderIssueNote[] @relation("ServiceOrderIssueNoteSourceRecord")
+
+  executedServiceOrderId String?
+  executedIssueNoteId     String?
+  executedRecordId        String?
+  executedServiceOrder    WorkOrder? @relation("ServiceOrderIssueNoteExecutedOrder", fields: [executedServiceOrderId], references: [id], onDelete: SetNull)
+  executedRecord          ServiceOrderIssueNote? @relation("ServiceOrderIssueNoteExecutedRecord", fields: [executedRecordId], references: [id], onDelete: SetNull)
+  executionReflections    ServiceOrderIssueNote[] @relation("ServiceOrderIssueNoteExecutedRecord")
+
+  copiedAt     DateTime?
+  copiedReason String?
+  updatedAt    DateTime @updatedAt
+
+  @@unique([tenantId, workOrderId, noteId])
+  @@index([tenantId, workOrderId, stage])
+  @@index([tenantId, sourceServiceOrderId, sourceIssueNoteId])
+  @@index([tenantId, sourceRecordId])
+  @@index([tenantId, executedServiceOrderId, executedIssueNoteId])
+  @@index([tenantId, executedRecordId])
+  @@index([tenantId, stage, createdAt(sort: Desc)])
+}
+
 model ServiceOrderPart {
   id        String   @id @default(cuid())
   tenantId  String
@@ -1259,17 +1317,26 @@ model ServiceOrderPart {
   replacedByUserId String?
   replacedByUser   User? @relation(fields: [replacedByUserId], references: [id])
 
-  // Vinculos entre repuestos copiados a una OS correctiva y su OS origen.
+  // Vínculos entre repuestos arrastrados, su OS origen y la OS donde se cambiaron.
   sourceServiceOrderId     String?
   sourceServiceOrderPartId String?
   replacementServiceOrderId     String?
   replacementServiceOrderPartId String?
+
+  sourceServiceOrder WorkOrder? @relation("ServiceOrderPartSourceOrder", fields: [sourceServiceOrderId], references: [id], onDelete: SetNull)
+  replacementServiceOrder WorkOrder? @relation("ServiceOrderPartReplacementOrder", fields: [replacementServiceOrderId], references: [id], onDelete: SetNull)
+  sourcePart ServiceOrderPart? @relation("ServiceOrderPartSource", fields: [sourceServiceOrderPartId], references: [id], onDelete: SetNull)
+  delegatedParts ServiceOrderPart[] @relation("ServiceOrderPartSource")
+  replacementPart ServiceOrderPart? @relation("ServiceOrderPartReplacement", fields: [replacementServiceOrderPartId], references: [id], onDelete: SetNull)
+  reflectedReplacementParts ServiceOrderPart[] @relation("ServiceOrderPartReplacement")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([tenantId, workOrderId])
   @@index([tenantId, stage])
+  @@index([tenantId, sourceServiceOrderId])
   @@index([tenantId, sourceServiceOrderPartId])
+  @@index([tenantId, replacementServiceOrderId])
   @@index([tenantId, replacementServiceOrderPartId])
 }
