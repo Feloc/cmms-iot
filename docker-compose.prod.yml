@@ -9,7 +9,7 @@ services:
       POSTGRES_DB: ${POSTGRES_DB}
       TZ: ${TZ:-America/Bogota}
     volumes:
-    - ../../data/postgres:/var/lib/postgresql/data
+    - ${CMMS_DATA_DIR:-/srv/cmms-iot/data}/postgres:/var/lib/postgresql/data
     - ./db/init:/docker-entrypoint-initdb.d:ro
     ports:
     - 127.0.0.1:5432:5432

@@ -47,7 +47,7 @@ run_sql_migrations() {
   psql "$PSQL_DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
 CREATE TABLE IF NOT EXISTS public."SqlMigrationHistory" (
   name text PRIMARY KEY,
-  appliedAt timestamp(3) without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP
+  "appliedAt" timestamp(3) without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 SQL
 

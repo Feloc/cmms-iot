@@ -45,7 +45,7 @@ INSERT INTO "public"."ServiceOrderIssueNote" (
   "copiedAt", "copiedReason", "updatedAt"
 )
 SELECT
-  work_order."id" || ':' || note.value->>'id',
+  work_order."id" || ':' || (note.value->>'id'),
   work_order."tenantId",
   work_order."id",
   note.value->>'id',
