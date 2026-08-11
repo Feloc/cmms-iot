@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useSession } from 'next-auth/react';
 import { ChevronLeft, ChevronRight, RefreshCcw, X } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
+import { PUBLIC_API_BASE } from '@/lib/api-url';
 import { getAuthFromSession } from '@/lib/auth';
 import { AttachmentFilePicker } from '@/components/AttachmentFilePicker';
 
@@ -25,7 +26,7 @@ export function ServiceOrderImagesGallery({ serviceOrderId }: Props) {
   const [uploadProgress, setUploadProgress] = useState('');
   const [lightbox, setLightbox] = useState<number | null>(null);
 
-  const baseApi = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+  const baseApi = PUBLIC_API_BASE;
 
   const headers = useMemo(() => {
     const h: Record<string, string> = {};

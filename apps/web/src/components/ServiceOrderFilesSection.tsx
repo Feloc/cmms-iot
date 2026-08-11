@@ -5,6 +5,7 @@ import { useSession } from 'next-auth/react';
 import { ExternalLink, Play, RefreshCcw, Trash2, X } from 'lucide-react';
 import { getAuthFromSession } from '@/lib/auth';
 import { apiFetch } from '@/lib/api';
+import { PUBLIC_API_BASE } from '@/lib/api-url';
 import { AttachmentFilePicker } from '@/components/AttachmentFilePicker';
 
 type Props = {
@@ -32,7 +33,7 @@ export function ServiceOrderFilesSection({ serviceOrderId, type, title }: Props)
     return h;
   }, [auth.token, auth.tenantSlug]);
 
-  const baseApi = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+  const baseApi = PUBLIC_API_BASE;
 
   async function load() {
     if (!auth.token || !auth.tenantSlug) return;

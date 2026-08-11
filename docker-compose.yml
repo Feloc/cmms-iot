@@ -48,6 +48,10 @@ services:
     build: ./apps/api
     container_name: cmms_api
     env_file: .env
+    environment:
+      # El acceso normal es same-origin a través de web; no depende del host.
+      CORS_ORIGINS: ""
+      PUBLIC_API_BASE_URL: "http://web:3000"
     ports:
       - "3001:3001"
     depends_on:
@@ -66,12 +70,12 @@ services:
     build: ./apps/web
     container_name: cmms_web
     environment:
-      NEXTAUTH_URL: "http://192.168.1.33:3000"
-      NEXTAUTH_SECRET: "supersecret_local_123"
+      # NextAuth toma host/protocolo de cada solicitud (LAN, VPN o DNS).
+      AUTH_TRUST_HOST: "true"
+      # Anula cualquier valor antiguo cargado desde los env_file.
+      NEXTAUTH_URL:
       # Para llamadas del servidor (dentro del contenedor web) al API
       API_INTERNAL_URL: "http://api:3001"
-      # Para el navegador del usuario hacia el API (cuando hagas fetch desde el cliente)
-      NEXT_PUBLIC_API_URL: "http://192.168.1.33:3001"
     env_file: 
       - .env
       - ./apps/web/.env.local

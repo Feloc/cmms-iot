@@ -3,12 +3,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ExternalLink, Trash2 } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
+import { PUBLIC_API_BASE } from '@/lib/api-url';
 import { AttachmentFilePicker } from '@/components/AttachmentFilePicker';
 
 type Kind = 'IMAGE' | 'VIDEO' | 'DOCUMENT';
 
 function apiBase() {
-  return process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+  return PUBLIC_API_BASE;
 }
 
 function extOf(name: string) {

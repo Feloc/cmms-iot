@@ -2,6 +2,24 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { ServiceOrderCarryoverService } from '../src/modules/service-orders/service-order-carryover.service';
 
+test('lockAsset casts the PostgreSQL void result to a Prisma-supported type', async () => {
+  const service = new ServiceOrderCarryoverService();
+  const calls: Array<{ query: string; key: string }> = [];
+  const tx = {
+    $queryRawUnsafe: async (query: string, key: string) => {
+      calls.push({ query, key });
+      return [{ lock_result: '' }];
+    },
+  };
+
+  await (service as any).lockAsset(tx, 'tenant-1', 'ASSET-1');
+
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].query, /pg_advisory_xact_lock/);
+  assert.match(calls[0].query, /::text/);
+  assert.equal(calls[0].key, 'tenant-1:ASSET-1:pending-carryovers');
+});
+
 test('reconcileAssetTimelines processes active destinations chronologically', async () => {
   const service = new ServiceOrderCarryoverService();
   const calls: string[] = [];

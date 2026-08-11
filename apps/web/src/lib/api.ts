@@ -1,9 +1,11 @@
+import { PUBLIC_API_BASE } from '@/lib/api-url';
+
 const baseFromEnv = (v?: string) => (v ? v.replace(/\/$/, "") : undefined);
 
 const apiBase =
   typeof window === "undefined"
     ? baseFromEnv(process.env.API_INTERNAL_URL) ?? "http://api:3001"
-    : baseFromEnv(process.env.NEXT_PUBLIC_API_URL) ?? "http://localhost:3001";
+    : PUBLIC_API_BASE;
 
 /**
  * Llama a la API externa (apps/api) y agrega headers de auth y tenant.

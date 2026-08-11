@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useSession } from 'next-auth/react';
+import { PUBLIC_API_BASE } from '@/lib/api-url';
 
 type SessionLike = {
   user?: {
@@ -28,7 +29,7 @@ interface Device {
   createdAt: string;
 }
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+const API_BASE = PUBLIC_API_BASE;
 
 export default function DevicesPage() {
   const { data: session } = useSession();

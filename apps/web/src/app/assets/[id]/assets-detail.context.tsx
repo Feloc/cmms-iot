@@ -3,6 +3,7 @@
 
 import React from 'react';
 import { useSession } from 'next-auth/react';
+import { PUBLIC_API_BASE } from '@/lib/api-url';
 
 
 export type AssetsDetailContextValue = {
@@ -43,7 +44,7 @@ process.env.NEXT_PUBLIC_TENANT_SLUG ||
 undefined;
 
 
-const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+const apiBase = PUBLIC_API_BASE;
 
 
 const headers = React.useMemo(() => {

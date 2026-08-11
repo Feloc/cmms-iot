@@ -7,7 +7,6 @@ const API_CANDIDATES = Array.from(
   new Set(
     [
       baseFromEnv(process.env.API_INTERNAL_URL),
-      baseFromEnv(process.env.NEXT_PUBLIC_API_URL),
       "http://api:3001",
     ].filter(Boolean),
   ),

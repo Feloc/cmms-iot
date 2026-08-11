@@ -41,6 +41,26 @@ docker compose exec api node scripts/publish-demo.js
 - Web: http://localhost:3000
 - API: http://localhost:3001
 
+## Acceso independiente de la IP del host
+
+El navegador consume el API mediante la ruta relativa `/backend`. Next.js actúa
+como proxy hacia `http://api:3001` dentro de la red de Docker, por lo que el
+mismo build funciona desde `localhost`, una IP de LAN, un nombre DNS o una VPN:
+
+```text
+Navegador -> http(s)://HOST/backend/* -> web -> http://api:3001/*
+```
+
+La dirección pública del API no se configura con variables ni IPs: está
+centralizada como `/backend` en `apps/web/src/lib/api-url.ts`. La variable
+`API_INTERNAL_URL=http://api:3001` es una dirección interna de Docker y no debe
+apuntar a la IP del host. Si ejecutas `apps/web` fuera de Docker, configura
+`API_PROXY_TARGET=http://localhost:3001` para el proceso de Next.js.
+
+`NEXTAUTH_URL` no se configura. `AUTH_TRUST_HOST=true` permite que NextAuth tome
+el host y protocolo de la solicitud, ya provenga de localhost, LAN, VPN o de un
+dominio HTTPS enviado por un proxy confiable.
+
 ## Tópico MQTT (ingest)
 `cmms/{tenant}/{assetCode}/{sensorType}` con payload JSON:
 ```json

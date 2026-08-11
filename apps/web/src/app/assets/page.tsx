@@ -3,6 +3,7 @@
 import React from 'react';
 import Link from 'next/link';
 import { useSession } from 'next-auth/react';
+import { PUBLIC_API_BASE } from '@/lib/api-url';
 
 type Asset = {
   id: string;
@@ -34,7 +35,7 @@ type AssetFilterOptionsResponse = {
   names: string[];
 };
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+const API_BASE = PUBLIC_API_BASE;
 
 function normalizeFilterText(value: string) {
   return value

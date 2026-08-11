@@ -9,6 +9,7 @@ import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianG
 import { subDays } from 'date-fns';
 import { useSession } from 'next-auth/react';
 import type { ValueType, NameType } from 'recharts/types/component/DefaultTooltipContent';
+import { PUBLIC_API_BASE } from '@/lib/api-url';
 
 
 interface TelemetryPoint {
@@ -33,7 +34,7 @@ type SessionLike = {
   accessToken?: string;
 };
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+const API_BASE = PUBLIC_API_BASE;
 
 export default function TelemetryTab({ assetId }: { assetId: string }) {
   const { data: session } = useSession();

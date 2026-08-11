@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { useSession } from 'next-auth/react';
+import { PUBLIC_API_BASE } from '@/lib/api-url';
 
 type SessionLike = {
   user?: {
@@ -12,7 +13,7 @@ type SessionLike = {
   token?: string;
 };
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+const API_BASE = PUBLIC_API_BASE;
 
 export default function OverviewTab({ deviceId }: { deviceId: string }) {
   const { data: session } = useSession();

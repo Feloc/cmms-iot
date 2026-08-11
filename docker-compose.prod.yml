@@ -32,6 +32,8 @@ services:
     - /srv/cmms-iot/env/.env.production
     environment:
       NODE_ENV: production
+      CORS_ORIGINS: ${API_CORS_ORIGINS:-}
+      PUBLIC_API_BASE_URL: http://web:3000
     depends_on:
       db:
         condition: service_healthy
@@ -53,16 +55,13 @@ services:
     build:
       context: .
       dockerfile: apps/web/Dockerfile.prod
-      args:
-        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
-        NEXTAUTH_URL: ${NEXTAUTH_URL}
     env_file:
     - /srv/cmms-iot/env/.env.production
     environment:
       NODE_ENV: production
       API_INTERNAL_URL: http://api:3001
-      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
-      NEXTAUTH_URL: ${NEXTAUTH_URL}
+      AUTH_TRUST_HOST: "true"
+      NEXTAUTH_URL:
     depends_on:
       api:
         condition: service_healthy

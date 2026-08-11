@@ -5788,8 +5788,6 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
       new Set(
         [
           process.env.PUBLIC_API_BASE_URL,
-          process.env.NEXT_PUBLIC_API_URL,
-          process.env.NEXTAUTH_URL,
           process.env.API_INTERNAL_URL,
           'http://web:3000',
           'http://api:3001',

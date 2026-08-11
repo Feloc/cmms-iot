@@ -2,6 +2,7 @@
 
 import React from 'react';
 import { useSession } from 'next-auth/react';
+import { PUBLIC_API_BASE } from '@/lib/api-url';
 
 /** =========================
  *  Tipos de datos
@@ -57,7 +58,7 @@ type CreateAssetDto = {
 /** =========================
  *  Constantes
  *  ========================= */
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+const API_BASE = PUBLIC_API_BASE;
 const MAX_MB = Number(
   process.env.NEXT_PUBLIC_ATTACHMENTS_MAX_MB ||
     process.env.NEXT_PUBLIC_ATTACHMENTS_MAX_SIZE_MB ||

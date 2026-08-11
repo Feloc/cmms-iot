@@ -2,6 +2,7 @@
 
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { useSession } from 'next-auth/react';
+import { PUBLIC_API_BASE } from '@/lib/api-url';
 
 // -------------------- Tipos --------------------
 type Attachment = {
@@ -32,7 +33,7 @@ const ALLOWED_MIME =
     .map((s) => s.trim())
     .filter(Boolean);
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+const API_BASE = PUBLIC_API_BASE;
 const PAGE_SIZE = 20;
 
 // -------------------- Utils --------------------

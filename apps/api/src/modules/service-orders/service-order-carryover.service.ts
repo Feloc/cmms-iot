@@ -247,7 +247,7 @@ export class ServiceOrderCarryoverService {
   private async lockAsset(tx: any, tenantId: string, assetCode: string): Promise<void> {
     if (typeof tx?.$queryRawUnsafe !== 'function') return;
     await tx.$queryRawUnsafe(
-      'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+      'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))::text AS lock_result',
       `${tenantId}:${assetCode}:pending-carryovers`,
     );
   }

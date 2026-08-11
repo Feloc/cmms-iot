@@ -2,6 +2,7 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import { useSession } from 'next-auth/react';
+import { PUBLIC_API_BASE } from '@/lib/api-url';
 import {
   LineChart,
   Line,
@@ -51,7 +52,7 @@ function maskToken(t?: string) {
 }
 
 export default function TelemetryTab({ deviceId, token, tenantSlug }: Props) {
-  const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+  const API = PUBLIC_API_BASE;
 
   // Si estás usando next-auth, aquí intentamos obtener token/tenant desde la session.
   // OJO: depende de cómo tengas configurados callbacks de NextAuth.
