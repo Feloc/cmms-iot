@@ -35,6 +35,9 @@ export async function apiFetch<T>(
 
   if (!res.ok) {
     const text = await res.text().catch(() => "");
+    if (res.status === 401 && typeof window !== 'undefined') {
+      window.dispatchEvent(new Event('cmms:unauthorized'));
+    }
     throw new Error(`API ${method} ${url} -> ${res.status} ${text}`);
   }
 

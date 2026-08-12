@@ -3,14 +3,8 @@ import Credentials from "next-auth/providers/credentials";
 
 const baseFromEnv = (value?: string) => String(value || "").replace(/\/$/, "").trim() || "";
 
-const API_CANDIDATES = Array.from(
-  new Set(
-    [
-      baseFromEnv(process.env.API_INTERNAL_URL),
-      "http://api:3001",
-    ].filter(Boolean),
-  ),
-);
+const API_BASE = baseFromEnv(process.env.API_INTERNAL_URL) || "http://api:3001";
+const SESSION_MAX_AGE_SECONDS = 12 * 60 * 60;
 
 const handler = NextAuth({
   providers: [
@@ -22,76 +16,45 @@ const handler = NextAuth({
         password: { label: "Password", type: "password" },
       },
       async authorize(credentials) {
-        let lastFailure: string | null = null;
         try {
-          if (!credentials) {
-            console.error("[authorize] no credentials");
+          const tenant = String(credentials?.tenant || '').trim().toLowerCase();
+          const email = String(credentials?.email || '').trim().toLowerCase();
+          const password = String(credentials?.password || '');
+          if (!tenant || !email || !password) return null;
+
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), 10_000);
+          const res = await fetch(`${API_BASE}/auth/login`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ tenant, email, password }),
+            signal: controller.signal,
+          }).finally(() => clearTimeout(timeout));
+          if (!res.ok) return null;
+
+          const data = await res.json().catch(() => null);
+          if (!data?.token || !data?.tenant?.id || !data?.tenant?.slug || !data?.user?.id || !data?.user?.email) {
+            console.error('[authorize] invalid API login response');
             return null;
           }
 
-          for (const apiBase of API_CANDIDATES) {
-            try {
-              const res = await fetch(`${apiBase}/auth/login`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  tenant: credentials.tenant,
-                  email: credentials.email,
-                  password: credentials.password,
-                }),
-              });
-
-              if (!res.ok) {
-                const txt = await res.text().catch(() => "");
-                lastFailure = `[authorize] login failed via ${apiBase}: status=${res.status} body=${txt}`;
-                console.error(lastFailure);
-                continue;
-              }
-
-              const data = await res.json().catch((e) => {
-                console.error(`[authorize] invalid JSON from API (${apiBase}):`, e);
-                return null;
-              });
-              // API esperado: { token, tenant: {id,slug}, user: {id,email,name,role} }
-              if (!data?.token || !data?.tenant?.id || !data?.tenant?.slug || !data?.user?.email) {
-                lastFailure = `[authorize] missing fields in API response via ${apiBase}`;
-                console.error(lastFailure, data);
-                continue;
-              }
-
-              const id =
-                (data.user.id && String(data.user.id)) ||
-                (data.user.email && String(data.user.email));
-              if (!id) {
-                lastFailure = `[authorize] could not derive user id via ${apiBase}`;
-                console.error(lastFailure, data);
-                continue;
-              }
-
-              return {
-                id,
-                email: data.user.email,
-                name: data.user.name || data.user.email,
-                role: data.user.role,
-                token: data.token,
-                tenant: { id: data.tenant.id, slug: data.tenant.slug }, // <- objeto completo
-              } as any;
-            } catch (apiErr) {
-              lastFailure = `[authorize] exception via ${apiBase}`;
-              console.error(lastFailure, apiErr);
-            }
-          }
-
-          if (lastFailure) console.error(lastFailure);
-          return null;
+          return {
+            id: String(data.user.id),
+            email: data.user.email,
+            name: data.user.name || data.user.email,
+            role: data.user.role,
+            token: data.token,
+            tenant: { id: data.tenant.id, slug: data.tenant.slug },
+          } as any;
         } catch (err) {
-          console.error("[authorize] exception:", err);
+          console.error("[authorize] API login unavailable");
           return null;
         }
       },
     }),
   ],
-  session: { strategy: "jwt" },
+  session: { strategy: "jwt", maxAge: SESSION_MAX_AGE_SECONDS },
+  jwt: { maxAge: SESSION_MAX_AGE_SECONDS },
   callbacks: {
     async jwt({ token, user }) {
       if (user) {
@@ -104,9 +67,11 @@ const handler = NextAuth({
       return token;
     },
     async session({ session, token }) {
-      // tokens -> session
-      (session as any).token = token.accessToken;        // recomendado usar "session.token" en fetch
-      (session as any).accessToken = token.accessToken;  // compat si ya usabas accessToken
+      // El JWT de la API permanece dentro de la cookie cifrada de NextAuth. Los
+      // clientes existentes sólo necesitan un valor truthy: /backend reemplaza
+      // cualquier Authorization recibido por el JWT obtenido del lado servidor.
+      (session as any).token = 'session';
+      (session as any).accessToken = 'session';
       (session as any).tenant = token.tenant;            // { id, slug }
 
       // proyección cómoda en session.user
@@ -124,6 +89,20 @@ const handler = NextAuth({
       (session as any).tenantSlug = (token as any)?.tenant?.slug;
 
       return session;
+    },
+  },
+  events: {
+    async signOut({ token }) {
+      const accessToken = typeof token?.accessToken === 'string' ? token.accessToken : '';
+      if (!accessToken) return;
+      try {
+        await fetch(`${API_BASE}/auth/logout`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+      } catch {
+        console.error('[signOut] API token revocation failed');
+      }
     },
   },
   pages: { signIn: "/login" },

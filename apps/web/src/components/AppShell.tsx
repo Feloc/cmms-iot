@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { useMemo, useState, type ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { signOut, useSession } from 'next-auth/react';
 
 type NavItem = {
@@ -12,6 +12,18 @@ type NavItem = {
   adminOnly?: boolean;
 };
 
+const NAV_ITEMS: NavItem[] = [
+  { href: '/dashboard', label: 'Dashboard', adminOnly: true },
+  { href: '/calendar', label: 'Calendario' },
+  { href: '/service-orders', label: 'Órdenes de servicio' },
+  { href: '/assets', label: 'Activos' },
+  { href: '/inventory', label: 'Inventario', adminOnly: true },
+  { href: '/tenant-branding', label: 'Branding', adminOnly: true },
+  { href: '/pm-plans', label: 'PM Plans' },
+  { href: '/users', label: 'Usuarios', adminOnly: true },
+  { href: '/tenants', label: 'Tenants', adminOnly: true },
+];
+
 function isActive(pathname: string, item: NavItem) {
   if (item.exact) return pathname === item.href;
   if (item.href === '/') return pathname === '/';
@@ -20,7 +32,7 @@ function isActive(pathname: string, item: NavItem) {
 
 export default function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
-  const { data: session } = useSession();
+  const { data: session, status } = useSession();
 
   // Debe existir en session.user.role; si no, conectarlo en NextAuth callbacks.
   const role = (session as any)?.user?.role as string | undefined;
@@ -28,23 +40,11 @@ export default function AppShell({ children }: { children: ReactNode }) {
 
   const [mobileOpen, setMobileOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
+  const [signingOut, setSigningOut] = useState(false);
 
-  const items: NavItem[] = useMemo(
-    () => [
-      { href: '/dashboard', label: 'Dashboard', adminOnly: true },
-      { href: '/calendar', label: 'Calendario' },
-      { href: '/service-orders', label: 'Órdenes de servicio' },
-      { href: '/assets', label: 'Activos' },
-      { href: '/inventory', label: 'Inventario', adminOnly: true },
-      { href: '/tenant-branding', label: 'Branding', adminOnly: true },
-      { href: '/pm-plans', label: 'PM Plans' },
-      { href: '/users', label: 'Usuarios', adminOnly: true },
-      { href: '/tenants', label: 'Tenants', adminOnly: true },
-    ],
-    [],
-  );
+  if (pathname === '/login') return <>{children}</>;
 
-  const filtered = items.filter((it) => (it.adminOnly ? isAdmin : true));
+  const filtered = NAV_ITEMS.filter((it) => (it.adminOnly ? isAdmin : true));
 
   return (
     <div className="min-h-screen bg-white">
@@ -78,10 +78,14 @@ export default function AppShell({ children }: { children: ReactNode }) {
 
           <button
             className="px-3 py-2 border rounded text-sm"
-            onClick={() => signOut({ callbackUrl: '/auth/signin' })}
+            onClick={async () => {
+              setSigningOut(true);
+              await signOut({ callbackUrl: '/login' });
+            }}
+            disabled={signingOut || status === 'loading'}
             title="Cerrar sesión"
           >
-            Salir
+            {signingOut ? 'Saliendo…' : 'Salir'}
           </button>
         </div>
       </header>

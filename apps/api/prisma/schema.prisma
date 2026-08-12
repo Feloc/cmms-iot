@@ -222,6 +222,7 @@ model User {
   tenant    Tenant   @relation(fields: [tenantId], references: [id])
   email     String
   password  String
+  authVersion Int    @default(0)
   role      Role     @default(ADMIN)
   name      String
   createdAt DateTime @default(now())

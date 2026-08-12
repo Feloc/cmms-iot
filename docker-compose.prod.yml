@@ -43,7 +43,8 @@ services:
       timeout: 5s
       retries: 20
     ports:
-    - ${API_PORT:-3001}:3001
+    # La API sólo se publica en loopback; los navegadores entran por web:/backend.
+    - 127.0.0.1:${API_PORT:-3001}:3001
     volumes:
     - /srv/cmms-iot/data/attachments:/app/storage/attachments
     - /srv/cmms-iot/data/uploads:/app/uploads

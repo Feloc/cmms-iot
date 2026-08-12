@@ -18,5 +18,11 @@ export const config = {
     "/inventory/:path*",
     "/tenant-branding/:path*",
     "/work-orders/:path*",
+    "/calendar/:path*",
+    "/service-orders/:path*",
+    "/pm-plans/:path*",
+    "/users/:path*",
+    "/tenants/:path*",
+    "/devices/:path*",
   ],
 };

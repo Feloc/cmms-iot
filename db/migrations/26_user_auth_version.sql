@@ -1,0 +1,2 @@
+ALTER TABLE public."User"
+ADD COLUMN IF NOT EXISTS "authVersion" integer NOT NULL DEFAULT 0;

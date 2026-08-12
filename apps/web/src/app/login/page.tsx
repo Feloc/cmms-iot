@@ -1,35 +1,52 @@
 "use client";
 
-import { useState, FormEvent, Suspense } from "react";
-import { signIn } from "next-auth/react";
+import { useEffect, useState, FormEvent, Suspense } from "react";
+import { signIn, useSession } from "next-auth/react";
 import { useSearchParams, useRouter } from "next/navigation";
 
 function LoginClient() {
   const params = useSearchParams();
   const router = useRouter();
-  const error = params.get("error");
-  const callbackUrl = params.get("callbackUrl") || "/dashboard";
+  const { status } = useSession();
+  const requestedCallback = params.get("callbackUrl");
+  const callbackUrl = requestedCallback?.startsWith('/') && !requestedCallback.startsWith('//')
+    ? requestedCallback
+    : "/dashboard";
 
-  const [tenant, setTenant] = useState("acme");
-  const [email, setEmail] = useState("admin@acme.local");
-  const [password, setPassword] = useState("admin123");
+  const [tenant, setTenant] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
+  const [formError, setFormError] = useState("");
+
+  useEffect(() => {
+    if (status === 'authenticated') router.replace(callbackUrl);
+  }, [status, router, callbackUrl]);
 
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault();
+    setFormError("");
     setLoading(true);
-    const res = await signIn("credentials", {
-      redirect: false,
-      tenant,
-      email,
-      password,
-      callbackUrl,
-    });
-    setLoading(false);
-    if (res && !res.error) {
-      router.push(callbackUrl);
+    try {
+      const res = await signIn("credentials", {
+        redirect: false,
+        tenant: tenant.trim().toLowerCase(),
+        email: email.trim().toLowerCase(),
+        password,
+        callbackUrl,
+      });
+      if (!res?.ok || res.error) {
+        setFormError("Tenant, correo o contraseña incorrectos.");
+        return;
+      }
+      const validatedUrl = new URL(res.url || callbackUrl, window.location.origin);
+      router.replace(validatedUrl.origin === window.location.origin ? `${validatedUrl.pathname}${validatedUrl.search}` : '/dashboard');
+      router.refresh();
+    } catch {
+      setFormError("No fue posible conectar con el servicio de autenticación.");
+    } finally {
+      setLoading(false);
     }
-    // Si hay error, NextAuth deja ?error=CredentialsSignin en la URL
   };
 
   return (
@@ -37,9 +54,9 @@ function LoginClient() {
       <form onSubmit={onSubmit} className="w-full max-w-sm space-y-3">
         <h1 className="text-2xl font-semibold">Ingresar</h1>
 
-        {error && (
-          <p className="text-sm text-red-600">
-            {error === "CredentialsSignin" ? "Credenciales inválidas." : error}
+        {formError && (
+          <p className="text-sm text-red-600" role="alert" aria-live="polite">
+            {formError}
           </p>
         )}
 
@@ -50,6 +67,8 @@ function LoginClient() {
             value={tenant}
             onChange={(e) => setTenant(e.target.value)}
             required
+            autoComplete="organization"
+            disabled={loading}
           />
         </div>
 
@@ -62,6 +81,7 @@ function LoginClient() {
             onChange={(e) => setEmail(e.target.value)}
             autoComplete="username"
             required
+            disabled={loading}
           />
         </div>
 
@@ -74,6 +94,7 @@ function LoginClient() {
             onChange={(e) => setPassword(e.target.value)}
             autoComplete="current-password"
             required
+            disabled={loading}
           />
         </div>
 

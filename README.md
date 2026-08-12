@@ -43,8 +43,9 @@ docker compose exec api node scripts/publish-demo.js
 
 ## Acceso independiente de la IP del host
 
-El navegador consume el API mediante la ruta relativa `/backend`. Next.js actúa
-como proxy hacia `http://api:3001` dentro de la red de Docker, por lo que el
+El navegador consume el API mediante la ruta relativa `/backend`. Next.js valida
+la sesión e inyecta su token al reenviar hacia `http://api:3001` dentro de la red
+de Docker, por lo que el
 mismo build funciona desde `localhost`, una IP de LAN, un nombre DNS o una VPN:
 
 ```text
