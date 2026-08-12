@@ -6,7 +6,10 @@ export class LoginDto {
   @MaxLength(100)
   tenant!: string;
 
-  @IsEmail()
+  // Los seeds y varias instalaciones existentes usan dominios internos como
+  // `platform-admin@local`. Siguen siendo direcciones válidas para iniciar
+  // sesión aunque no tengan un TLD público.
+  @IsEmail({ require_tld: false })
   @MaxLength(200)
   email!: string;
 
