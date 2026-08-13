@@ -6,6 +6,7 @@ import dynamic from 'next/dynamic';
 import { useParams } from 'next/navigation';
 import { useSession } from 'next-auth/react';
 import { useAssetsDetail, AssetsDetailProvider } from './assets-detail.context';
+import AssetPhotoCard from './AssetPhotoCard';
 
 const OverviewTab = dynamic(() => import('./tabs/OverviewTab'), { ssr: false, loading: () => <div className="p-4 text-sm text-gray-500">Cargando resumen…</div> });
 const AttachmentsTab = dynamic(() => import('./tabs/AttachmentsTab'), { ssr: false, loading: () => <div className="p-4 text-sm text-gray-500">Cargando adjuntos…</div> });
@@ -90,6 +91,8 @@ function DetailInner() {
       {error && (
         <div className="rounded-md bg-red-50 border border-red-200 p-3 text-red-700 text-sm">{error}</div>
       )}
+
+      {asset ? <AssetPhotoCard asset={asset} onUpdated={loadAsset} /> : null}
 
       <div className="flex gap-2 border-b">
         {tabs.map((t) => (

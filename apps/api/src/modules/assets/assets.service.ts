@@ -7,6 +7,8 @@ import { UpdateAssetDto } from './dto/update-asset.dto';
 import { GenerateAssetMaintenancePlanDto, MaintenanceFrequencyUnit, UpsertAssetMaintenancePlanDto } from './dto/maintenance-plan.dto';
 import { CreatePreventiveMaintenanceRecordDto } from './dto/create-preventive-maintenance-record.dto';
 import { ServiceOrderCarryoverService } from '../service-orders/service-order-carryover.service';
+import type { MulterFile } from '../../common/multer-file';
+import * as fs from 'fs';
 
 
 type FindAllQuery = {
@@ -766,6 +768,12 @@ if (q.customer) where.customer = { contains: q.customer.trim(), mode: 'insensiti
       const asset = await tx.asset.findFirst({
         where: { id },
         include: {
+          attachments: {
+            where: { isAssetPhoto: true },
+            orderBy: { createdAt: 'desc' },
+            take: 1,
+            select: { id: true, filename: true, mimeType: true, size: true, createdAt: true },
+          },
           maintenancePlan: {
             include: {
               pmPlan: { select: { id: true, name: true, intervalHours: true, defaultDurationMin: true, active: true } },
@@ -774,8 +782,73 @@ if (q.customer) where.customer = { contains: q.customer.trim(), mode: 'insensiti
         },
       });
       if (!asset) throw new NotFoundException('Asset not found');
-      return asset;
+      const { attachments, ...data } = asset;
+      return { ...data, photo: attachments[0] ?? null };
     });
+  }
+
+  async getPhotoFile(assetId: string) {
+    if (!assetId) throw new BadRequestException('id is required');
+    const tenantId = this.getTenantId();
+    const photo = await this.prisma.attachment.findFirst({
+      where: { tenantId, assetId, isAssetPhoto: true },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (!photo) throw new NotFoundException('El activo no tiene foto');
+    if (!photo.url || !fs.existsSync(photo.url)) throw new NotFoundException('El archivo de la foto no existe');
+    return { path: photo.url, mimeType: photo.mimeType || 'application/octet-stream' };
+  }
+
+  async replacePhoto(assetId: string, file: MulterFile) {
+    if (!assetId) throw new BadRequestException('id is required');
+    const tenantId = this.getTenantId();
+    const userId = this.getUserId();
+    if (!userId) throw new BadRequestException('No user in context');
+
+    const previous = await this.prisma.attachment.findMany({
+      where: { tenantId, assetId, isAssetPhoto: true },
+      select: { id: true, url: true },
+    });
+
+    const saved = await this.prisma.$transaction(async (tx) => {
+      const asset = await tx.asset.findFirst({ where: { id: assetId, tenantId }, select: { id: true } });
+      if (!asset) throw new NotFoundException('Asset not found');
+      await tx.attachment.deleteMany({ where: { tenantId, assetId, isAssetPhoto: true } });
+      return tx.attachment.create({
+        data: {
+          tenantId,
+          assetId,
+          type: 'IMAGE',
+          filename: file.originalname,
+          mimeType: file.mimetype,
+          size: file.size,
+          url: file.path,
+          createdBy: userId,
+          isAssetPhoto: true,
+        },
+        select: { id: true, filename: true, mimeType: true, size: true, createdAt: true },
+      });
+    });
+
+    for (const item of previous) {
+      try { if (item.url && item.url !== file.path && fs.existsSync(item.url)) fs.unlinkSync(item.url); } catch {}
+    }
+    return { ...saved, photoUrl: `/assets/${assetId}/photo` };
+  }
+
+  async deletePhoto(assetId: string) {
+    if (!assetId) throw new BadRequestException('id is required');
+    const tenantId = this.getTenantId();
+    const photos = await this.prisma.attachment.findMany({
+      where: { tenantId, assetId, isAssetPhoto: true },
+      select: { id: true, url: true },
+    });
+    if (!photos.length) throw new NotFoundException('El activo no tiene foto');
+    await this.prisma.attachment.deleteMany({ where: { tenantId, assetId, isAssetPhoto: true } });
+    for (const photo of photos) {
+      try { if (photo.url && fs.existsSync(photo.url)) fs.unlinkSync(photo.url); } catch {}
+    }
+    return { ok: true };
   }
 
   async create(dto: CreateAssetDto) {

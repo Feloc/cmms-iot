@@ -998,9 +998,11 @@ model Attachment {
   url         String
   createdBy   String
   createdAt   DateTime  @default(now())
+  isAssetPhoto Boolean  @default(false)
 
   @@index([tenantId, workOrderId, createdAt(sort: Desc)])
   @@index([tenantId, assetId, createdAt(sort: Desc)])
+  @@index([tenantId, assetId, isAssetPhoto])
 }
 
 enum AttachmentType {
