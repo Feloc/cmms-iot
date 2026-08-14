@@ -30,7 +30,25 @@ enum ServiceOrderType {
   PREVENTIVO
   CORRECTIVO
   ENTREGA
+  MONTAJE
   OTRO
+}
+
+enum AssemblyExecutionStatus {
+  PLANNED
+  IN_PROGRESS
+  ON_HOLD
+  COMPLETED
+  CANCELED
+}
+
+enum AssemblyActivityStatus {
+  PENDING
+  IN_PROGRESS
+  PAUSED
+  BLOCKED
+  COMPLETED
+  NOT_APPLICABLE
 }
 
 // Repuestos en una Orden de Servicio: primero se registran como necesarios (diagnóstico)
@@ -169,6 +187,10 @@ model Tenant {
   assetMaintenancePlans AssetMaintenancePlan[]
   preventiveMaintenanceRecords AssetPreventiveMaintenance[]
   goals                Goal[]
+  assemblyTemplates    AssemblyTemplate[]
+  assemblyTemplateSteps AssemblyTemplateStep[]
+  assemblyExecutions   AssemblyExecution[]
+  assemblyActivities   AssemblyActivity[]
 
   workOrderReports      WorkOrderReport[]
 }
@@ -462,6 +484,7 @@ model WorkOrder {
   commercialNotes    ServiceOrderCommercialNote[]
   attachments        Attachment[]
   workNotes          WorkNote[]
+  assemblyExecution  AssemblyExecution?
 
   @@index([tenantId, status])
   @@index([tenantId, commercialStatus])
@@ -577,6 +600,9 @@ model WorkLog {
   workOrderId    String
   workOrder      WorkOrder      @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
 
+  assemblyActivityId String?
+  assemblyActivity   AssemblyActivity? @relation(fields: [assemblyActivityId], references: [id], onDelete: SetNull)
+
   userId         String
   source         WorkLogSource  @default(MANUAL)
   note           String?
@@ -588,6 +614,7 @@ model WorkLog {
   updatedAt      DateTime       @updatedAt
 
   @@index([tenantId, workOrderId])
+  @@index([tenantId, assemblyActivityId])
   @@index([tenantId, userId, startedAt])
 }
 
@@ -595,6 +622,117 @@ enum WorkLogSource {
   MANUAL
   IMPORT
   IOT
+}
+
+model AssemblyTemplate {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  code        String
+  name        String
+  description String?
+  brand       String?
+  model       String?
+  version     Int     @default(1)
+  active      Boolean @default(true)
+
+  steps      AssemblyTemplateStep[]
+  executions AssemblyExecution[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, code, version])
+  @@index([tenantId, active, name])
+}
+
+model AssemblyTemplateStep {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  templateId         String
+  template           AssemblyTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  position           Int
+  phase              String?
+  name               String
+  instructions       String?
+  estimatedMinutes   Int
+  plannedTechnicians Int              @default(1)
+  required           Boolean          @default(true)
+  evidenceRequired   Boolean          @default(false)
+
+  activities AssemblyActivity[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([templateId, position])
+  @@index([tenantId, templateId, position])
+}
+
+model AssemblyExecution {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  workOrderId         String                  @unique
+  workOrder           WorkOrder               @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  templateId          String?
+  template            AssemblyTemplate?       @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  templateCode        String
+  templateName        String
+  templateVersion     Int
+  status              AssemblyExecutionStatus @default(PLANNED)
+  plannedMinutes      Int
+  plannedLaborMinutes Int
+  startedAt           DateTime?
+  completedAt         DateTime?
+
+  activities AssemblyActivity[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId, status, updatedAt(sort: Desc)])
+  @@index([tenantId, templateId])
+}
+
+model AssemblyActivity {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  executionId        String
+  execution          AssemblyExecution      @relation(fields: [executionId], references: [id], onDelete: Cascade)
+  templateStepId     String?
+  templateStep       AssemblyTemplateStep?  @relation(fields: [templateStepId], references: [id], onDelete: SetNull)
+  position           Int
+  phase              String?
+  name               String
+  instructions       String?
+  estimatedMinutes   Int
+  plannedTechnicians Int                    @default(1)
+  required           Boolean                @default(true)
+  evidenceRequired   Boolean                @default(false)
+  status             AssemblyActivityStatus @default(PENDING)
+  progressPercent    Int                    @default(0)
+  assignedUserId     String?
+  notes              String?
+  blockedReason      String?
+  startedAt          DateTime?
+  completedAt        DateTime?
+  completedByUserId  String?
+
+  workLogs WorkLog[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([executionId, position])
+  @@index([tenantId, executionId, position])
+  @@index([tenantId, status])
 }
 
 model InventoryItem {

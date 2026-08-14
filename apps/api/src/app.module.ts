@@ -20,6 +20,7 @@ import { AdminUsersModule } from './modules/admin-users/admin-users.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { GoalsModule } from './modules/goals/goals.module';
 import { AppController } from './app.controller';
+import { AssembliesModule } from './modules/assemblies/assemblies.module';
 
 
 @Module({
@@ -45,6 +46,7 @@ import { AppController } from './app.controller';
     AdminUsersModule,
     DashboardModule,
     GoalsModule,
+    AssembliesModule,
   ],
 })
 export class AppModule {}

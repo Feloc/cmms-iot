@@ -16,6 +16,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: '/dashboard', label: 'Dashboard', adminOnly: true },
   { href: '/calendar', label: 'Calendario' },
   { href: '/service-orders', label: 'Órdenes de servicio' },
+  { href: '/assemblies', label: 'Montajes' },
   { href: '/assets', label: 'Activos' },
   { href: '/inventory', label: 'Inventario', adminOnly: true },
   { href: '/tenant-branding', label: 'Branding', adminOnly: true },
@@ -176,6 +177,8 @@ function iconFor(href: string) {
       return '🗓️';
     case '/service-orders':
       return '🧾';
+    case '/assemblies':
+      return '🏗️';
     case '/assets':
       return '🛠️';
     case '/inventory':
