@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Injectable, BadRequestException, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma.service';
 import { tenantStorage } from '../../common/tenant-context';
 
@@ -7,6 +7,7 @@ export type FindAllQuery = {
   entityId?: string;
   workOrderId?: string;
   assetId?: string;
+  assemblyActivityId?: string;
   page?: number; size?: number;
 };
 
@@ -18,6 +19,7 @@ export type CreateAttachmentInput = {
   size?: number | null;
   diskPath: string; // ruta física donde multer guardó el archivo
   type?: 'IMAGE'|'VIDEO'|'AUDIO'|'DOCUMENT';
+  assemblyActivityId?: string | null;
 };
 
 @Injectable()
@@ -39,7 +41,9 @@ export class AttachmentsService {
 
     // Resolver filtro según tu modelo actual (scalar FKs workOrderId/assetId)
     const where: any = { tenantId };
-    if (q.entityType && q.entityId) {
+    if (q.assemblyActivityId) {
+      where.assemblyActivityId = q.assemblyActivityId;
+    } else if (q.entityType && q.entityId) {
       if (q.entityType === 'work_order') where.workOrderId = q.entityId;
       if (q.entityType === 'asset') where.assetId = q.entityId;
     } else if (q.workOrderId) {
@@ -89,6 +93,21 @@ export class AttachmentsService {
     // IMPORTANTE: usar campos escalares FK, no nested connect (tu modelo puede no tener relación Prisma "asset")
     if (input.entity === 'work_order') data.workOrderId = input.entityId;
     if (input.entity === 'asset') data.assetId = input.entityId;
+    if (input.assemblyActivityId) {
+      if (input.entity !== 'work_order') {
+        throw new BadRequestException('Las evidencias de montaje deben pertenecer a una orden de trabajo');
+      }
+      const activity = await this.prisma.assemblyActivity.findFirst({
+        where: {
+          id: input.assemblyActivityId,
+          tenantId,
+          execution: { workOrderId: input.entityId },
+        },
+        select: { id: true },
+      });
+      if (!activity) throw new BadRequestException('La actividad no pertenece a esta orden de montaje');
+      data.assemblyActivityId = activity.id;
+    }
 
     const saved = await this.prisma.attachment.create({ data });
     return saved;
@@ -96,8 +115,28 @@ export class AttachmentsService {
 
   async remove(id: string) {
     const tenantId = this.getTenantId();
+    const userId = tenantStorage.getStore()?.userId;
+    if (!userId) throw new ForbiddenException('Usuario no autenticado');
     const item = await this.prisma.attachment.findFirst({ where: { id, tenantId } });
     if (!item) throw new NotFoundException('Attachment not found');
+    if ((item as any).manufacturingOrderId) {
+      throw new ConflictException('Los archivos de Ingeniería se gestionan desde su revisión documental');
+    }
+
+    const actor = await this.prisma.user.findFirst({ where: { id: userId, tenantId }, select: { role: true } });
+    if (!actor) throw new ForbiddenException('Usuario no encontrado');
+    if (actor.role !== 'ADMIN' && item.createdBy !== userId) {
+      throw new ForbiddenException('Solo puedes eliminar archivos que hayas subido');
+    }
+    if (item.assemblyActivityId && actor.role !== 'ADMIN') {
+      const activity = await this.prisma.assemblyActivity.findFirst({
+        where: { id: item.assemblyActivityId, tenantId },
+        select: { status: true },
+      });
+      if (activity?.status === 'COMPLETED') {
+        throw new ConflictException('La evidencia de una actividad completada solo puede ser eliminada por un administrador');
+      }
+    }
 
     await this.prisma.attachment.delete({ where: { id } });
 

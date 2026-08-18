@@ -33,12 +33,13 @@ export class AttachmentsController {
     @Query('entityId') entityId?: string,
     @Query('workOrderId') workOrderId?: string,
     @Query('assetId') assetId?: string,
+    @Query('assemblyActivityId') assemblyActivityId?: string,
     @Query('page') page?: string,
     @Query('size') size?: string,
   ) {
     const p = page ? Number(page) : 1;
     const s = size ? Number(size) : 100;
-    return this.svc.findAll({ entityType, entityId, workOrderId, assetId, page: p, size: s });
+    return this.svc.findAll({ entityType, entityId, workOrderId, assetId, assemblyActivityId, page: p, size: s });
   }
 
   @Get(':id')
@@ -95,6 +96,7 @@ export class AttachmentsController {
     @Body('assetId') assetId?: string,
     @Body('type') type?: 'IMAGE'|'VIDEO'|'AUDIO'|'DOCUMENT',
     @Body('kind') kind?: 'image'|'video'|'audio'|'doc'|'other',
+    @Body('assemblyActivityId') assemblyActivityId?: string,
   ) {
     if (!file) throw new BadRequestException('file is required');
     let resolved: { entity: 'asset' | 'work_order'; id: string } | null = null;
@@ -111,6 +113,7 @@ export class AttachmentsController {
       size: file.size,
       diskPath: file.path,
       type: (type || mapKindToType(kind)) as any,
+      assemblyActivityId: assemblyActivityId || null,
     });
     return saved;
   }

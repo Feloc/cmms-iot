@@ -18,7 +18,6 @@ enum Role {
   VIEWER
 }
 
-
 enum WorkOrderKind {
   WORK_ORDER
   SERVICE_ORDER
@@ -49,6 +48,58 @@ enum AssemblyActivityStatus {
   BLOCKED
   COMPLETED
   NOT_APPLICABLE
+}
+
+enum ManufacturingOrderStatus {
+  DRAFT
+  ENGINEERING
+  RELEASED
+  ON_HOLD
+  CANCELED
+}
+
+enum ManufacturedUnitStatus {
+  PLANNED
+  CANCELED
+}
+
+enum ManufacturingMemberFunction {
+  RESPONSIBLE
+  ENGINEERING
+  REVIEWER
+  OBSERVER
+}
+
+enum EngineeringDiscipline {
+  MECHANICAL
+  ELECTRICAL
+  PNEUMATIC
+  HYDRAULIC
+  AUTOMATION
+  SOFTWARE
+  QUALITY
+  GENERAL
+}
+
+enum EngineeringDocumentType {
+  DRAWING
+  SCHEMATIC
+  SPECIFICATION
+  DATASHEET
+  PROGRAM
+  MANUAL
+  CALCULATION
+  PROCEDURE
+  OTHER
+}
+
+enum EngineeringRevisionStatus {
+  DRAFT
+  IN_REVIEW
+  APPROVED
+  REJECTED
+  RELEASED
+  OBSOLETE
 }
 
 // Repuestos en una Orden de Servicio: primero se registran como necesarios (diagnóstico)
@@ -105,104 +156,113 @@ enum InventoryMovementSource {
 }
 
 model Tenant {
-  id         String   @id @default(cuid())
-  slug       String   @unique
-  name       String
+  id   String @id @default(cuid())
+  slug String @unique
+  name String
 
   // Branding opcional para reportes (resumen OS)
-  legalName  String?
-  taxId      String?
-  address    String?
-  phone      String?
-  email      String?
-  website    String?
-  logoUrl    String?
-  dashboardWorkHoursPerDay Float   @default(8)
-  dashboardWorkMonday      Boolean @default(true)
-  dashboardWorkMondayStartTime String @default("08:00")
-  dashboardWorkMondayEndTime String @default("17:00")
-  dashboardWorkMondayMealBreakMinutes Int @default(60)
-  dashboardWorkTuesday     Boolean @default(true)
-  dashboardWorkTuesdayStartTime String @default("08:00")
-  dashboardWorkTuesdayEndTime String @default("17:00")
-  dashboardWorkTuesdayMealBreakMinutes Int @default(60)
-  dashboardWorkWednesday   Boolean @default(true)
-  dashboardWorkWednesdayStartTime String @default("08:00")
-  dashboardWorkWednesdayEndTime String @default("17:00")
-  dashboardWorkWednesdayMealBreakMinutes Int @default(60)
-  dashboardWorkThursday    Boolean @default(true)
-  dashboardWorkThursdayStartTime String @default("08:00")
-  dashboardWorkThursdayEndTime String @default("17:00")
-  dashboardWorkThursdayMealBreakMinutes Int @default(60)
-  dashboardWorkFriday      Boolean @default(true)
-  dashboardWorkFridayStartTime String @default("08:00")
-  dashboardWorkFridayEndTime String @default("17:00")
-  dashboardWorkFridayMealBreakMinutes Int @default(60)
-  dashboardWorkSaturday    Boolean @default(false)
-  dashboardWorkSaturdayStartTime String @default("08:00")
-  dashboardWorkSaturdayEndTime String @default("17:00")
-  dashboardWorkSaturdayMealBreakMinutes Int @default(60)
-  dashboardWorkSunday      Boolean @default(false)
-  dashboardWorkSundayStartTime String @default("08:00")
-  dashboardWorkSundayEndTime String @default("17:00")
-  dashboardWorkSundayMealBreakMinutes Int @default(60)
-  dashboardExcludeNonWorkingDates Boolean @default(false)
-  dashboardNonWorkingDates        String[] @default([])
-  users      User[]
-  assets     Asset[]
-  rules      Rule[]
-  alerts     Alert[]
-  notices    Notice[]
-  workOrders WorkOrder[]
-  assignments WOAssignment[]
-  serviceOrderParts ServiceOrderPart[]
-  serviceOrderIssueNotes ServiceOrderIssueNote[]
-  workLog    WorkLog[]
-  inventory  InventoryItem[]
-  inventoryApplicabilities InventoryItemApplicability[]
-  inventoryStocks InventoryStock[]
-  inventoryMovements InventoryMovement[]
-  partsManuals PartsManual[]
-  partsManualPages PartsManualPage[]
-  partsManualHotspots PartsManualHotspot[]
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  legalName                              String?
+  taxId                                  String?
+  address                                String?
+  phone                                  String?
+  email                                  String?
+  website                                String?
+  logoUrl                                String?
+  dashboardWorkHoursPerDay               Float                        @default(8)
+  dashboardWorkMonday                    Boolean                      @default(true)
+  dashboardWorkMondayStartTime           String                       @default("08:00")
+  dashboardWorkMondayEndTime             String                       @default("17:00")
+  dashboardWorkMondayMealBreakMinutes    Int                          @default(60)
+  dashboardWorkTuesday                   Boolean                      @default(true)
+  dashboardWorkTuesdayStartTime          String                       @default("08:00")
+  dashboardWorkTuesdayEndTime            String                       @default("17:00")
+  dashboardWorkTuesdayMealBreakMinutes   Int                          @default(60)
+  dashboardWorkWednesday                 Boolean                      @default(true)
+  dashboardWorkWednesdayStartTime        String                       @default("08:00")
+  dashboardWorkWednesdayEndTime          String                       @default("17:00")
+  dashboardWorkWednesdayMealBreakMinutes Int                          @default(60)
+  dashboardWorkThursday                  Boolean                      @default(true)
+  dashboardWorkThursdayStartTime         String                       @default("08:00")
+  dashboardWorkThursdayEndTime           String                       @default("17:00")
+  dashboardWorkThursdayMealBreakMinutes  Int                          @default(60)
+  dashboardWorkFriday                    Boolean                      @default(true)
+  dashboardWorkFridayStartTime           String                       @default("08:00")
+  dashboardWorkFridayEndTime             String                       @default("17:00")
+  dashboardWorkFridayMealBreakMinutes    Int                          @default(60)
+  dashboardWorkSaturday                  Boolean                      @default(false)
+  dashboardWorkSaturdayStartTime         String                       @default("08:00")
+  dashboardWorkSaturdayEndTime           String                       @default("17:00")
+  dashboardWorkSaturdayMealBreakMinutes  Int                          @default(60)
+  dashboardWorkSunday                    Boolean                      @default(false)
+  dashboardWorkSundayStartTime           String                       @default("08:00")
+  dashboardWorkSundayEndTime             String                       @default("17:00")
+  dashboardWorkSundayMealBreakMinutes    Int                          @default(60)
+  dashboardExcludeNonWorkingDates        Boolean                      @default(false)
+  dashboardNonWorkingDates               String[]                     @default([])
+  users                                  User[]
+  assets                                 Asset[]
+  rules                                  Rule[]
+  alerts                                 Alert[]
+  notices                                Notice[]
+  workOrders                             WorkOrder[]
+  assignments                            WOAssignment[]
+  serviceOrderParts                      ServiceOrderPart[]
+  serviceOrderIssueNotes                 ServiceOrderIssueNote[]
+  workLog                                WorkLog[]
+  inventory                              InventoryItem[]
+  inventoryApplicabilities               InventoryItemApplicability[]
+  inventoryStocks                        InventoryStock[]
+  inventoryMovements                     InventoryMovement[]
+  partsManuals                           PartsManual[]
+  partsManualPages                       PartsManualPage[]
+  partsManualHotspots                    PartsManualHotspot[]
+  createdAt                              DateTime                     @default(now())
+  updatedAt                              DateTime                     @updatedAt
 
-  symptomCodes          SymptomCode[]
-  causeCodes            CauseCode[]
-  remedyCodes           RemedyCode[]
-  workOrderResolutions  WorkOrderResolution[]
-  workOrderPartUses     WorkOrderPartUsed[]
-  workMeasurements      WorkMeasurement[]
-  assetMeterReadings    AssetMeterReading[]
-  serviceOrderIssues    ServiceOrderIssue[]
-  serviceOrderCommercialNotes ServiceOrderCommercialNote[]
-  attachments           Attachment[]
-  workNotes             WorkNote[]
-  assetImportUploads    AssetImportUpload[]
-  devices               Device[]
-  ruleStates            RuleState[]
-  assetEvents           AssetEvent[]
-  pmPlans               PmPlan[]
-  assetMaintenancePlans AssetMaintenancePlan[]
+  symptomCodes                 SymptomCode[]
+  causeCodes                   CauseCode[]
+  remedyCodes                  RemedyCode[]
+  workOrderResolutions         WorkOrderResolution[]
+  workOrderPartUses            WorkOrderPartUsed[]
+  workMeasurements             WorkMeasurement[]
+  assetMeterReadings           AssetMeterReading[]
+  serviceOrderIssues           ServiceOrderIssue[]
+  serviceOrderCommercialNotes  ServiceOrderCommercialNote[]
+  attachments                  Attachment[]
+  workNotes                    WorkNote[]
+  assetImportUploads           AssetImportUpload[]
+  devices                      Device[]
+  ruleStates                   RuleState[]
+  assetEvents                  AssetEvent[]
+  pmPlans                      PmPlan[]
+  assetMaintenancePlans        AssetMaintenancePlan[]
   preventiveMaintenanceRecords AssetPreventiveMaintenance[]
-  goals                Goal[]
-  assemblyTemplates    AssemblyTemplate[]
-  assemblyTemplateSteps AssemblyTemplateStep[]
-  assemblyExecutions   AssemblyExecution[]
-  assemblyActivities   AssemblyActivity[]
+  goals                        Goal[]
+  assemblyTemplates            AssemblyTemplate[]
+  assemblyTemplateSteps        AssemblyTemplateStep[]
+  assemblyExecutions           AssemblyExecution[]
+  assemblyActivities           AssemblyActivity[]
+  assemblyScheduleRevisions    AssemblyScheduleRevision[]
+  assemblyOperationalAlerts    AssemblyOperationalAlert[]
+  manufacturingNumberSequences ManufacturingNumberSequence[]
+  manufacturingOrders          ManufacturingOrder[]
+  manufacturedUnits            ManufacturedUnit[]
+  manufacturingOrderMembers    ManufacturingOrderMember[]
+  manufacturingAuditEvents     ManufacturingAuditEvent[]
+  engineeringDocuments         EngineeringDocument[]
+  engineeringDocumentRevisions EngineeringDocumentRevision[]
 
-  workOrderReports      WorkOrderReport[]
+  workOrderReports WorkOrderReport[]
 }
 
 model Goal {
-  id        String   @id @default(cuid())
-  tenantId  String
-  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  metric    String
-  period    String
-  target    Int
+  metric String
+  period String
+  target Int
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -217,21 +277,21 @@ enum WorkOrderReportAudience {
 }
 
 model WorkOrderReport {
-  id          String   @id @default(cuid())
-  tenantId    String
-  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   workOrderId String
   workOrder   WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
 
-  audience    WorkOrderReportAudience
-  version     Int
+  audience WorkOrderReportAudience
+  version  Int
 
   // Snapshot (inmutable) del reporte al momento de generar
-  data        Json
+  data Json
 
   createdByUserId String
-  createdAt   DateTime @default(now())
+  createdAt       DateTime @default(now())
 
   @@unique([tenantId, workOrderId, audience, version])
   @@index([tenantId, workOrderId, audience])
@@ -239,21 +299,24 @@ model WorkOrderReport {
 }
 
 model User {
-  id        String   @id @default(cuid())
-  tenantId  String
-  tenant    Tenant   @relation(fields: [tenantId], references: [id])
-  email     String
-  password  String
-  authVersion Int    @default(0)
-  role      Role     @default(ADMIN)
-  name      String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id          String   @id @default(cuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id])
+  email       String
+  password    String
+  authVersion Int      @default(0)
+  role        Role     @default(ADMIN)
+  name        String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
-  assignments WOAssignment[]
-  serviceOrderParts ServiceOrderPart[]
-  assetMeterReadings AssetMeterReading[]
-  preventiveMaintenanceRecords AssetPreventiveMaintenance[]
+  assignments                    WOAssignment[]
+  serviceOrderParts              ServiceOrderPart[]
+  assetMeterReadings             AssetMeterReading[]
+  preventiveMaintenanceRecords   AssetPreventiveMaintenance[]
+  manufacturingOrdersResponsible ManufacturingOrder[]         @relation("ManufacturingOrderResponsible")
+  manufacturingOrdersCreated     ManufacturingOrder[]         @relation("ManufacturingOrderCreatedBy")
+  manufacturingOrderMemberships  ManufacturingOrderMember[]
 
   @@unique([tenantId, email])
 }
@@ -271,48 +334,49 @@ enum AssetCriticality {
 }
 
 model Asset {
-  id              String   @id @default(cuid())
-  tenantId        String
-  tenant          Tenant   @relation(fields: [tenantId], references: [id])
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id])
 
-  code            String
-  name            String
-  customer        String?
-  brand           String?
-  model           String?
-  serialNumber    String?
-  nominalPower    Float?
+  code             String
+  name             String
+  customer         String?
+  brand            String?
+  model            String?
+  serialNumber     String?
+  nominalPower     Float?
   nominalPowerUnit String?
 
-  status          AssetStatus      @default(ACTIVE)
-  criticality     AssetCriticality @default(MEDIUM)
+  status      AssetStatus      @default(ACTIVE)
+  criticality AssetCriticality @default(MEDIUM)
 
-  categoryId      String?
-  parentAssetId   String?
-  locationId      String?
-  supplierId      String?
+  categoryId    String?
+  parentAssetId String?
+  locationId    String?
+  supplierId    String?
 
-  slug            String?
-  barcode         String?
-  qrCodeData      String?
-  ingestKey       String?
+  slug             String?
+  barcode          String?
+  qrCodeData       String?
+  ingestKey        String?
   assetTopicPrefix String?
   defaultRuleSetId String?
 
-  acquiredOn      DateTime?
-  guarantee       DateTime?
+  acquiredOn        DateTime?
+  guarantee         DateTime?
   latestHourmeter   Float?
   latestHourmeterAt DateTime?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 
-  attachments     Attachment[]
-  devices         Device[]
-  rules           Rule[]
-  assetEvents     AssetEvent[]
-  maintenancePlan AssetMaintenancePlan?
-  meterReadings   AssetMeterReading[]
+  attachments                  Attachment[]
+  devices                      Device[]
+  rules                        Rule[]
+  assetEvents                  AssetEvent[]
+  maintenancePlan              AssetMaintenancePlan?
+  meterReadings                AssetMeterReading[]
   preventiveMaintenanceRecords AssetPreventiveMaintenance[]
+  manufacturedUnit             ManufacturedUnit?
 
   @@unique([tenantId, code])
   @@unique([tenantId, serialNumber])
@@ -324,30 +388,29 @@ model Asset {
 
 // Modelo para almacenar uploads temporales de importación de Assets
 model AssetImportUpload {
-id            String @id @default(cuid())
-tenantId      String
-tenant        Tenant @relation(fields: [tenantId], references: [id])
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id])
 
-originalName  String
-mimeType      String
-size          Int
-sha256        String
-storagePath   String
-status ImportStatus @default(PENDING)
+  originalName String
+  mimeType     String
+  size         Int
+  sha256       String
+  storagePath  String
+  status       ImportStatus @default(PENDING)
 
-createdAt DateTime @default(now())
-expiresAt DateTime?
+  createdAt DateTime  @default(now())
+  expiresAt DateTime?
 
-@@index([tenantId, createdAt])
+  @@index([tenantId, createdAt])
 }
 
 enum ImportStatus {
-PENDING
-COMMITTED
-EXPIRED
-FAILED
+  PENDING
+  COMMITTED
+  EXPIRED
+  FAILED
 }
-
 
 model Alert {
   id        String   @id @default(cuid())
@@ -355,30 +418,31 @@ model Alert {
   tenant    Tenant   @relation(fields: [tenantId], references: [id])
   assetCode String
   sensor    String
-  kind      String   // THRESHOLD | ROC
+  kind      String // THRESHOLD | ROC
   message   String
   status    String   @default("OPEN")
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   notices   Notice[]
+
   @@index([tenantId, assetCode, sensor])
 }
 
 model Notice {
-  id               String         @id @default(cuid())
-  tenantId         String
-  tenant           Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  source           NoticeSource
-  alertId          String?
-  alert            Alert?         @relation(fields: [alertId], references: [id])
+  source  NoticeSource
+  alertId String?
+  alert   Alert?       @relation(fields: [alertId], references: [id])
 
-  assetCode        String
-  title            String
-  body             String?
-  category         NoticeCategory?
-  severity         Severity?
-  status           NoticeStatus   @default(OPEN)
+  assetCode String
+  title     String
+  body      String?
+  category  NoticeCategory?
+  severity  Severity?
+  status    NoticeStatus    @default(OPEN)
 
   createdByUserId  String
   assignedToUserId String?
@@ -386,105 +450,106 @@ model Notice {
   startedAt        DateTime?
   resolvedAt       DateTime?
   downtimeMin      Int?
-  tags             String[]       @default([])
+  tags             String[]  @default([])
   attachments      Json?
 
-  createdAt        DateTime       @default(now())
-  updatedAt        DateTime       @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  workOrders       WorkOrder[]
+  workOrders WorkOrder[]
 
   @@index([tenantId, status])
   @@index([tenantId, assetCode, status])
   @@index([tenantId, createdAt])
 }
 
-enum NoticeSource { 
+enum NoticeSource {
   RULE
   MANUAL
-  IMPORT 
+  IMPORT
 }
-enum NoticeCategory { 
+
+enum NoticeCategory {
   INCIDENT
   MAINT_LOG
   CONSUMABLE_CHANGE
   INSPECTION
-  OTHER 
+  OTHER
 }
+
 enum NoticeStatus {
   OPEN
-  IN_PROGRESS 
-  RESOLVED 
-  CLOSED 
-}
-enum Severity { 
-  LOW 
-  MEDIUM 
-  HIGH 
-  CRITICAL 
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
 }
 
+enum Severity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
 
 model WorkOrder {
-  id          String   @id @default(cuid())
-  tenantId    String
-  tenant      Tenant   @relation(fields: [tenantId], references: [id])
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id])
 
-  noticeId    String?
-  notice      Notice?  @relation(fields: [noticeId], references: [id])
+  noticeId String?
+  notice   Notice? @relation(fields: [noticeId], references: [id])
 
-  assetCode   String
-  title       String
-  description String?
-  status      WorkOrderStatus  @default(OPEN)
+  assetCode        String
+  title            String
+  description      String?
+  status           WorkOrderStatus               @default(OPEN)
   commercialStatus ServiceOrderCommercialStatus?
-  priority    WorkOrderPriority?
+  priority         WorkOrderPriority?
 
-
-  kind        WorkOrderKind     @default(WORK_ORDER)
-  serviceOrderType ServiceOrderType?
-  pmPlanId     String?
-  pmPlan       PmPlan?            @relation(fields: [pmPlanId], references: [id])
+  kind                        WorkOrderKind               @default(WORK_ORDER)
+  serviceOrderType            ServiceOrderType?
+  pmPlanId                    String?
+  pmPlan                      PmPlan?                     @relation(fields: [pmPlanId], references: [id])
   preventiveMaintenanceRecord AssetPreventiveMaintenance?
 
-  hasIssue     Boolean            @default(false)
-  formData     Json?
+  hasIssue Boolean @default(false)
+  formData Json?
 
-  takenAt              DateTime?
-  arrivedAt            DateTime?
-  checkInAt            DateTime?
-  activityStartedAt    DateTime?
-  activityFinishedAt   DateTime?
-  deliveredAt          DateTime?
+  takenAt            DateTime?
+  arrivedAt          DateTime?
+  checkInAt          DateTime?
+  activityStartedAt  DateTime?
+  activityFinishedAt DateTime?
+  deliveredAt        DateTime?
 
-  technicianSignature  String?
-  receiverSignature    String?
-  dueDate     DateTime?
-  durationMin Int? @default(60)
-  startedAt   DateTime?
-  completedAt DateTime?
+  technicianSignature String?
+  receiverSignature   String?
+  dueDate             DateTime?
+  durationMin         Int?      @default(60)
+  startedAt           DateTime?
+  completedAt         DateTime?
 
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  assignments WOAssignment[]
-  serviceOrderParts ServiceOrderPart[]
-  sourceLinkedServiceOrderParts ServiceOrderPart[] @relation("ServiceOrderPartSourceOrder")
-  replacementLinkedServiceOrderParts ServiceOrderPart[] @relation("ServiceOrderPartReplacementOrder")
-  serviceOrderIssueNotes ServiceOrderIssueNote[]
-  sourceLinkedServiceOrderIssueNotes ServiceOrderIssueNote[] @relation("ServiceOrderIssueNoteSourceOrder")
-  executedLinkedServiceOrderIssueNotes ServiceOrderIssueNote[] @relation("ServiceOrderIssueNoteExecutedOrder")
-  workLogs    WorkLog[]
-  reports     WorkOrderReport[]
-  workOrderResolutions WorkOrderResolution[]
-  workOrderPartUses WorkOrderPartUsed[]
-  workMeasurements   WorkMeasurement[]
-  meterReadings      AssetMeterReading[]
-  serviceOrderIssue  ServiceOrderIssue?
-  commercialNotes    ServiceOrderCommercialNote[]
-  attachments        Attachment[]
-  workNotes          WorkNote[]
-  assemblyExecution  AssemblyExecution?
+  assignments                          WOAssignment[]
+  serviceOrderParts                    ServiceOrderPart[]
+  sourceLinkedServiceOrderParts        ServiceOrderPart[]           @relation("ServiceOrderPartSourceOrder")
+  replacementLinkedServiceOrderParts   ServiceOrderPart[]           @relation("ServiceOrderPartReplacementOrder")
+  serviceOrderIssueNotes               ServiceOrderIssueNote[]
+  sourceLinkedServiceOrderIssueNotes   ServiceOrderIssueNote[]      @relation("ServiceOrderIssueNoteSourceOrder")
+  executedLinkedServiceOrderIssueNotes ServiceOrderIssueNote[]      @relation("ServiceOrderIssueNoteExecutedOrder")
+  workLogs                             WorkLog[]
+  reports                              WorkOrderReport[]
+  workOrderResolutions                 WorkOrderResolution[]
+  workOrderPartUses                    WorkOrderPartUsed[]
+  workMeasurements                     WorkMeasurement[]
+  meterReadings                        AssetMeterReading[]
+  serviceOrderIssue                    ServiceOrderIssue?
+  commercialNotes                      ServiceOrderCommercialNote[]
+  attachments                          Attachment[]
+  workNotes                            WorkNote[]
+  assemblyExecution                    AssemblyExecution?
 
   @@index([tenantId, status])
   @@index([tenantId, commercialStatus])
@@ -529,32 +594,32 @@ enum ServiceOrderIssueStatus {
 }
 
 model ServiceOrderIssue {
-  id                  String   @id @default(cuid())
-  tenantId            String
-  tenant              Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  workOrderId         String   @unique
-  workOrder           WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  workOrderId String    @unique
+  workOrder   WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
 
-  status              ServiceOrderIssueStatus @default(OPEN)
-  openedAt            DateTime @default(now())
-  openedByUserId      String?
-  ownerUserId         String?
-  targetResolutionAt  DateTime?
-  lastFollowUpAt      DateTime?
-  followUpNote        String?
+  status             ServiceOrderIssueStatus @default(OPEN)
+  openedAt           DateTime                @default(now())
+  openedByUserId     String?
+  ownerUserId        String?
+  targetResolutionAt DateTime?
+  lastFollowUpAt     DateTime?
+  followUpNote       String?
 
-  resolutionSummary   String?
+  resolutionSummary     String?
   resolutionWorkOrderId String?
-  resolvedAt          DateTime?
-  resolvedByUserId    String?
+  resolvedAt            DateTime?
+  resolvedByUserId      String?
 
-  verifiedAt          DateTime?
-  verifiedByUserId    String?
-  verificationNotes   String?
+  verifiedAt        DateTime?
+  verifiedByUserId  String?
+  verificationNotes String?
 
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([tenantId, status, updatedAt(sort: Desc)])
   @@index([tenantId, ownerUserId, status])
@@ -562,21 +627,21 @@ model ServiceOrderIssue {
 }
 
 model WOAssignment {
-  id           String           @id @default(cuid())
-  tenantId     String
-  tenant       Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  workOrderId  String
-  workOrder    WorkOrder        @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  workOrderId String
+  workOrder   WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
 
-  userId       String
-  user         User?            @relation(fields: [userId], references: [id])
-  role         AssignmentRole   @default(TECHNICIAN)
-  state        AssignmentState  @default(ACTIVE)
-  note         String?
-  
-  createdAt    DateTime         @default(now())
-  updatedAt    DateTime         @updatedAt
+  userId String
+  user   User?           @relation(fields: [userId], references: [id])
+  role   AssignmentRole  @default(TECHNICIAN)
+  state  AssignmentState @default(ACTIVE)
+  note   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([tenantId, workOrderId, state])
   @@index([tenantId, userId, state])
@@ -593,25 +658,25 @@ enum AssignmentState {
 }
 
 model WorkLog {
-  id             String         @id @default(cuid())
-  tenantId       String
-  tenant         Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  workOrderId    String
-  workOrder      WorkOrder      @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  workOrderId String
+  workOrder   WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
 
   assemblyActivityId String?
   assemblyActivity   AssemblyActivity? @relation(fields: [assemblyActivityId], references: [id], onDelete: SetNull)
 
-  userId         String
-  source         WorkLogSource  @default(MANUAL)
-  note           String?
+  userId String
+  source WorkLogSource @default(MANUAL)
+  note   String?
 
-  startedAt      DateTime
-  endedAt        DateTime?
+  startedAt DateTime
+  endedAt   DateTime?
 
-  createdAt      DateTime       @default(now())
-  updatedAt      DateTime       @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([tenantId, workOrderId])
   @@index([tenantId, assemblyActivityId])
@@ -660,6 +725,7 @@ model AssemblyTemplateStep {
   instructions       String?
   estimatedMinutes   Int
   plannedTechnicians Int              @default(1)
+  dependsOnPositions Json             @default("[]")
   required           Boolean          @default(true)
   evidenceRequired   Boolean          @default(false)
 
@@ -687,16 +753,45 @@ model AssemblyExecution {
   status              AssemblyExecutionStatus @default(PLANNED)
   plannedMinutes      Int
   plannedLaborMinutes Int
+  scheduledStartAt    DateTime?
+  scheduleTimezone    String                  @default("America/Bogota")
+  workdayStartMinute  Int                     @default(480)
+  workdayEndMinute    Int                     @default(1020)
+  workingDays         Json                    @default("[1,2,3,4,5]")
+  excludedDates       Json                    @default("[]")
+  scheduleVersion     Int                     @default(1)
   startedAt           DateTime?
   completedAt         DateTime?
 
-  activities AssemblyActivity[]
+  activities        AssemblyActivity[]
+  scheduleRevisions AssemblyScheduleRevision[]
+  operationalAlerts AssemblyOperationalAlert[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([tenantId, status, updatedAt(sort: Desc)])
   @@index([tenantId, templateId])
+}
+
+model AssemblyScheduleRevision {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  executionId     String
+  execution       AssemblyExecution @relation(fields: [executionId], references: [id], onDelete: Cascade)
+  version         Int
+  reason          String
+  createdByUserId String
+  createdByName   String
+  baselineStartAt DateTime
+  baselineEndAt   DateTime
+  snapshot        Json
+  createdAt       DateTime          @default(now())
+
+  @@unique([executionId, version])
+  @@index([tenantId, executionId, createdAt(sort: Desc)])
 }
 
 model AssemblyActivity {
@@ -714,6 +809,7 @@ model AssemblyActivity {
   instructions       String?
   estimatedMinutes   Int
   plannedTechnicians Int                    @default(1)
+  dependsOnPositions Json                   @default("[]")
   required           Boolean                @default(true)
   evidenceRequired   Boolean                @default(false)
   status             AssemblyActivityStatus @default(PENDING)
@@ -725,7 +821,9 @@ model AssemblyActivity {
   completedAt        DateTime?
   completedByUserId  String?
 
-  workLogs WorkLog[]
+  workLogs          WorkLog[]
+  attachments       Attachment[]               @relation("AssemblyActivityAttachments")
+  operationalAlerts AssemblyOperationalAlert[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -733,6 +831,38 @@ model AssemblyActivity {
   @@unique([executionId, position])
   @@index([tenantId, executionId, position])
   @@index([tenantId, status])
+}
+
+model AssemblyOperationalAlert {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  executionId String
+  execution   AssemblyExecution @relation(fields: [executionId], references: [id], onDelete: Cascade)
+  activityId  String?
+  activity    AssemblyActivity? @relation(fields: [activityId], references: [id], onDelete: Cascade)
+
+  fingerprint        String    @unique
+  code               String
+  severity           String
+  status             String    @default("OPEN")
+  message            String
+  assignedUserId     String?
+  acknowledgedAt     DateTime?
+  acknowledgedById   String?
+  acknowledgedByName String?
+  resolvedAt         DateTime?
+  firstDetectedAt    DateTime  @default(now())
+  lastDetectedAt     DateTime  @default(now())
+  escalationLevel    Int       @default(0)
+  escalatedAt        DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  @@index([tenantId, status, escalationLevel, firstDetectedAt])
+  @@index([tenantId, assignedUserId, status])
+  @@index([executionId, activityId, code])
 }
 
 model InventoryItem {
@@ -780,9 +910,9 @@ model InventoryItem {
 }
 
 model InventoryItemApplicability {
-  id              String        @id @default(cuid())
-  tenantId        String
-  tenant          Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   inventoryItemId String
   inventoryItem   InventoryItem @relation(fields: [inventoryItemId], references: [id], onDelete: Cascade)
@@ -795,12 +925,12 @@ model InventoryItemApplicability {
   appliedDateTo   DateTime?
   itemNo          String?
   qtyPerEquipment Float?
-  isOptional      Boolean       @default(false)
+  isOptional      Boolean   @default(false)
   manualRemark    String?
   manualPageRef   String?
 
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([tenantId, inventoryItemId])
   @@index([tenantId, equipmentModel, variant])
@@ -808,57 +938,57 @@ model InventoryItemApplicability {
 }
 
 model InventoryStock {
-  id              String        @id @default(cuid())
-  tenantId        String
-  tenant          Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   inventoryItemId String
   inventoryItem   InventoryItem @relation(fields: [inventoryItemId], references: [id], onDelete: Cascade)
 
-  warehouse       String?
-  binLocation     String?
-  stockOnHand     Float         @default(0)
-  stockReserved   Float?
-  stockMin        Float?
-  stockMax        Float?
-  reorderPoint    Float?
-  reorderQty      Float?
+  warehouse     String?
+  binLocation   String?
+  stockOnHand   Float   @default(0)
+  stockReserved Float?
+  stockMin      Float?
+  stockMax      Float?
+  reorderPoint  Float?
+  reorderQty    Float?
 
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  movements       InventoryMovement[]
+  movements InventoryMovement[]
 
   @@index([tenantId, inventoryItemId])
   @@index([tenantId, warehouse, binLocation])
 }
 
 model InventoryMovement {
-  id              String                  @id @default(cuid())
-  tenantId        String
-  tenant          Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   inventoryItemId String
-  inventoryItem   InventoryItem           @relation(fields: [inventoryItemId], references: [id], onDelete: Cascade)
+  inventoryItem   InventoryItem @relation(fields: [inventoryItemId], references: [id], onDelete: Cascade)
 
   inventoryStockId String?
-  inventoryStock   InventoryStock?        @relation(fields: [inventoryStockId], references: [id], onDelete: SetNull)
+  inventoryStock   InventoryStock? @relation(fields: [inventoryStockId], references: [id], onDelete: SetNull)
 
-  movementType    InventoryMovementType
-  source          InventoryMovementSource
-  qty             Float
-  stockDelta      Float
-  balanceAfter    Float?
-  warehouse       String?
-  binLocation     String?
-  unitCost        Float?
+  movementType InventoryMovementType
+  source       InventoryMovementSource
+  qty          Float
+  stockDelta   Float
+  balanceAfter Float?
+  warehouse    String?
+  binLocation  String?
+  unitCost     Float?
 
   referenceType   String?
   referenceId     String?
   referenceLabel  String?
   note            String?
   createdByUserId String?
-  createdAt       DateTime                @default(now())
+  createdAt       DateTime @default(now())
 
   @@index([tenantId, inventoryItemId, createdAt(sort: Desc)])
   @@index([tenantId, movementType, createdAt(sort: Desc)])
@@ -868,9 +998,9 @@ model InventoryMovement {
 }
 
 model PartsManual {
-  id             String   @id @default(cuid())
-  tenantId       String
-  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   brand          String?
   equipmentModel String
@@ -878,65 +1008,64 @@ model PartsManual {
   name           String
   sourcePdfUrl   String?
 
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  pages          PartsManualPage[]
+  pages PartsManualPage[]
 
   @@index([tenantId, brand, equipmentModel])
   @@index([tenantId, equipmentModel, variant])
 }
 
 model PartsManualPage {
-  id          String      @id @default(cuid())
-  tenantId    String
-  tenant      Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  manualId    String
-  manual      PartsManual @relation(fields: [manualId], references: [id], onDelete: Cascade)
+  manualId String
+  manual   PartsManual @relation(fields: [manualId], references: [id], onDelete: Cascade)
 
-  pageNumber  Int
-  title       String?
-  imageUrl    String
+  pageNumber Int
+  title      String?
+  imageUrl   String
 
-  createdAt   DateTime    @default(now())
-  updatedAt   DateTime    @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  hotspots    PartsManualHotspot[]
+  hotspots PartsManualHotspot[]
 
   @@index([tenantId, manualId, pageNumber])
 }
 
 model PartsManualHotspot {
-  id              String        @id @default(cuid())
-  tenantId        String
-  tenant          Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  manualPageId    String
-  manualPage      PartsManualPage @relation(fields: [manualPageId], references: [id], onDelete: Cascade)
+  manualPageId String
+  manualPage   PartsManualPage @relation(fields: [manualPageId], references: [id], onDelete: Cascade)
 
   inventoryItemId String?
   inventoryItem   InventoryItem? @relation(fields: [inventoryItemId], references: [id], onDelete: SetNull)
 
-  itemNo          String
-  label           String?
-  oemPartNo       String?
-  x               Float
-  y               Float
-  width           Float
-  height          Float
-  qtyHint         Float?
-  notes           String?
+  itemNo    String
+  label     String?
+  oemPartNo String?
+  x         Float
+  y         Float
+  width     Float
+  height    Float
+  qtyHint   Float?
+  notes     String?
 
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([tenantId, manualPageId])
   @@index([tenantId, itemNo])
   @@index([tenantId, oemPartNo])
   @@index([tenantId, inventoryItemId])
 }
-
 
 /// === Catálogos por tenant ===
 model SymptomCode {
@@ -989,48 +1118,48 @@ model RemedyCode {
 
 /// === Desarrollo/Resolución de la OT ===
 model WorkOrderResolution {
-  id                        String   @id @default(cuid())
-  tenantId                  String
-  tenant                    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  workOrderId               String   @unique
-  workOrder                 WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  workOrderId String    @unique
+  workOrder   WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
 
-  symptomCodeId             String?
-  symptomCode               SymptomCode? @relation(fields: [symptomCodeId], references: [id])
-  symptomOther              String?
+  symptomCodeId String?
+  symptomCode   SymptomCode? @relation(fields: [symptomCodeId], references: [id])
+  symptomOther  String?
 
-  causeCodeId               String?
-  causeCode                 CauseCode?   @relation(fields: [causeCodeId], references: [id])
-  causeOther                String?
-  rootCauseText             String?
+  causeCodeId   String?
+  causeCode     CauseCode? @relation(fields: [causeCodeId], references: [id])
+  causeOther    String?
+  rootCauseText String?
 
-  remedyCodeId              String?
-  remedyCode                RemedyCode?  @relation(fields: [remedyCodeId], references: [id])
-  remedyOther               String?
-  solutionSummary           String?
-  preventiveRecommendation  String?
+  remedyCodeId             String?
+  remedyCode               RemedyCode? @relation(fields: [remedyCodeId], references: [id])
+  remedyOther              String?
+  solutionSummary          String?
+  preventiveRecommendation String?
 
-  resolvedByUserId          String?
-  resolvedAt                DateTime?
-  verifiedByUserId          String?
-  verifiedAt                DateTime?
-  verificationNotes         String?
+  resolvedByUserId  String?
+  resolvedAt        DateTime?
+  verifiedByUserId  String?
+  verifiedAt        DateTime?
+  verificationNotes String?
 
-  createdAt                 DateTime @default(now())
-  updatedAt                 DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([tenantId, workOrderId])
 }
 
 /// === Partes usadas ===
 model WorkOrderPartUsed {
-  id            String   @id @default(cuid())
-  tenantId      String
-  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  workOrderId   String
-  workOrder     WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  workOrderId String
+  workOrder   WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
 
   inventoryItemId String?
   freeText        String?
@@ -1064,31 +1193,31 @@ enum MeterReadingSource {
 }
 
 model AssetMeterReading {
-  id              String   @id @default(cuid())
-  tenantId        String
-  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  assetId         String
-  asset           Asset    @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  assetId String
+  asset   Asset  @relation(fields: [assetId], references: [id], onDelete: Cascade)
 
-  workOrderId     String?
-  workOrder       WorkOrder? @relation(fields: [workOrderId], references: [id], onDelete: SetNull)
+  workOrderId String?
+  workOrder   WorkOrder? @relation(fields: [workOrderId], references: [id], onDelete: SetNull)
 
-  meterType       MeterType @default(HOURMETER)
-  source          MeterReadingSource @default(MANUAL_OS)
-  phase           MeasurementPhase @default(OTHER)
+  meterType MeterType          @default(HOURMETER)
+  source    MeterReadingSource @default(MANUAL_OS)
+  phase     MeasurementPhase   @default(OTHER)
 
-  reading         Float
-  readingAt       DateTime
-  note            String?
+  reading   Float
+  readingAt DateTime
+  note      String?
 
   deltaFromPrevious Float?
 
   createdByUserId String?
-  createdByUser   User?    @relation(fields: [createdByUserId], references: [id])
+  createdByUser   User?   @relation(fields: [createdByUserId], references: [id])
 
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([tenantId, assetId, readingAt(sort: Desc)])
   @@index([tenantId, workOrderId])
@@ -1096,51 +1225,60 @@ model AssetMeterReading {
 }
 
 model WorkMeasurement {
-  id          String   @id @default(cuid())
-  tenantId    String
-  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   workOrderId String
   workOrder   WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
 
-  type        String
+  type         String
   valueNumeric Float?
   valueText    String?
-  unit        String?
-  phase       MeasurementPhase @default(OTHER)
-  takenAt     DateTime @default(now())
+  unit         String?
+  phase        MeasurementPhase @default(OTHER)
+  takenAt      DateTime         @default(now())
 
   createdByUserId String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
   @@index([tenantId, workOrderId])
 }
 
 /// === Adjuntos ===
 model Attachment {
-  id          String    @id @default(cuid())
-  tenantId    String
-  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   workOrderId String?
   workOrder   WorkOrder? @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
 
-  assetId     String?
-  asset       Asset?     @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  assetId String?
+  asset   Asset?  @relation(fields: [assetId], references: [id], onDelete: Cascade)
 
-  type        AttachmentType
-  filename    String
-  mimeType    String
-  size        Int
-  url         String
-  createdBy   String
-  createdAt   DateTime  @default(now())
-  isAssetPhoto Boolean  @default(false)
+  assemblyActivityId String?
+  assemblyActivity   AssemblyActivity? @relation("AssemblyActivityAttachments", fields: [assemblyActivityId], references: [id], onDelete: SetNull)
+
+  manufacturingOrderId String?
+  manufacturingOrder   ManufacturingOrder? @relation(fields: [manufacturingOrderId], references: [id], onDelete: Cascade)
+  engineeringRevisionFile EngineeringDocumentRevision? @relation("EngineeringRevisionFile")
+
+  type         AttachmentType
+  filename     String
+  mimeType     String
+  size         Int
+  url          String
+  createdBy    String
+  createdAt    DateTime       @default(now())
+  isAssetPhoto Boolean        @default(false)
 
   @@index([tenantId, workOrderId, createdAt(sort: Desc)])
   @@index([tenantId, assetId, createdAt(sort: Desc)])
   @@index([tenantId, assetId, isAssetPhoto])
+  @@index([tenantId, assemblyActivityId, createdAt(sort: Desc)])
+  @@index([tenantId, manufacturingOrderId, createdAt(sort: Desc)])
 }
 
 enum AttachmentType {
@@ -1150,41 +1288,39 @@ enum AttachmentType {
   DOCUMENT
 }
 
-
 /// === Notas técnicas ===
 model WorkNote {
-  id          String   @id @default(cuid())
-  tenantId    String
-  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   workOrderId String
   workOrder   WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
 
-  note        String
+  note          String
   addedByUserId String
-  addedAt     DateTime @default(now())
+  addedAt       DateTime @default(now())
 
   @@index([tenantId, workOrderId, addedAt])
 }
 
 model ServiceOrderCommercialNote {
-  id               String   @id @default(cuid())
-  tenantId         String
-  tenant           Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  workOrderId      String
-  workOrder        WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  workOrderId String
+  workOrder   WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
 
   commercialStatus ServiceOrderCommercialStatus?
   comment          String
   eventAt          DateTime
   addedByUserId    String
-  createdAt        DateTime @default(now())
+  createdAt        DateTime                      @default(now())
 
   @@index([tenantId, workOrderId, eventAt(sort: Desc)])
   @@index([tenantId, addedByUserId, createdAt(sort: Desc)])
 }
-
 
 /// 
 /// IoT
@@ -1195,7 +1331,6 @@ enum DeviceType {
   GENERIC_MCU
   EDGE_GATEWAY
 }
-
 
 enum RuleKind {
   THRESHOLD
@@ -1211,23 +1346,23 @@ enum EventStatus {
 
 /// MODELS
 model Device {
-  id            String        @id @default(cuid())
-  tenantId      String
-  tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  assetId       String?
-  asset         Asset?          @relation(fields: [assetId], references: [id], onDelete: SetNull)
+  assetId String?
+  asset   Asset?  @relation(fields: [assetId], references: [id], onDelete: SetNull)
 
-  name          String
-  code          String          @unique
-  model         String?
-  manufacturer  String?
-  description   String?
-  ingestKey     String          @unique
-  status        DeviceStatus    @default(ACTIVE)
-  lastSeenAt    DateTime?
-  createdAt     DateTime        @default(now())
-  updatedAt     DateTime        @updatedAt
+  name         String
+  code         String       @unique
+  model        String?
+  manufacturer String?
+  description  String?
+  ingestKey    String       @unique
+  status       DeviceStatus @default(ACTIVE)
+  lastSeenAt   DateTime?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
 
   @@index([tenantId, assetId])
 }
@@ -1239,88 +1374,87 @@ enum DeviceStatus {
 }
 
 model Rule {
-  id         String    @id @default(cuid())
-  tenantId   String
-  tenant     Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  name       String
-  kind       RuleKind
-  severity   Severity  @default(MEDIUM)
-  enabled    Boolean   @default(true)
+  name     String
+  kind     RuleKind
+  severity Severity @default(MEDIUM)
+  enabled  Boolean  @default(true)
 
   // ámbito de aplicación: por asset o por device (uno de los dos)
-  assetId    String?
-  asset      Asset?    @relation(fields: [assetId], references: [id], onDelete: SetNull)
-  deviceId   String?
+  assetId  String?
+  asset    Asset?  @relation(fields: [assetId], references: [id], onDelete: SetNull)
+  deviceId String?
 
   // métrica a evaluar (ej: "rms_g", "temp_c") y parámetros de la regla (JSON)
-  metric     String
-  params     Json      // { min?:number, max?:number, windowSec?:number, rocLimit?:number, hysteresis?:number, cooldownSec?:number }
+  metric String
+  params Json // { min?:number, max?:number, windowSec?:number, rocLimit?:number, hysteresis?:number, cooldownSec?:number }
 
-  createdAt  DateTime  @default(now())
-  updatedAt  DateTime  @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  state      RuleState?
-  events     AssetEvent[]
+  state  RuleState?
+  events AssetEvent[]
 
   @@index([tenantId, metric, enabled])
 }
 
 model RuleState {
-  id         String   @id @default(cuid())
-  tenantId   String
-  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  ruleId     String   @unique
-  rule       Rule     @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  ruleId String @unique
+  rule   Rule   @relation(fields: [ruleId], references: [id], onDelete: Cascade)
 
-  status     String   @default("NORMAL") // NORMAL | ALERTING
+  status       String   @default("NORMAL") // NORMAL | ALERTING
   lastChangeAt DateTime @default(now())
-  data       Json?
+  data         Json?
 }
 
 model AssetEvent {
-  id         String     @id @default(cuid())
-  tenantId   String
-  tenant     Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  assetId    String
-  asset      Asset      @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  assetId String
+  asset   Asset  @relation(fields: [assetId], references: [id], onDelete: Cascade)
 
-  deviceId   String?
+  deviceId String?
 
-  ruleId     String?
-  rule       Rule?      @relation(fields: [ruleId], references: [id], onDelete: SetNull)
+  ruleId String?
+  rule   Rule?   @relation(fields: [ruleId], references: [id], onDelete: SetNull)
 
-  message    String
-  severity   Severity   @default(MEDIUM)
-  status     EventStatus @default(OPEN)
+  message  String
+  severity Severity    @default(MEDIUM)
+  status   EventStatus @default(OPEN)
 
-  createdAt  DateTime   @default(now())
-  closedAt   DateTime?
+  createdAt DateTime  @default(now())
+  closedAt  DateTime?
 
   @@index([tenantId, assetId, createdAt(sort: Desc)])
   @@index([tenantId, status, severity, createdAt(sort: Desc)])
 }
 
-
 model PmPlan {
-  id                         String   @id @default(cuid())
-  tenantId                   String
-  tenant                     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  name                        String
-  intervalHours               Int?
-  description                 String?
-  defaultDurationMin          Int      @default(60)
-  checklist                   Json?
-  active                      Boolean  @default(true)
+  name               String
+  intervalHours      Int?
+  description        String?
+  defaultDurationMin Int     @default(60)
+  checklist          Json?
+  active             Boolean @default(true)
 
-  createdAt                   DateTime @default(now())
-  updatedAt                   DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  workOrders                  WorkOrder[]
-  assetMaintenancePlans       AssetMaintenancePlan[]
+  workOrders                   WorkOrder[]
+  assetMaintenancePlans        AssetMaintenancePlan[]
   preventiveMaintenanceRecords AssetPreventiveMaintenance[]
 
   @@unique([tenantId, name])
@@ -1339,56 +1473,56 @@ enum PreventiveMaintenanceSource {
 }
 
 model AssetMaintenancePlan {
-  id                   String   @id @default(cuid())
-  tenantId             String
-  tenant               Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  assetId              String   @unique
-  asset                Asset    @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  assetId String @unique
+  asset   Asset  @relation(fields: [assetId], references: [id], onDelete: Cascade)
 
-  pmPlanId             String
-  pmPlan               PmPlan   @relation(fields: [pmPlanId], references: [id], onDelete: Restrict)
+  pmPlanId String
+  pmPlan   PmPlan @relation(fields: [pmPlanId], references: [id], onDelete: Restrict)
 
-  frequencyValue       Int
-  frequencyUnit        MaintenanceFrequencyUnit
+  frequencyValue Int
+  frequencyUnit  MaintenanceFrequencyUnit
 
-  lastMaintenanceAt    DateTime?
-  planStartAt          DateTime?
+  lastMaintenanceAt DateTime?
+  planStartAt       DateTime?
 
-  planningHorizonValue Int      @default(6)
+  planningHorizonValue Int                      @default(6)
   planningHorizonUnit  MaintenanceFrequencyUnit @default(MONTH)
 
-  active               Boolean  @default(true)
+  active Boolean @default(true)
 
-  createdAt            DateTime @default(now())
-  updatedAt            DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([tenantId, pmPlanId])
 }
 
 model AssetPreventiveMaintenance {
-  id              String   @id @default(cuid())
-  tenantId        String
-  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  assetId         String
-  asset           Asset    @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  assetId String
+  asset   Asset  @relation(fields: [assetId], references: [id], onDelete: Cascade)
 
-  pmPlanId        String?
-  pmPlan          PmPlan?  @relation(fields: [pmPlanId], references: [id], onDelete: SetNull)
+  pmPlanId String?
+  pmPlan   PmPlan? @relation(fields: [pmPlanId], references: [id], onDelete: SetNull)
 
-  workOrderId     String?  @unique
-  workOrder       WorkOrder? @relation(fields: [workOrderId], references: [id], onDelete: SetNull)
+  workOrderId String?    @unique
+  workOrder   WorkOrder? @relation(fields: [workOrderId], references: [id], onDelete: SetNull)
 
-  source          PreventiveMaintenanceSource @default(MANUAL)
-  executedAt      DateTime
-  note            String?
+  source     PreventiveMaintenanceSource @default(MANUAL)
+  executedAt DateTime
+  note       String?
 
   createdByUserId String?
-  createdByUser   User?    @relation(fields: [createdByUserId], references: [id])
+  createdByUser   User?   @relation(fields: [createdByUserId], references: [id])
 
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([tenantId, assetId, executedAt(sort: Desc)])
   @@index([tenantId, pmPlanId, executedAt(sort: Desc)])
@@ -1396,9 +1530,9 @@ model AssetPreventiveMaintenance {
 }
 
 model ServiceOrderIssueNote {
-  id        String @id
-  tenantId  String
-  tenant    Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   workOrderId String
   workOrder   WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
@@ -1416,22 +1550,22 @@ model ServiceOrderIssueNote {
   executedByName   String?
 
   sourceServiceOrderId String?
-  sourceIssueNoteId     String?
-  sourceRecordId        String?
-  sourceServiceOrder    WorkOrder? @relation("ServiceOrderIssueNoteSourceOrder", fields: [sourceServiceOrderId], references: [id], onDelete: SetNull)
-  sourceRecord          ServiceOrderIssueNote? @relation("ServiceOrderIssueNoteSourceRecord", fields: [sourceRecordId], references: [id], onDelete: SetNull)
-  delegatedRecords      ServiceOrderIssueNote[] @relation("ServiceOrderIssueNoteSourceRecord")
+  sourceIssueNoteId    String?
+  sourceRecordId       String?
+  sourceServiceOrder   WorkOrder?              @relation("ServiceOrderIssueNoteSourceOrder", fields: [sourceServiceOrderId], references: [id], onDelete: SetNull)
+  sourceRecord         ServiceOrderIssueNote?  @relation("ServiceOrderIssueNoteSourceRecord", fields: [sourceRecordId], references: [id], onDelete: SetNull)
+  delegatedRecords     ServiceOrderIssueNote[] @relation("ServiceOrderIssueNoteSourceRecord")
 
   executedServiceOrderId String?
-  executedIssueNoteId     String?
-  executedRecordId        String?
-  executedServiceOrder    WorkOrder? @relation("ServiceOrderIssueNoteExecutedOrder", fields: [executedServiceOrderId], references: [id], onDelete: SetNull)
-  executedRecord          ServiceOrderIssueNote? @relation("ServiceOrderIssueNoteExecutedRecord", fields: [executedRecordId], references: [id], onDelete: SetNull)
-  executionReflections    ServiceOrderIssueNote[] @relation("ServiceOrderIssueNoteExecutedRecord")
+  executedIssueNoteId    String?
+  executedRecordId       String?
+  executedServiceOrder   WorkOrder?              @relation("ServiceOrderIssueNoteExecutedOrder", fields: [executedServiceOrderId], references: [id], onDelete: SetNull)
+  executedRecord         ServiceOrderIssueNote?  @relation("ServiceOrderIssueNoteExecutedRecord", fields: [executedRecordId], references: [id], onDelete: SetNull)
+  executionReflections   ServiceOrderIssueNote[] @relation("ServiceOrderIssueNoteExecutedRecord")
 
   copiedAt     DateTime?
   copiedReason String?
-  updatedAt    DateTime @updatedAt
+  updatedAt    DateTime  @updatedAt
 
   @@unique([tenantId, workOrderId, noteId])
   @@index([tenantId, workOrderId, stage])
@@ -1443,9 +1577,9 @@ model ServiceOrderIssueNote {
 }
 
 model ServiceOrderPart {
-  id        String   @id @default(cuid())
-  tenantId  String
-  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   workOrderId String
   workOrder   WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
@@ -1458,22 +1592,22 @@ model ServiceOrderPart {
   notes    String?
 
   // REQUIRED: necesario por diagnóstico | REPLACED: repuesto ya cambiado/instalado
-  stage         ServiceOrderPartStage @default(REQUIRED)
-  replacedAt    DateTime?
+  stage            ServiceOrderPartStage @default(REQUIRED)
+  replacedAt       DateTime?
   replacedByUserId String?
-  replacedByUser   User? @relation(fields: [replacedByUserId], references: [id])
+  replacedByUser   User?                 @relation(fields: [replacedByUserId], references: [id])
 
   // Vínculos entre repuestos arrastrados, su OS origen y la OS donde se cambiaron.
-  sourceServiceOrderId     String?
-  sourceServiceOrderPartId String?
+  sourceServiceOrderId          String?
+  sourceServiceOrderPartId      String?
   replacementServiceOrderId     String?
   replacementServiceOrderPartId String?
 
-  sourceServiceOrder WorkOrder? @relation("ServiceOrderPartSourceOrder", fields: [sourceServiceOrderId], references: [id], onDelete: SetNull)
-  replacementServiceOrder WorkOrder? @relation("ServiceOrderPartReplacementOrder", fields: [replacementServiceOrderId], references: [id], onDelete: SetNull)
-  sourcePart ServiceOrderPart? @relation("ServiceOrderPartSource", fields: [sourceServiceOrderPartId], references: [id], onDelete: SetNull)
-  delegatedParts ServiceOrderPart[] @relation("ServiceOrderPartSource")
-  replacementPart ServiceOrderPart? @relation("ServiceOrderPartReplacement", fields: [replacementServiceOrderPartId], references: [id], onDelete: SetNull)
+  sourceServiceOrder        WorkOrder?         @relation("ServiceOrderPartSourceOrder", fields: [sourceServiceOrderId], references: [id], onDelete: SetNull)
+  replacementServiceOrder   WorkOrder?         @relation("ServiceOrderPartReplacementOrder", fields: [replacementServiceOrderId], references: [id], onDelete: SetNull)
+  sourcePart                ServiceOrderPart?  @relation("ServiceOrderPartSource", fields: [sourceServiceOrderPartId], references: [id], onDelete: SetNull)
+  delegatedParts            ServiceOrderPart[] @relation("ServiceOrderPartSource")
+  replacementPart           ServiceOrderPart?  @relation("ServiceOrderPartReplacement", fields: [replacementServiceOrderPartId], references: [id], onDelete: SetNull)
   reflectedReplacementParts ServiceOrderPart[] @relation("ServiceOrderPartReplacement")
 
   createdAt DateTime @default(now())
@@ -1485,4 +1619,186 @@ model ServiceOrderPart {
   @@index([tenantId, sourceServiceOrderPartId])
   @@index([tenantId, replacementServiceOrderId])
   @@index([tenantId, replacementServiceOrderPartId])
+}
+
+/// === Manufactura: fundaciones ===
+model ManufacturingNumberSequence {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  year      Int
+  lastValue Int      @default(0)
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, year])
+}
+
+model ManufacturingOrder {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  number           String
+  status           ManufacturingOrderStatus  @default(DRAFT)
+  statusBeforeHold ManufacturingOrderStatus?
+  version          Int                       @default(1)
+  projectName      String
+  productCode      String?
+  productName      String
+  model            String?
+  quantity         Int                       @default(1)
+  priority         WorkOrderPriority?
+
+  customerName        String?
+  customerReference   String?
+  commercialReference String?
+  destination         String?
+  description         String?
+
+  requestedDeliveryAt DateTime?
+  plannedStartAt      DateTime?
+  plannedEndAt        DateTime?
+
+  responsibleUserId String
+  responsibleUser   User   @relation("ManufacturingOrderResponsible", fields: [responsibleUserId], references: [id], onDelete: Restrict)
+  createdByUserId   String
+  createdByUser     User   @relation("ManufacturingOrderCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
+
+  holdReason     String?
+  canceledReason String?
+  releasedAt     DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  units       ManufacturedUnit[]
+  members     ManufacturingOrderMember[]
+  auditEvents ManufacturingAuditEvent[]
+  engineeringDocuments EngineeringDocument[]
+  attachments Attachment[]
+
+  @@unique([tenantId, number])
+  @@index([tenantId, status, updatedAt(sort: Desc)])
+  @@index([tenantId, responsibleUserId, status])
+  @@index([tenantId, requestedDeliveryAt])
+}
+
+model ManufacturedUnit {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  manufacturingOrderId String
+  manufacturingOrder   ManufacturingOrder     @relation(fields: [manufacturingOrderId], references: [id], onDelete: Cascade)
+  unitNumber           Int
+  serialNumber         String?
+  internalCode         String?
+  status               ManufacturedUnitStatus @default(PLANNED)
+
+  assetId String? @unique
+  asset   Asset?  @relation(fields: [assetId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([manufacturingOrderId, unitNumber])
+  @@unique([tenantId, serialNumber])
+  @@index([tenantId, manufacturingOrderId, status])
+}
+
+model ManufacturingOrderMember {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  manufacturingOrderId String
+  manufacturingOrder   ManufacturingOrder          @relation(fields: [manufacturingOrderId], references: [id], onDelete: Cascade)
+  userId               String
+  user                 User                        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  function             ManufacturingMemberFunction
+  createdAt            DateTime                    @default(now())
+
+  @@unique([manufacturingOrderId, userId, function])
+  @@index([tenantId, userId, function])
+}
+
+model ManufacturingAuditEvent {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  manufacturingOrderId String
+  manufacturingOrder   ManufacturingOrder @relation(fields: [manufacturingOrderId], references: [id], onDelete: Cascade)
+  entityType           String
+  entityId             String
+  action               String
+  summary              String
+  beforeData           Json?
+  afterData            Json?
+  metadata             Json?
+  actorUserId          String
+  actorName            String
+  createdAt            DateTime           @default(now())
+
+  @@index([tenantId, manufacturingOrderId, createdAt(sort: Desc)])
+  @@index([tenantId, entityType, entityId])
+}
+
+model EngineeringDocument {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  manufacturingOrderId String
+  manufacturingOrder   ManufacturingOrder @relation(fields: [manufacturingOrderId], references: [id], onDelete: Cascade)
+  code                  String
+  name                  String
+  discipline            EngineeringDiscipline
+  documentType          EngineeringDocumentType
+  systemName            String?
+  description           String?
+  active                Boolean @default(true)
+  createdByUserId       String
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  revisions EngineeringDocumentRevision[]
+
+  @@unique([manufacturingOrderId, code])
+  @@index([tenantId, manufacturingOrderId, discipline])
+  @@index([tenantId, active, updatedAt(sort: Desc)])
+}
+
+model EngineeringDocumentRevision {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  documentId   String
+  document     EngineeringDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  sequence     Int
+  revisionCode String
+  status       EngineeringRevisionStatus @default(DRAFT)
+  changeSummary String
+
+  fileAttachmentId String @unique
+  fileAttachment   Attachment @relation("EngineeringRevisionFile", fields: [fileAttachmentId], references: [id], onDelete: Restrict)
+  sourceFilename   String
+  fileSha256       String
+
+  createdByUserId    String
+  submittedAt        DateTime?
+  submittedByUserId  String?
+  reviewedAt         DateTime?
+  reviewedByUserId   String?
+  reviewComment      String?
+  releasedAt         DateTime?
+  releasedByUserId   String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@unique([documentId, sequence])
+  @@unique([documentId, revisionCode])
+  @@index([tenantId, documentId, status])
+  @@index([tenantId, status, updatedAt(sort: Desc)])
 }

@@ -6,6 +6,7 @@ export function SignatureCanvas(props: {
   label: string;
   initialDataUrl?: string | null;
   onChange?: (dataUrl: string | null) => void;
+  disabled?: boolean;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [drawing, setDrawing] = useState(false);
@@ -31,6 +32,7 @@ export function SignatureCanvas(props: {
   }
 
   function start(e: React.PointerEvent<HTMLCanvasElement>) {
+    if (props.disabled) return;
     const c = canvasRef.current;
     if (!c) return;
     c.setPointerCapture(e.pointerId);
@@ -63,6 +65,7 @@ export function SignatureCanvas(props: {
   }
 
   function clear() {
+    if (props.disabled) return;
     const c = canvasRef.current;
     const ctx = c?.getContext('2d');
     if (!c || !ctx) return;
@@ -77,13 +80,13 @@ export function SignatureCanvas(props: {
         ref={canvasRef}
         width={520}
         height={180}
-        className="border rounded w-full bg-white touch-none"
+        className={`border rounded w-full bg-white touch-none ${props.disabled ? 'opacity-70 cursor-not-allowed' : ''}`}
         onPointerDown={start}
         onPointerMove={move}
         onPointerUp={end}
         onPointerLeave={() => drawing && end()}
       />
-      <button type="button" className="text-sm underline text-gray-700" onClick={clear}>
+      <button type="button" className="text-sm underline text-gray-700 disabled:opacity-40" onClick={clear} disabled={props.disabled}>
         Limpiar
       </button>
     </div>

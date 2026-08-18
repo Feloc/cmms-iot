@@ -21,6 +21,7 @@ import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { GoalsModule } from './modules/goals/goals.module';
 import { AppController } from './app.controller';
 import { AssembliesModule } from './modules/assemblies/assemblies.module';
+import { ManufacturingModule } from './modules/manufacturing/manufacturing.module';
 
 
 @Module({
@@ -47,6 +48,7 @@ import { AssembliesModule } from './modules/assemblies/assemblies.module';
     DashboardModule,
     GoalsModule,
     AssembliesModule,
+    ManufacturingModule,
   ],
 })
 export class AppModule {}

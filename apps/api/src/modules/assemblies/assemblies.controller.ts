@@ -6,7 +6,10 @@ import {
   CreateAssemblyDto,
   CreateAssemblyTemplateDto,
   UpdateAssemblyActivityDto,
+  UpdateAssemblyOperationalAlertDto,
+  UpdateAssemblyScheduleDto,
   UpdateAssemblyTemplateDto,
+  UpdateAssemblySignaturesDto,
 } from './dto/assemblies.dto';
 
 @Controller('assemblies')
@@ -38,9 +41,29 @@ export class AssembliesController {
     return this.svc.create(dto);
   }
 
+  @Get('operational-alerts')
+  operationalAlerts(@Query('status') status?: string) {
+    return this.svc.listOperationalAlerts(status);
+  }
+
+  @Patch('operational-alerts/:alertId')
+  updateOperationalAlert(@Param('alertId') alertId: string, @Body() dto: UpdateAssemblyOperationalAlertDto) {
+    return this.svc.updateOperationalAlert(alertId, dto);
+  }
+
   @Get(':id')
   get(@Param('id') id: string) {
     return this.svc.get(id);
+  }
+
+  @Patch(':id/signatures')
+  updateSignatures(@Param('id') id: string, @Body() dto: UpdateAssemblySignaturesDto) {
+    return this.svc.updateSignatures(id, dto);
+  }
+
+  @Patch(':id/schedule')
+  updateSchedule(@Param('id') id: string, @Body() dto: UpdateAssemblyScheduleDto) {
+    return this.svc.updateSchedule(id, dto);
   }
 
   @Patch(':id/activities/:activityId')

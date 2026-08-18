@@ -4,6 +4,7 @@ export type AssemblyTemplateStepInput = {
   instructions?: string | null;
   estimatedMinutes: number;
   plannedTechnicians?: number;
+  dependsOnPositions?: number[];
   required?: boolean;
   evidenceRequired?: boolean;
 };
@@ -34,6 +35,12 @@ export class CreateAssemblyDto {
   title?: string;
   description?: string;
   dueDate?: string | Date;
+  scheduledStartAt?: string | Date;
+  scheduleTimezone?: string;
+  workdayStartMinute?: number;
+  workdayEndMinute?: number;
+  workingDays?: number[];
+  excludedDates?: string[];
   technicianIds?: string[];
 }
 
@@ -52,3 +59,29 @@ export class CompleteAssemblyActivityDto {
   notes?: string | null;
 }
 
+export class UpdateAssemblySignaturesDto {
+  technicianSignature?: string | null;
+  receiverSignature?: string | null;
+}
+
+export type AssemblyScheduleActivityInput = {
+  id: string;
+  estimatedMinutes: number;
+  dependsOnPositions: number[];
+};
+
+export class UpdateAssemblyScheduleDto {
+  reason!: string;
+  scheduledStartAt!: string | Date;
+  scheduleTimezone?: string;
+  workdayStartMinute?: number;
+  workdayEndMinute?: number;
+  workingDays?: number[];
+  excludedDates?: string[];
+  activities!: AssemblyScheduleActivityInput[];
+}
+
+export class UpdateAssemblyOperationalAlertDto {
+  assignedUserId?: string | null;
+  acknowledge?: boolean;
+}

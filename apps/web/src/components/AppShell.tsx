@@ -16,6 +16,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: '/dashboard', label: 'Dashboard', adminOnly: true },
   { href: '/calendar', label: 'Calendario' },
   { href: '/service-orders', label: 'Órdenes de servicio' },
+  { href: '/manufacturing', label: 'Manufactura' },
   { href: '/assemblies', label: 'Montajes' },
   { href: '/assets', label: 'Activos' },
   { href: '/inventory', label: 'Inventario', adminOnly: true },
@@ -43,7 +44,8 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const [collapsed, setCollapsed] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
 
-  if (pathname === '/login') return <>{children}</>;
+  const isAssemblyReport = /^\/assemblies\/[^/]+\/report$/.test(pathname);
+  if (pathname === '/login' || isAssemblyReport) return <>{children}</>;
 
   const filtered = NAV_ITEMS.filter((it) => (it.adminOnly ? isAdmin : true));
 
@@ -179,6 +181,8 @@ function iconFor(href: string) {
       return '🧾';
     case '/assemblies':
       return '🏗️';
+    case '/manufacturing':
+      return '🏭';
     case '/assets':
       return '🛠️';
     case '/inventory':
