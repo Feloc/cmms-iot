@@ -201,6 +201,10 @@ export class ManufacturingService {
         where: { active: true },
         select: { revisions: { select: { sequence: true, status: true } } },
       },
+      boms: {
+        select: { revisions: { select: { sequence: true, status: true, _count: { select: { lines: true } } } } },
+      },
+      engineeringReleases: { select: { releaseCode: true, sequence: true, status: true, releasedAt: true } },
       _count: { select: { auditEvents: true } },
     };
   }
@@ -209,9 +213,19 @@ export class ManufacturingService {
     const documents = order.engineeringDocuments || [];
     const approvedCount = documents.filter((document: any) => document.revisions.some((revision: any) => ['APPROVED', 'RELEASED'].includes(revision.status))).length;
     const releasedCount = documents.filter((document: any) => document.revisions.some((revision: any) => revision.status === 'RELEASED')).length;
-    const pendingEngineeringChanges = documents.some((document: any) => {
+    const boms = order.boms || [];
+    const bomApprovedCount = boms.filter((bom: any) => bom.revisions.some((revision: any) => ['APPROVED', 'RELEASED'].includes(revision.status))).length;
+    const bomReleasedCount = boms.filter((bom: any) => bom.revisions.some((revision: any) => revision.status === 'RELEASED')).length;
+    const releases = order.engineeringReleases || [];
+    const currentRelease = [...releases].filter((release: any) => release.status === 'RELEASED').sort((a: any, b: any) => Number(b.sequence) - Number(a.sequence))[0];
+    const documentChanges = documents.some((document: any) => {
       const latest = Math.max(0, ...document.revisions.map((revision: any) => Number(revision.sequence)));
       const released = Math.max(0, ...document.revisions.filter((revision: any) => revision.status === 'RELEASED').map((revision: any) => Number(revision.sequence)));
+      return latest > released;
+    });
+    const bomChanges = boms.some((bom: any) => {
+      const latest = Math.max(0, ...bom.revisions.map((revision: any) => Number(revision.sequence)));
+      const released = Math.max(0, ...bom.revisions.filter((revision: any) => revision.status === 'RELEASED').map((revision: any) => Number(revision.sequence)));
       return latest > released;
     });
     return {
@@ -222,7 +236,16 @@ export class ManufacturingService {
         engineeringDocumentCount: documents.length,
         engineeringApprovedCount: approvedCount,
         engineeringReleasedCount: releasedCount,
-        pendingEngineeringChanges,
+        bomCount: boms.length,
+        bomApprovedCount,
+        bomReleasedCount,
+        bomLineCount: boms.reduce((sum: number, bom: any) => {
+          const latest = [...bom.revisions].sort((a: any, b: any) => Number(b.sequence) - Number(a.sequence))[0];
+          return sum + Number(latest?._count?.lines || 0);
+        }, 0),
+        engineeringReleaseCount: releases.filter((release: any) => release.status !== 'DRAFT' && release.status !== 'CANCELED').length,
+        currentEngineeringReleaseCode: currentRelease?.releaseCode || null,
+        pendingEngineeringChanges: documentChanges || bomChanges,
       },
     };
   }
@@ -285,6 +308,10 @@ export class ManufacturingService {
             where: { active: true },
             select: { revisions: { select: { sequence: true, status: true } } },
           },
+          boms: {
+            select: { revisions: { select: { sequence: true, status: true, _count: { select: { lines: true } } } } },
+          },
+          engineeringReleases: { select: { releaseCode: true, sequence: true, status: true, releasedAt: true } },
           _count: { select: { units: true, members: true } },
         },
       }),

@@ -3,6 +3,10 @@ export type ManufacturingMemberFunction = 'RESPONSIBLE' | 'ENGINEERING' | 'REVIE
 export type EngineeringDiscipline = 'MECHANICAL' | 'ELECTRICAL' | 'PNEUMATIC' | 'HYDRAULIC' | 'AUTOMATION' | 'SOFTWARE' | 'QUALITY' | 'GENERAL';
 export type EngineeringDocumentType = 'DRAWING' | 'SCHEMATIC' | 'SPECIFICATION' | 'DATASHEET' | 'PROGRAM' | 'MANUAL' | 'CALCULATION' | 'PROCEDURE' | 'OTHER';
 export type EngineeringRevisionStatus = 'DRAFT' | 'IN_REVIEW' | 'APPROVED' | 'REJECTED' | 'RELEASED' | 'OBSOLETE';
+export type ManufacturingBomRevisionStatus = 'DRAFT' | 'IN_REVIEW' | 'APPROVED' | 'REJECTED' | 'RELEASED' | 'SUPERSEDED';
+export type SupplyType = 'STOCK' | 'BUY' | 'MAKE' | 'SUBCONTRACT';
+export type PartCriticality = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+export type EngineeringReleaseStatus = 'DRAFT' | 'RELEASED' | 'SUPERSEDED' | 'CANCELED';
 
 export type ManufacturingUser = {
   id: string;
@@ -34,6 +38,12 @@ export type ManufacturingMetrics = {
   engineeringDocumentCount: number;
   engineeringApprovedCount: number;
   engineeringReleasedCount: number;
+  bomCount: number;
+  bomApprovedCount: number;
+  bomReleasedCount: number;
+  bomLineCount: number;
+  engineeringReleaseCount: number;
+  currentEngineeringReleaseCode?: string | null;
   pendingEngineeringChanges: boolean;
 };
 
@@ -121,6 +131,105 @@ export type EngineeringDocument = {
   releasedRevision?: EngineeringDocumentRevision | null;
 };
 
+export type ManufacturingBomLine = {
+  id: string;
+  position: number;
+  parentLineId?: string | null;
+  parentLine?: { position: number } | null;
+  level: number;
+  inventoryItemId?: string | null;
+  inventoryItem?: { id: string; sku: string; name: string; uom: string; qty: number; status: string } | null;
+  itemCode: string;
+  description: string;
+  quantityPerUnit: number;
+  uom: string;
+  supplyType: SupplyType;
+  isOptional: boolean;
+  criticality: PartCriticality;
+  drawingDocumentId?: string | null;
+  drawingRevisionId?: string | null;
+  materialSpecification?: string | null;
+  manufacturer?: string | null;
+  manufacturerPartNo?: string | null;
+  preferredSupplier?: string | null;
+  leadTimeDays?: number | null;
+  notes?: string | null;
+};
+
+export type ManufacturingBomRevision = {
+  id: string;
+  bomId: string;
+  sequence: number;
+  revisionCode: string;
+  status: ManufacturingBomRevisionStatus;
+  changeSummary: string;
+  createdByUserId: string;
+  submittedAt?: string | null;
+  reviewedAt?: string | null;
+  reviewedByUserId?: string | null;
+  reviewComment?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  lineCount: number;
+  lines?: ManufacturingBomLine[];
+  bom?: { id: string; manufacturingOrderId: string; code: string; name: string };
+};
+
+export type ManufacturingBom = {
+  id: string;
+  manufacturingOrderId: string;
+  code: string;
+  name: string;
+  description?: string | null;
+  revisions: ManufacturingBomRevision[];
+  latestRevision?: ManufacturingBomRevision | null;
+  approvedRevision?: ManufacturingBomRevision | null;
+  releasedRevision?: ManufacturingBomRevision | null;
+};
+
+export type EngineeringReleaseDocument = {
+  id: string;
+  documentRevisionId: string;
+  documentCodeSnapshot: string;
+  documentNameSnapshot: string;
+  disciplineSnapshot: EngineeringDiscipline;
+  revisionCodeSnapshot: string;
+  documentRevision: EngineeringDocumentRevision & { document: { id: string; code: string; name: string; discipline: EngineeringDiscipline; active: boolean } };
+};
+
+export type EngineeringRelease = {
+  id: string;
+  manufacturingOrderId: string;
+  sequence: number;
+  releaseCode: string;
+  status: EngineeringReleaseStatus;
+  lockVersion: number;
+  title: string;
+  notes?: string | null;
+  bomRevisionId: string;
+  bomCodeSnapshot: string;
+  bomRevisionCodeSnapshot: string;
+  bomLineCountSnapshot: number;
+  bomLineCount: number;
+  documentCount: number;
+  createdByUserId: string;
+  releasedAt?: string | null;
+  releasedByUserId?: string | null;
+  releasedByName?: string | null;
+  validationSnapshot?: EngineeringReleaseValidation | null;
+  createdAt: string;
+  updatedAt: string;
+  bomRevision: ManufacturingBomRevision & { bom: { id: string; code: string; name: string } };
+  documents: EngineeringReleaseDocument[];
+};
+
+export type EngineeringReleaseValidation = {
+  valid: boolean;
+  errors: Array<{ code: string; message: string; entityId?: string }>;
+  warnings: Array<{ code: string; message: string; entityId?: string }>;
+  summary: { bomCode: string; bomRevisionCode: string; bomLineCount: number; documentCount: number; releaseCode: string; lockVersion: number };
+};
+
 export type Paginated<T> = {
   items: T[];
   total: number;
@@ -170,6 +279,21 @@ export const engineeringRevisionStatusClass: Record<EngineeringRevisionStatus, s
   DRAFT: 'bg-gray-100 text-gray-800', IN_REVIEW: 'bg-sky-100 text-sky-800', APPROVED: 'bg-emerald-100 text-emerald-800',
   REJECTED: 'bg-red-100 text-red-800', RELEASED: 'bg-violet-100 text-violet-800', OBSOLETE: 'bg-gray-100 text-gray-500',
 };
+
+export const bomRevisionStatusLabel: Record<ManufacturingBomRevisionStatus, string> = {
+  DRAFT: 'Borrador', IN_REVIEW: 'En revisión', APPROVED: 'Aprobada', REJECTED: 'Rechazada', RELEASED: 'Liberada', SUPERSEDED: 'Reemplazada',
+};
+
+export const bomRevisionStatusClass: Record<ManufacturingBomRevisionStatus, string> = {
+  DRAFT: 'bg-gray-100 text-gray-800', IN_REVIEW: 'bg-sky-100 text-sky-800', APPROVED: 'bg-emerald-100 text-emerald-800',
+  REJECTED: 'bg-red-100 text-red-800', RELEASED: 'bg-violet-100 text-violet-800', SUPERSEDED: 'bg-gray-100 text-gray-500',
+};
+
+export const supplyTypeLabel: Record<SupplyType, string> = { STOCK: 'Inventario', BUY: 'Comprar', MAKE: 'Fabricar', SUBCONTRACT: 'Tercero' };
+export const criticalityLabel: Record<PartCriticality, string> = { LOW: 'Baja', MEDIUM: 'Media', HIGH: 'Alta', CRITICAL: 'Crítica' };
+
+export const engineeringReleaseStatusLabel: Record<EngineeringReleaseStatus, string> = { DRAFT: 'Borrador', RELEASED: 'Vigente', SUPERSEDED: 'Reemplazada', CANCELED: 'Cancelada' };
+export const engineeringReleaseStatusClass: Record<EngineeringReleaseStatus, string> = { DRAFT: 'bg-gray-100 text-gray-800', RELEASED: 'bg-emerald-100 text-emerald-800', SUPERSEDED: 'bg-amber-100 text-amber-800', CANCELED: 'bg-red-100 text-red-800' };
 
 export function dateLabel(value?: string | null, withTime = false) {
   if (!value) return '—';

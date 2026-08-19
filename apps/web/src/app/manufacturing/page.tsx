@@ -108,7 +108,7 @@ export default function ManufacturingPage() {
                   <td className="px-3 py-3"><div className="font-medium">{item.projectName}</div><div className="text-xs text-gray-500">{[item.productCode, item.productName, item.model].filter(Boolean).join(' · ')}</div></td>
                   <td className="px-3 py-3"><div>{item.customerName || '—'}</div><div className="text-xs text-gray-500">{item.customerReference || ''}</div></td>
                   <td className="px-3 py-3">{item.metrics.unitCount}</td>
-                  <td className="px-3 py-3"><div>{item.metrics.engineeringApprovedCount}/{item.metrics.engineeringDocumentCount} aprobados</div>{item.metrics.pendingEngineeringChanges ? <div className="text-xs text-amber-700">Cambios pendientes</div> : <div className="text-xs text-gray-500">Sin pendientes</div>}</td>
+                  <td className="px-3 py-3"><div>{item.metrics.engineeringApprovedCount}/{item.metrics.engineeringDocumentCount} aprobados</div>{item.metrics.currentEngineeringReleaseCode ? <div className="text-xs text-emerald-700">{item.metrics.currentEngineeringReleaseCode} vigente</div> : item.metrics.pendingEngineeringChanges ? <div className="text-xs text-amber-700">Cambios pendientes</div> : <div className="text-xs text-gray-500">Sin liberar</div>}</td>
                   <td className="px-3 py-3">{dateLabel(item.requestedDeliveryAt)}</td>
                   <td className="px-3 py-3">{item.responsibleUser?.name || '—'}</td>
                   <td className="px-3 py-3"><span className={`rounded-full px-2 py-1 text-xs ${manufacturingStatusClass[item.status]}`}>{manufacturingStatusLabel[item.status]}</span></td>

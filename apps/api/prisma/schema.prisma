@@ -102,6 +102,29 @@ enum EngineeringRevisionStatus {
   OBSOLETE
 }
 
+enum ManufacturingBomRevisionStatus {
+  DRAFT
+  IN_REVIEW
+  APPROVED
+  REJECTED
+  RELEASED
+  SUPERSEDED
+}
+
+enum SupplyType {
+  STOCK
+  BUY
+  MAKE
+  SUBCONTRACT
+}
+
+enum EngineeringReleaseStatus {
+  DRAFT
+  RELEASED
+  SUPERSEDED
+  CANCELED
+}
+
 // Repuestos en una Orden de Servicio: primero se registran como necesarios (diagnóstico)
 // y luego se marcan como cambiados (historial en el activo).
 enum ServiceOrderPartStage {
@@ -251,6 +274,11 @@ model Tenant {
   manufacturingAuditEvents     ManufacturingAuditEvent[]
   engineeringDocuments         EngineeringDocument[]
   engineeringDocumentRevisions EngineeringDocumentRevision[]
+  manufacturingBoms            ManufacturingBom[]
+  manufacturingBomRevisions    ManufacturingBomRevision[]
+  manufacturingBomLines        ManufacturingBomLine[]
+  engineeringReleases          EngineeringRelease[]
+  engineeringReleaseDocuments  EngineeringReleaseDocument[]
 
   workOrderReports WorkOrderReport[]
 }
@@ -900,6 +928,7 @@ model InventoryItem {
   stocks            InventoryStock[]
   movements         InventoryMovement[]
   manualHotspots    PartsManualHotspot[]
+  manufacturingBomLines ManufacturingBomLine[]
 
   @@unique([tenantId, sku])
   @@index([tenantId, name])
@@ -1676,6 +1705,8 @@ model ManufacturingOrder {
   auditEvents ManufacturingAuditEvent[]
   engineeringDocuments EngineeringDocument[]
   attachments Attachment[]
+  boms ManufacturingBom[]
+  engineeringReleases EngineeringRelease[]
 
   @@unique([tenantId, number])
   @@index([tenantId, status, updatedAt(sort: Desc)])
@@ -1763,6 +1794,7 @@ model EngineeringDocument {
   updatedAt             DateTime @updatedAt
 
   revisions EngineeringDocumentRevision[]
+  bomLines ManufacturingBomLine[] @relation("BomLineDrawingDocument")
 
   @@unique([manufacturingOrderId, code])
   @@index([tenantId, manufacturingOrderId, discipline])
@@ -1797,8 +1829,162 @@ model EngineeringDocumentRevision {
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 
+  bomLines ManufacturingBomLine[] @relation("BomLineDrawingRevision")
+  releaseDocuments EngineeringReleaseDocument[]
+
   @@unique([documentId, sequence])
   @@unique([documentId, revisionCode])
   @@index([tenantId, documentId, status])
   @@index([tenantId, status, updatedAt(sort: Desc)])
+}
+
+model ManufacturingBom {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  manufacturingOrderId String
+  manufacturingOrder   ManufacturingOrder @relation(fields: [manufacturingOrderId], references: [id], onDelete: Cascade)
+  code                  String
+  name                  String
+  description           String?
+  createdByUserId       String
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  revisions ManufacturingBomRevision[]
+
+  @@unique([manufacturingOrderId, code])
+  @@index([tenantId, manufacturingOrderId, updatedAt(sort: Desc)])
+}
+
+model ManufacturingBomRevision {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  bomId         String
+  bom           ManufacturingBom @relation(fields: [bomId], references: [id], onDelete: Cascade)
+  sequence      Int
+  revisionCode  String
+  status        ManufacturingBomRevisionStatus @default(DRAFT)
+  changeSummary String
+
+  createdByUserId   String
+  submittedAt       DateTime?
+  submittedByUserId String?
+  reviewedAt        DateTime?
+  reviewedByUserId  String?
+  reviewComment     String?
+  releasedAt        DateTime?
+  releasedByUserId  String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  lines ManufacturingBomLine[]
+  engineeringReleases EngineeringRelease[]
+
+  @@unique([bomId, sequence])
+  @@unique([bomId, revisionCode])
+  @@index([tenantId, bomId, status])
+  @@index([tenantId, status, updatedAt(sort: Desc)])
+}
+
+model ManufacturingBomLine {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  bomRevisionId String
+  bomRevision   ManufacturingBomRevision @relation(fields: [bomRevisionId], references: [id], onDelete: Cascade)
+  position      Int
+  parentLineId  String?
+  parentLine    ManufacturingBomLine? @relation("ManufacturingBomHierarchy", fields: [parentLineId], references: [id], onDelete: SetNull)
+  childLines    ManufacturingBomLine[] @relation("ManufacturingBomHierarchy")
+  level         Int @default(0)
+
+  inventoryItemId String?
+  inventoryItem   InventoryItem? @relation(fields: [inventoryItemId], references: [id], onDelete: SetNull)
+  itemCode         String
+  description      String
+  quantityPerUnit  Decimal @db.Decimal(18, 6)
+  uom              String
+  supplyType       SupplyType
+  isOptional       Boolean @default(false)
+  criticality      PartCriticality @default(MEDIUM)
+
+  drawingDocumentId String?
+  drawingDocument   EngineeringDocument? @relation("BomLineDrawingDocument", fields: [drawingDocumentId], references: [id], onDelete: SetNull)
+  drawingRevisionId String?
+  drawingRevision   EngineeringDocumentRevision? @relation("BomLineDrawingRevision", fields: [drawingRevisionId], references: [id], onDelete: SetNull)
+
+  materialSpecification String?
+  manufacturer          String?
+  manufacturerPartNo    String?
+  preferredSupplier     String?
+  leadTimeDays          Int?
+  notes                 String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@unique([bomRevisionId, position])
+  @@index([tenantId, bomRevisionId, level, position])
+  @@index([tenantId, inventoryItemId])
+  @@index([tenantId, drawingDocumentId, drawingRevisionId])
+}
+
+model EngineeringRelease {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  manufacturingOrderId String
+  manufacturingOrder   ManufacturingOrder @relation(fields: [manufacturingOrderId], references: [id], onDelete: Cascade)
+  sequence              Int
+  releaseCode           String
+  status                EngineeringReleaseStatus @default(DRAFT)
+  lockVersion           Int @default(1)
+  title                 String
+  notes                 String?
+
+  bomRevisionId          String
+  bomRevision            ManufacturingBomRevision @relation(fields: [bomRevisionId], references: [id], onDelete: Restrict)
+  bomCodeSnapshot        String
+  bomRevisionCodeSnapshot String
+  bomLineCountSnapshot   Int
+
+  createdByUserId String
+  releasedAt      DateTime?
+  releasedByUserId String?
+  releasedByName   String?
+  validationSnapshot Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  documents EngineeringReleaseDocument[]
+
+  @@unique([manufacturingOrderId, sequence])
+  @@unique([manufacturingOrderId, releaseCode])
+  @@index([tenantId, manufacturingOrderId, status, sequence(sort: Desc)])
+  @@index([tenantId, status, releasedAt(sort: Desc)])
+}
+
+model EngineeringReleaseDocument {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  releaseId String
+  release   EngineeringRelease @relation(fields: [releaseId], references: [id], onDelete: Cascade)
+  documentRevisionId String
+  documentRevision   EngineeringDocumentRevision @relation(fields: [documentRevisionId], references: [id], onDelete: Restrict)
+  documentCodeSnapshot String
+  documentNameSnapshot String
+  disciplineSnapshot EngineeringDiscipline
+  revisionCodeSnapshot String
+  createdAt DateTime @default(now())
+
+  @@unique([releaseId, documentRevisionId])
+  @@index([tenantId, releaseId])
+  @@index([tenantId, documentRevisionId])
 }

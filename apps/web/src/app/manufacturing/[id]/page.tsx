@@ -8,6 +8,8 @@ import { apiFetch } from '@/lib/api';
 import { getAuthFromSession } from '@/lib/auth';
 import { useApiSWR } from '@/lib/swr';
 import { EngineeringDocumentsTab } from './EngineeringDocumentsTab';
+import { ManufacturingBomTab } from './ManufacturingBomTab';
+import { EngineeringReleasesTab } from './EngineeringReleasesTab';
 import {
   dateLabel,
   localDateInput,
@@ -90,8 +92,8 @@ export default function ManufacturingDetailPage() {
       {tab === 'units' ? <Units order={data} isAdmin={isAdmin} auth={auth} onSaved={(next) => mutate(next, { revalidate: false })} /> : null}
       {tab === 'members' ? <Members order={data} users={users || []} isAdmin={isAdmin} auth={auth} onSaved={(next) => mutate(next, { revalidate: false })} /> : null}
       {tab === 'engineering' ? <EngineeringDocumentsTab order={data} role={role} currentUserId={currentUserId} auth={auth} onChanged={() => mutate()} /> : null}
-      {tab === 'bom' ? <ComingSoon title="Lista de materiales" text="La BOM versionada e integrada con Inventario se implementará en el incremento 3." /> : null}
-      {tab === 'releases' ? <ComingSoon title="Liberaciones de Ingeniería" text="Aquí se construirán y publicarán los paquetes inmutables de Ingeniería." /> : null}
+      {tab === 'bom' ? <ManufacturingBomTab order={data} role={role} currentUserId={currentUserId} auth={auth} onChanged={() => mutate()} /> : null}
+      {tab === 'releases' ? <EngineeringReleasesTab order={data} role={role} auth={auth} onChanged={() => mutate()} /> : null}
       {tab === 'history' ? <History items={history?.items || []} /> : null}
     </div>
   );

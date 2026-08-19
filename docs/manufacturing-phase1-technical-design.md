@@ -17,12 +17,16 @@ La Fase 1 no incluye todavía órdenes de compra, reservas de inventario, ejecuc
 
 - Incremento 1 — Fundaciones: **implementado el 17 de agosto de 2026**.
 - Incremento 2 — Control documental: **implementado el 17 de agosto de 2026**.
-- Incremento 3 — BOM: pendiente.
-- Incremento 4 — Liberación: pendiente.
+- Incremento 3 — BOM: **implementado el 18 de agosto de 2026**.
+- Incremento 4 — Liberación: **implementado el 18 de agosto de 2026**.
 
 El Incremento 1 incluye migración 33, órdenes, consecutivos, unidades, participantes, auditoría, permisos iniciales, API, tablero, alta y detalle operativo.
 
 El Incremento 2 incluye migración 34, maestros documentales por disciplina y tipo, revisiones inmutables con archivo y huella SHA-256, flujo de envío/aprobación/rechazo, segregación entre autor y revisor, permisos por equipo, auditoría y matriz documental en la pestaña de Ingeniería. Una revisión aprobada continúa pendiente hasta incorporarse a una liberación formal del Incremento 4.
+
+El Incremento 3 incluye migración 35, BOM y revisiones, líneas jerárquicas con cantidades decimales, integración opcional con `InventoryItem`, referencias exactas a planos, clasificación de suministro, editor operativo, copia de revisiones, importación CSV/XLS/XLSX con previsualización vinculada por hash y expiración, aprobación segregada, métricas y auditoría. Las revisiones aprobadas permanecen inmutables y pendientes hasta su liberación formal.
+
+El Incremento 4 incluye migración 36, borradores de liberación con control optimista, selección de BOM y documentos, validación de errores y advertencias, publicación serializable, fotografías históricas, reemplazo de paquetes anteriores y transición atómica de BOM, planos y orden. Con este incremento queda completado el alcance técnico de la Fase 1.
 
 ## 2. Encaje con el sistema actual
 
@@ -959,4 +963,4 @@ La fase se considera terminada cuando un administrador puede:
 9. Consultar exactamente qué BOM y planos fueron liberados.
 10. Ver quién realizó cada acción y cuándo.
 
-La siguiente tarea de implementación es el **Incremento 2 — Control documental**. No se deben crear todavía movimientos de inventario ni activos desde Manufactura.
+La **Fase 1 de Manufactura queda completa**. La evolución recomendada es la Fase 2: abastecimiento, fabricación por terceros, reservas de inventario y seguimiento de compras, sin crear todavía activos terminados ni movimientos automáticos hasta definir sus reglas operativas.

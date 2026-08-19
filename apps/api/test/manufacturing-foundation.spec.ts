@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  bomHierarchyLevels,
   formatManufacturingOrderNumber,
   isAllowedEngineeringFilename,
   normalizeEngineeringCode,
@@ -10,6 +11,18 @@ import {
 test('formats manufacturing numbers with tenant-year sequence padding', () => {
   assert.equal(formatManufacturingOrderNumber(2026, 1), 'OF-2026-00001');
   assert.equal(formatManufacturingOrderNumber(2026, 123456), 'OF-2026-123456');
+});
+
+test('calculates BOM hierarchy levels and rejects invalid parent references', () => {
+  const levels = bomHierarchyLevels([
+    { position: 10, parentPosition: null },
+    { position: 20, parentPosition: 10 },
+    { position: 30, parentPosition: 20 },
+  ]);
+  assert.deepEqual([...levels.entries()], [[10, 0], [20, 1], [30, 2]]);
+  assert.throws(() => bomHierarchyLevels([{ position: 10 }, { position: 10 }]));
+  assert.throws(() => bomHierarchyLevels([{ position: 20, parentPosition: 10 }]));
+  assert.throws(() => bomHierarchyLevels([{ position: 10, parentPosition: 20 }]));
 });
 
 test('rejects invalid manufacturing number components', () => {
