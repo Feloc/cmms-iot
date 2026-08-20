@@ -125,6 +125,21 @@ enum EngineeringReleaseStatus {
   CANCELED
 }
 
+enum ManufacturingSupplyPlanStatus {
+  ACTIVE
+  SUPERSEDED
+  COMPLETED
+  CANCELED
+}
+
+enum ManufacturingSupplyRequirementStatus {
+  OPEN
+  IN_PROGRESS
+  PARTIAL
+  FULFILLED
+  CANCELED
+}
+
 // Repuestos en una Orden de Servicio: primero se registran como necesarios (diagnóstico)
 // y luego se marcan como cambiados (historial en el activo).
 enum ServiceOrderPartStage {
@@ -279,6 +294,8 @@ model Tenant {
   manufacturingBomLines        ManufacturingBomLine[]
   engineeringReleases          EngineeringRelease[]
   engineeringReleaseDocuments  EngineeringReleaseDocument[]
+  manufacturingSupplyPlans     ManufacturingSupplyPlan[]
+  manufacturingSupplyRequirements ManufacturingSupplyRequirement[]
 
   workOrderReports WorkOrderReport[]
 }
@@ -929,6 +946,7 @@ model InventoryItem {
   movements         InventoryMovement[]
   manualHotspots    PartsManualHotspot[]
   manufacturingBomLines ManufacturingBomLine[]
+  manufacturingSupplyRequirements ManufacturingSupplyRequirement[]
 
   @@unique([tenantId, sku])
   @@index([tenantId, name])
@@ -1707,6 +1725,7 @@ model ManufacturingOrder {
   attachments Attachment[]
   boms ManufacturingBom[]
   engineeringReleases EngineeringRelease[]
+  supplyPlans ManufacturingSupplyPlan[]
 
   @@unique([tenantId, number])
   @@index([tenantId, status, updatedAt(sort: Desc)])
@@ -1931,6 +1950,8 @@ model ManufacturingBomLine {
   @@index([tenantId, bomRevisionId, level, position])
   @@index([tenantId, inventoryItemId])
   @@index([tenantId, drawingDocumentId, drawingRevisionId])
+
+  supplyRequirements ManufacturingSupplyRequirement[]
 }
 
 model EngineeringRelease {
@@ -1962,6 +1983,7 @@ model EngineeringRelease {
   updatedAt DateTime @updatedAt
 
   documents EngineeringReleaseDocument[]
+  supplyPlan ManufacturingSupplyPlan?
 
   @@unique([manufacturingOrderId, sequence])
   @@unique([manufacturingOrderId, releaseCode])
@@ -1987,4 +2009,81 @@ model EngineeringReleaseDocument {
   @@unique([releaseId, documentRevisionId])
   @@index([tenantId, releaseId])
   @@index([tenantId, documentRevisionId])
+}
+
+model ManufacturingSupplyPlan {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  manufacturingOrderId String
+  manufacturingOrder   ManufacturingOrder @relation(fields: [manufacturingOrderId], references: [id], onDelete: Cascade)
+  engineeringReleaseId String @unique
+  engineeringRelease   EngineeringRelease @relation(fields: [engineeringReleaseId], references: [id], onDelete: Restrict)
+  status                ManufacturingSupplyPlanStatus @default(ACTIVE)
+  lockVersion           Int @default(1)
+  releaseCodeSnapshot   String
+  bomCodeSnapshot       String
+  bomRevisionCodeSnapshot String
+  orderQuantitySnapshot Int
+  generatedByUserId     String
+  generatedByName       String
+  generatedAt           DateTime @default(now())
+  completedAt           DateTime?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  requirements ManufacturingSupplyRequirement[]
+
+  @@index([tenantId, manufacturingOrderId, status, generatedAt(sort: Desc)])
+  @@index([tenantId, status, updatedAt(sort: Desc)])
+}
+
+model ManufacturingSupplyRequirement {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  supplyPlanId String
+  supplyPlan   ManufacturingSupplyPlan @relation(fields: [supplyPlanId], references: [id], onDelete: Cascade)
+  bomLineId    String
+  bomLine      ManufacturingBomLine @relation(fields: [bomLineId], references: [id], onDelete: Restrict)
+  inventoryItemId String?
+  inventoryItem   InventoryItem? @relation(fields: [inventoryItemId], references: [id], onDelete: SetNull)
+
+  positionSnapshot Int
+  levelSnapshot    Int
+  itemCodeSnapshot String
+  descriptionSnapshot String
+  uomSnapshot      String
+  quantityPerUnitSnapshot Decimal @db.Decimal(18, 6)
+  orderQuantitySnapshot   Int
+  requiredQuantity        Decimal @db.Decimal(18, 6)
+  isOptionalSnapshot      Boolean
+  included                Boolean
+  engineeringSupplyType   SupplyType
+  plannedSupplyType       SupplyType
+  criticalitySnapshot     PartCriticality
+
+  stockOnHandSnapshot     Decimal @db.Decimal(18, 6)
+  stockReservedSnapshot   Decimal @db.Decimal(18, 6)
+  stockAvailableSnapshot  Decimal @db.Decimal(18, 6)
+  stockCoveredQuantity    Decimal @db.Decimal(18, 6)
+  plannedQuantity         Decimal @db.Decimal(18, 6)
+  fulfilledQuantity       Decimal @default(0) @db.Decimal(18, 6)
+
+  status                  ManufacturingSupplyRequirementStatus @default(OPEN)
+  supplier                String?
+  externalReference       String?
+  expectedAt              DateTime?
+  notes                   String?
+  lockVersion             Int @default(1)
+  updatedByUserId         String?
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  @@unique([supplyPlanId, bomLineId])
+  @@index([tenantId, supplyPlanId, status, positionSnapshot])
+  @@index([tenantId, plannedSupplyType, status, expectedAt])
+  @@index([tenantId, inventoryItemId, status])
 }

@@ -10,6 +10,7 @@ import { useApiSWR } from '@/lib/swr';
 import { EngineeringDocumentsTab } from './EngineeringDocumentsTab';
 import { ManufacturingBomTab } from './ManufacturingBomTab';
 import { EngineeringReleasesTab } from './EngineeringReleasesTab';
+import { ManufacturingSupplyTab } from './ManufacturingSupplyTab';
 import {
   dateLabel,
   localDateInput,
@@ -24,7 +25,7 @@ import {
   type Paginated,
 } from '@/lib/manufacturing';
 
-type Tab = 'summary' | 'units' | 'members' | 'engineering' | 'bom' | 'releases' | 'history';
+type Tab = 'summary' | 'units' | 'members' | 'engineering' | 'bom' | 'releases' | 'supply' | 'history';
 
 export default function ManufacturingDetailPage() {
   const params = useParams();
@@ -68,7 +69,8 @@ export default function ManufacturingDetailPage() {
   const tabs: Array<{ key: Tab; label: string }> = [
     { key: 'summary', label: 'Resumen' }, { key: 'units', label: `Unidades (${data.units?.length || 0})` },
     { key: 'members', label: 'Equipo' }, { key: 'engineering', label: 'Ingeniería' },
-    { key: 'bom', label: 'BOM' }, { key: 'releases', label: 'Liberaciones' }, { key: 'history', label: 'Historial' },
+    { key: 'bom', label: 'BOM' }, { key: 'releases', label: 'Liberaciones' }, { key: 'supply', label: 'Abastecimiento' },
+    { key: 'history', label: 'Historial' },
   ];
 
   return (
@@ -94,6 +96,7 @@ export default function ManufacturingDetailPage() {
       {tab === 'engineering' ? <EngineeringDocumentsTab order={data} role={role} currentUserId={currentUserId} auth={auth} onChanged={() => mutate()} /> : null}
       {tab === 'bom' ? <ManufacturingBomTab order={data} role={role} currentUserId={currentUserId} auth={auth} onChanged={() => mutate()} /> : null}
       {tab === 'releases' ? <EngineeringReleasesTab order={data} role={role} auth={auth} onChanged={() => mutate()} /> : null}
+      {tab === 'supply' ? <ManufacturingSupplyTab order={data} role={role} auth={auth} onChanged={() => mutate()} /> : null}
       {tab === 'history' ? <History items={history?.items || []} /> : null}
     </div>
   );

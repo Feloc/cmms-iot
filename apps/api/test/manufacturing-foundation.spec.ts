@@ -6,6 +6,7 @@ import {
   isAllowedEngineeringFilename,
   normalizeEngineeringCode,
   resumableManufacturingStatus,
+  takeAvailableStock,
 } from '../src/modules/manufacturing/manufacturing.domain';
 
 test('formats manufacturing numbers with tenant-year sequence padding', () => {
@@ -51,4 +52,12 @@ test('allows controlled engineering formats and rejects unsafe extensions', () =
   assert.equal(isAllowedEngineeringFilename('modelo.step'), true);
   assert.equal(isAllowedEngineeringFilename('instalador.exe'), false);
   assert.equal(isAllowedEngineeringFilename('archivo_sin_extension'), false);
+});
+
+test('allocates stock once across repeated BOM lines', () => {
+  const remaining = new Map<string, number>();
+  assert.equal(takeAvailableStock(remaining, { inventoryItemId: 'motor', available: 5, required: 3, eligible: true }), 3);
+  assert.equal(takeAvailableStock(remaining, { inventoryItemId: 'motor', available: 5, required: 4, eligible: true }), 2);
+  assert.equal(takeAvailableStock(remaining, { inventoryItemId: 'motor', available: 5, required: 1, eligible: true }), 0);
+  assert.equal(takeAvailableStock(remaining, { inventoryItemId: 'sensor', available: 10, required: 2, eligible: false }), 0);
 });

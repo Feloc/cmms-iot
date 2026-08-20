@@ -205,6 +205,7 @@ export class ManufacturingReleasesService {
       if (!validation.valid) throw new ConflictException({ message: 'La liberación contiene errores bloqueantes', ...validation });
       const now = new Date();
       await tx.engineeringRelease.updateMany({ where: { tenantId, manufacturingOrderId: orderId, status: 'RELEASED', id: { not: releaseId } }, data: { status: 'SUPERSEDED' } });
+      await tx.manufacturingSupplyPlan.updateMany({ where: { tenantId, manufacturingOrderId: orderId, status: 'ACTIVE', engineeringReleaseId: { not: releaseId } }, data: { status: 'SUPERSEDED', lockVersion: { increment: 1 } } });
       await tx.manufacturingBomRevision.updateMany({ where: { tenantId, status: 'RELEASED', id: { not: release.bomRevisionId }, bom: { manufacturingOrderId: orderId } }, data: { status: 'SUPERSEDED' } });
       if (release.bomRevision.status === 'APPROVED') await tx.manufacturingBomRevision.update({ where: { id: release.bomRevisionId }, data: { status: 'RELEASED', releasedAt: now, releasedByUserId: actor.id } });
       for (const item of release.documents) {

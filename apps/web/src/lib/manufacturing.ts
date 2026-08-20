@@ -7,6 +7,8 @@ export type ManufacturingBomRevisionStatus = 'DRAFT' | 'IN_REVIEW' | 'APPROVED' 
 export type SupplyType = 'STOCK' | 'BUY' | 'MAKE' | 'SUBCONTRACT';
 export type PartCriticality = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
 export type EngineeringReleaseStatus = 'DRAFT' | 'RELEASED' | 'SUPERSEDED' | 'CANCELED';
+export type ManufacturingSupplyPlanStatus = 'ACTIVE' | 'SUPERSEDED' | 'COMPLETED' | 'CANCELED';
+export type ManufacturingSupplyRequirementStatus = 'OPEN' | 'IN_PROGRESS' | 'PARTIAL' | 'FULFILLED' | 'CANCELED';
 
 export type ManufacturingUser = {
   id: string;
@@ -230,6 +232,58 @@ export type EngineeringReleaseValidation = {
   summary: { bomCode: string; bomRevisionCode: string; bomLineCount: number; documentCount: number; releaseCode: string; lockVersion: number };
 };
 
+export type ManufacturingSupplyRequirement = {
+  id: string;
+  supplyPlanId: string;
+  bomLineId: string;
+  inventoryItemId?: string | null;
+  positionSnapshot: number;
+  levelSnapshot: number;
+  itemCodeSnapshot: string;
+  descriptionSnapshot: string;
+  uomSnapshot: string;
+  quantityPerUnitSnapshot: number;
+  orderQuantitySnapshot: number;
+  requiredQuantity: number;
+  isOptionalSnapshot: boolean;
+  included: boolean;
+  engineeringSupplyType: SupplyType;
+  plannedSupplyType: SupplyType;
+  criticalitySnapshot: PartCriticality;
+  stockOnHandSnapshot: number;
+  stockReservedSnapshot: number;
+  stockAvailableSnapshot: number;
+  stockCoveredQuantity: number;
+  plannedQuantity: number;
+  fulfilledQuantity: number;
+  status: ManufacturingSupplyRequirementStatus;
+  supplier?: string | null;
+  externalReference?: string | null;
+  expectedAt?: string | null;
+  notes?: string | null;
+  lockVersion: number;
+  inventoryItem?: { id: string; sku: string; name: string; uom: string; qty: number; status: string } | null;
+};
+
+export type ManufacturingSupplyPlan = {
+  id: string;
+  manufacturingOrderId: string;
+  engineeringReleaseId: string;
+  status: ManufacturingSupplyPlanStatus;
+  lockVersion: number;
+  releaseCodeSnapshot: string;
+  bomCodeSnapshot: string;
+  bomRevisionCodeSnapshot: string;
+  orderQuantitySnapshot: number;
+  generatedByUserId: string;
+  generatedByName: string;
+  generatedAt: string;
+  completedAt?: string | null;
+  isCurrentRelease: boolean;
+  requirements: ManufacturingSupplyRequirement[];
+  summary: { requirementCount: number; includedCount: number; fulfilledCount: number; openCount: number; stockCoveredQuantity: number; stockQuantity: number; buyQuantity: number; makeQuantity: number; subcontractQuantity: number };
+};
+
 export type Paginated<T> = {
   items: T[];
   total: number;
@@ -294,6 +348,10 @@ export const criticalityLabel: Record<PartCriticality, string> = { LOW: 'Baja', 
 
 export const engineeringReleaseStatusLabel: Record<EngineeringReleaseStatus, string> = { DRAFT: 'Borrador', RELEASED: 'Vigente', SUPERSEDED: 'Reemplazada', CANCELED: 'Cancelada' };
 export const engineeringReleaseStatusClass: Record<EngineeringReleaseStatus, string> = { DRAFT: 'bg-gray-100 text-gray-800', RELEASED: 'bg-emerald-100 text-emerald-800', SUPERSEDED: 'bg-amber-100 text-amber-800', CANCELED: 'bg-red-100 text-red-800' };
+
+export const supplyPlanStatusLabel: Record<ManufacturingSupplyPlanStatus, string> = { ACTIVE: 'Activo', SUPERSEDED: 'Reemplazado', COMPLETED: 'Completado', CANCELED: 'Cancelado' };
+export const supplyRequirementStatusLabel: Record<ManufacturingSupplyRequirementStatus, string> = { OPEN: 'Pendiente', IN_PROGRESS: 'En gestión', PARTIAL: 'Parcial', FULFILLED: 'Cubierta', CANCELED: 'Excluida' };
+export const supplyRequirementStatusClass: Record<ManufacturingSupplyRequirementStatus, string> = { OPEN: 'bg-amber-100 text-amber-800', IN_PROGRESS: 'bg-sky-100 text-sky-800', PARTIAL: 'bg-violet-100 text-violet-800', FULFILLED: 'bg-emerald-100 text-emerald-800', CANCELED: 'bg-gray-100 text-gray-500' };
 
 export function dateLabel(value?: string | null, withTime = false) {
   if (!value) return '—';

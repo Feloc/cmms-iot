@@ -43,3 +43,16 @@ export function bomHierarchyLevels(lines: Array<{ position: number; parentPositi
   }
   return levels;
 }
+
+export function takeAvailableStock(
+  remainingByItem: Map<string, number>,
+  input: { inventoryItemId?: string | null; available: number; required: number; eligible: boolean },
+) {
+  const itemId = String(input.inventoryItemId || '');
+  if (!input.eligible || !itemId || input.required <= 0) return 0;
+  if (!remainingByItem.has(itemId)) remainingByItem.set(itemId, Math.max(0, Number(input.available) || 0));
+  const remaining = Number(remainingByItem.get(itemId) || 0);
+  const covered = Math.min(Number(input.required), remaining);
+  remainingByItem.set(itemId, Math.max(0, remaining - covered));
+  return covered;
+}
