@@ -203,6 +203,16 @@ export class ManufacturingReleasesService {
       if (notes.length < 5) throw new BadRequestException('El motivo de liberación debe tener al menos 5 caracteres');
       const validation = await this.buildValidation(tx, tenantId, orderId, release);
       if (!validation.valid) throw new ConflictException({ message: 'La liberación contiene errores bloqueantes', ...validation });
+      const openReservations = await tx.manufacturingStockReservation.count({
+        where: {
+          tenantId,
+          supplyRequirement: { supplyPlan: { manufacturingOrderId: orderId, engineeringReleaseId: { not: releaseId } } },
+          status: { in: ['ACTIVE', 'PARTIAL'] },
+        },
+      });
+      if (openReservations) throw new ConflictException('Libera o entrega las reservas de inventario pendientes antes de publicar una nueva liberación');
+      const openRequests = await tx.manufacturingSupplyRequest.count({ where: { tenantId, supplyRequirement: { supplyPlan: { manufacturingOrderId: orderId, engineeringReleaseId: { not: releaseId } } }, status: { notIn: ['COMPLETED', 'CANCELED'] } } });
+      if (openRequests) throw new ConflictException('Completa o cancela las solicitudes de abastecimiento pendientes antes de publicar una nueva liberación');
       const now = new Date();
       await tx.engineeringRelease.updateMany({ where: { tenantId, manufacturingOrderId: orderId, status: 'RELEASED', id: { not: releaseId } }, data: { status: 'SUPERSEDED' } });
       await tx.manufacturingSupplyPlan.updateMany({ where: { tenantId, manufacturingOrderId: orderId, status: 'ACTIVE', engineeringReleaseId: { not: releaseId } }, data: { status: 'SUPERSEDED', lockVersion: { increment: 1 } } });

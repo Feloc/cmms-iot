@@ -486,6 +486,12 @@ export class ManufacturingService {
         auditAction = 'ORDER_RESUMED';
         summary = `Orden ${current.number} reanudada`;
       } else {
+        const openReservations = await tx.manufacturingStockReservation.count({
+          where: { tenantId, supplyRequirement: { supplyPlan: { manufacturingOrderId: id } }, status: { in: ['ACTIVE', 'PARTIAL'] } },
+        });
+        if (openReservations) throw new ConflictException('Libera o entrega las reservas de inventario pendientes antes de cancelar la orden');
+        const openRequests = await tx.manufacturingSupplyRequest.count({ where: { tenantId, supplyRequirement: { supplyPlan: { manufacturingOrderId: id } }, status: { notIn: ['COMPLETED', 'CANCELED'] } } });
+        if (openRequests) throw new ConflictException('Completa o cancela las solicitudes de abastecimiento pendientes antes de cancelar la orden');
         data = { status: 'CANCELED', statusBeforeHold: null, canceledReason: reason, holdReason: null, version: { increment: 1 } };
         auditAction = 'ORDER_CANCELED';
         summary = `Orden ${current.number} cancelada`;

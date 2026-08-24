@@ -140,6 +140,21 @@ enum ManufacturingSupplyRequirementStatus {
   CANCELED
 }
 
+enum ManufacturingStockReservationStatus {
+  ACTIVE
+  PARTIAL
+  ISSUED
+  RELEASED
+}
+
+enum ManufacturingSupplyRequestStatus {
+  REQUESTED
+  IN_PROGRESS
+  PARTIAL
+  COMPLETED
+  CANCELED
+}
+
 // Repuestos en una Orden de Servicio: primero se registran como necesarios (diagnóstico)
 // y luego se marcan como cambiados (historial en el activo).
 enum ServiceOrderPartStage {
@@ -296,6 +311,9 @@ model Tenant {
   engineeringReleaseDocuments  EngineeringReleaseDocument[]
   manufacturingSupplyPlans     ManufacturingSupplyPlan[]
   manufacturingSupplyRequirements ManufacturingSupplyRequirement[]
+  manufacturingStockReservations ManufacturingStockReservation[]
+  manufacturingSupplyRequests ManufacturingSupplyRequest[]
+  manufacturingSupplyDeliveries ManufacturingSupplyDelivery[]
 
   workOrderReports WorkOrderReport[]
 }
@@ -947,6 +965,7 @@ model InventoryItem {
   manualHotspots    PartsManualHotspot[]
   manufacturingBomLines ManufacturingBomLine[]
   manufacturingSupplyRequirements ManufacturingSupplyRequirement[]
+  manufacturingStockReservations ManufacturingStockReservation[]
 
   @@unique([tenantId, sku])
   @@index([tenantId, name])
@@ -1005,6 +1024,7 @@ model InventoryStock {
   updatedAt DateTime @updatedAt
 
   movements InventoryMovement[]
+  manufacturingStockReservations ManufacturingStockReservation[]
 
   @@index([tenantId, inventoryItemId])
   @@index([tenantId, warehouse, binLocation])
@@ -2082,8 +2102,99 @@ model ManufacturingSupplyRequirement {
   createdAt               DateTime @default(now())
   updatedAt               DateTime @updatedAt
 
+  stockReservations ManufacturingStockReservation[]
+  supplyRequests ManufacturingSupplyRequest[]
+
   @@unique([supplyPlanId, bomLineId])
   @@index([tenantId, supplyPlanId, status, positionSnapshot])
   @@index([tenantId, plannedSupplyType, status, expectedAt])
   @@index([tenantId, inventoryItemId, status])
+}
+
+model ManufacturingStockReservation {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  supplyRequirementId String
+  supplyRequirement   ManufacturingSupplyRequirement @relation(fields: [supplyRequirementId], references: [id], onDelete: Restrict)
+  inventoryItemId     String
+  inventoryItem       InventoryItem @relation(fields: [inventoryItemId], references: [id], onDelete: Restrict)
+  inventoryStockId    String
+  inventoryStock      InventoryStock @relation(fields: [inventoryStockId], references: [id], onDelete: Restrict)
+
+  status           ManufacturingStockReservationStatus @default(ACTIVE)
+  reservedQuantity Decimal @db.Decimal(18, 6)
+  issuedQuantity   Decimal @default(0) @db.Decimal(18, 6)
+  releasedQuantity Decimal @default(0) @db.Decimal(18, 6)
+  warehouseSnapshot String?
+  binLocationSnapshot String?
+  notes              String?
+  lockVersion         Int @default(1)
+
+  createdByUserId String
+  createdByName   String
+  createdAt       DateTime @default(now())
+  updatedByUserId String?
+  updatedAt       DateTime @updatedAt
+
+  @@index([tenantId, supplyRequirementId, status, createdAt])
+  @@index([tenantId, inventoryStockId, status])
+  @@index([tenantId, inventoryItemId, status])
+}
+
+model ManufacturingSupplyRequest {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  supplyRequirementId String
+  supplyRequirement   ManufacturingSupplyRequirement @relation(fields: [supplyRequirementId], references: [id], onDelete: Restrict)
+  sequence             Int
+  requestCode          String
+  requestType          SupplyType
+  status               ManufacturingSupplyRequestStatus @default(REQUESTED)
+
+  requestedQuantity Decimal @db.Decimal(18, 6)
+  deliveredQuantity Decimal @default(0) @db.Decimal(18, 6)
+  canceledQuantity  Decimal @default(0) @db.Decimal(18, 6)
+  supplierOrResponsible String?
+  externalReference     String?
+  promisedAt            DateTime?
+  notes                 String?
+  lockVersion           Int @default(1)
+
+  createdByUserId String
+  createdByName   String
+  requestedAt     DateTime @default(now())
+  completedAt     DateTime?
+  canceledAt      DateTime?
+  updatedByUserId String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  deliveries ManufacturingSupplyDelivery[]
+
+  @@unique([supplyRequirementId, sequence])
+  @@unique([tenantId, requestCode])
+  @@index([tenantId, requestType, status, promisedAt])
+  @@index([tenantId, supplyRequirementId, status])
+}
+
+model ManufacturingSupplyDelivery {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  supplyRequestId String
+  supplyRequest   ManufacturingSupplyRequest @relation(fields: [supplyRequestId], references: [id], onDelete: Restrict)
+  quantity        Decimal @db.Decimal(18, 6)
+  deliveredAt     DateTime
+  reference       String?
+  notes           String?
+  createdByUserId String
+  createdByName   String
+  createdAt       DateTime @default(now())
+
+  @@index([tenantId, supplyRequestId, deliveredAt(sort: Desc)])
 }

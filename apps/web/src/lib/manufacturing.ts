@@ -262,7 +262,69 @@ export type ManufacturingSupplyRequirement = {
   expectedAt?: string | null;
   notes?: string | null;
   lockVersion: number;
-  inventoryItem?: { id: string; sku: string; name: string; uom: string; qty: number; status: string } | null;
+  inventoryItem?: { id: string; sku: string; name: string; uom: string; qty: number; status: string; stocks: ManufacturingInventoryStock[] } | null;
+  stockReservations: ManufacturingStockReservation[];
+  reservationSummary: { reservedQuantity: number; issuedQuantity: number; releasedQuantity: number; outstandingQuantity: number };
+  supplyRequests: ManufacturingSupplyRequest[];
+  requestSummary: { requestedQuantity: number; deliveredQuantity: number; canceledQuantity: number; outstandingQuantity: number };
+};
+
+export type ManufacturingInventoryStock = {
+  id: string;
+  warehouse?: string | null;
+  binLocation?: string | null;
+  stockOnHand: number;
+  stockReserved?: number | null;
+  availableQuantity: number;
+};
+
+export type ManufacturingStockReservationStatus = 'ACTIVE' | 'PARTIAL' | 'ISSUED' | 'RELEASED';
+
+export type ManufacturingStockReservation = {
+  id: string;
+  status: ManufacturingStockReservationStatus;
+  reservedQuantity: number;
+  issuedQuantity: number;
+  releasedQuantity: number;
+  outstandingQuantity: number;
+  warehouseSnapshot?: string | null;
+  binLocationSnapshot?: string | null;
+  notes?: string | null;
+  lockVersion: number;
+  createdByName: string;
+  createdAt: string;
+};
+
+export type ManufacturingSupplyRequestStatus = 'REQUESTED' | 'IN_PROGRESS' | 'PARTIAL' | 'COMPLETED' | 'CANCELED';
+
+export type ManufacturingSupplyDelivery = {
+  id: string;
+  quantity: number;
+  deliveredAt: string;
+  reference?: string | null;
+  notes?: string | null;
+  createdByName: string;
+  createdAt: string;
+};
+
+export type ManufacturingSupplyRequest = {
+  id: string;
+  sequence: number;
+  requestCode: string;
+  requestType: Exclude<SupplyType, 'STOCK'>;
+  status: ManufacturingSupplyRequestStatus;
+  requestedQuantity: number;
+  deliveredQuantity: number;
+  canceledQuantity: number;
+  outstandingQuantity: number;
+  supplierOrResponsible?: string | null;
+  externalReference?: string | null;
+  promisedAt?: string | null;
+  notes?: string | null;
+  lockVersion: number;
+  createdByName: string;
+  requestedAt: string;
+  deliveries: ManufacturingSupplyDelivery[];
 };
 
 export type ManufacturingSupplyPlan = {
@@ -281,7 +343,7 @@ export type ManufacturingSupplyPlan = {
   completedAt?: string | null;
   isCurrentRelease: boolean;
   requirements: ManufacturingSupplyRequirement[];
-  summary: { requirementCount: number; includedCount: number; fulfilledCount: number; openCount: number; stockCoveredQuantity: number; stockQuantity: number; buyQuantity: number; makeQuantity: number; subcontractQuantity: number };
+  summary: { requirementCount: number; includedCount: number; fulfilledCount: number; openCount: number; stockCoveredQuantity: number; reservedQuantity: number; issuedQuantity: number; requestedQuantity: number; deliveredQuantity: number; stockQuantity: number; buyQuantity: number; makeQuantity: number; subcontractQuantity: number };
 };
 
 export type Paginated<T> = {

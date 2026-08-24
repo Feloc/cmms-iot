@@ -42,7 +42,11 @@ export class ManufacturingSupplyService {
     return {
       engineeringRelease: { select: { id: true, releaseCode: true, status: true, releasedAt: true } },
       requirements: {
-        include: { inventoryItem: { select: { id: true, sku: true, name: true, uom: true, qty: true, status: true } } },
+        include: {
+          inventoryItem: { select: { id: true, sku: true, name: true, uom: true, qty: true, status: true, stocks: { orderBy: [{ warehouse: 'asc' }, { binLocation: 'asc' }] } } },
+          stockReservations: { orderBy: { createdAt: 'asc' } },
+          supplyRequests: { include: { deliveries: { orderBy: { deliveredAt: 'desc' } } }, orderBy: { sequence: 'asc' } },
+        },
         orderBy: { positionSnapshot: 'asc' },
       },
     };
@@ -51,13 +55,38 @@ export class ManufacturingSupplyService {
   private number(value: unknown) { return Number(value || 0); }
 
   private serialize(plan: any, currentReleaseId?: string | null) {
-    const requirements = (plan.requirements || []).map((item: any) => ({
-      ...item,
+    const requirements = (plan.requirements || []).map((item: any) => {
+      const stockReservations = (item.stockReservations || []).map((reservation: any) => ({
+        ...reservation,
+        reservedQuantity: this.number(reservation.reservedQuantity), issuedQuantity: this.number(reservation.issuedQuantity),
+        releasedQuantity: this.number(reservation.releasedQuantity),
+        outstandingQuantity: Math.max(0, this.number(reservation.reservedQuantity) - this.number(reservation.issuedQuantity) - this.number(reservation.releasedQuantity)),
+      }));
+      const reservationSummary = stockReservations.reduce((summary: any, reservation: any) => ({
+        reservedQuantity: summary.reservedQuantity + reservation.reservedQuantity,
+        issuedQuantity: summary.issuedQuantity + reservation.issuedQuantity,
+        releasedQuantity: summary.releasedQuantity + reservation.releasedQuantity,
+        outstandingQuantity: summary.outstandingQuantity + reservation.outstandingQuantity,
+      }), { reservedQuantity: 0, issuedQuantity: 0, releasedQuantity: 0, outstandingQuantity: 0 });
+      const supplyRequests = (item.supplyRequests || []).map((request: any) => ({
+        ...request, requestedQuantity: this.number(request.requestedQuantity), deliveredQuantity: this.number(request.deliveredQuantity),
+        canceledQuantity: this.number(request.canceledQuantity),
+        outstandingQuantity: Math.max(0, this.number(request.requestedQuantity) - this.number(request.deliveredQuantity) - this.number(request.canceledQuantity)),
+        deliveries: (request.deliveries || []).map((delivery: any) => ({ ...delivery, quantity: this.number(delivery.quantity) })),
+      }));
+      const requestSummary = supplyRequests.reduce((summary: any, request: any) => ({
+        requestedQuantity: summary.requestedQuantity + request.requestedQuantity,
+        deliveredQuantity: summary.deliveredQuantity + request.deliveredQuantity,
+        canceledQuantity: summary.canceledQuantity + request.canceledQuantity,
+        outstandingQuantity: summary.outstandingQuantity + request.outstandingQuantity,
+      }), { requestedQuantity: 0, deliveredQuantity: 0, canceledQuantity: 0, outstandingQuantity: 0 });
+      return { ...item, stockReservations, reservationSummary, supplyRequests, requestSummary,
       quantityPerUnitSnapshot: this.number(item.quantityPerUnitSnapshot), requiredQuantity: this.number(item.requiredQuantity),
       stockOnHandSnapshot: this.number(item.stockOnHandSnapshot), stockReservedSnapshot: this.number(item.stockReservedSnapshot),
       stockAvailableSnapshot: this.number(item.stockAvailableSnapshot), stockCoveredQuantity: this.number(item.stockCoveredQuantity),
       plannedQuantity: this.number(item.plannedQuantity), fulfilledQuantity: this.number(item.fulfilledQuantity),
-    }));
+      inventoryItem: item.inventoryItem ? { ...item.inventoryItem, stocks: (item.inventoryItem.stocks || []).map((stock: any) => ({ ...stock, availableQuantity: Math.max(0, Number(stock.stockOnHand || 0) - Number(stock.stockReserved || 0)) })) } : null,
+    }; });
     const included = requirements.filter((item: any) => item.included);
     const byType = (type: string) => included.filter((item: any) => item.plannedSupplyType === type).reduce((sum: number, item: any) => sum + item.plannedQuantity, 0);
     return {
@@ -67,6 +96,10 @@ export class ManufacturingSupplyService {
         fulfilledCount: included.filter((item: any) => item.status === 'FULFILLED').length,
         openCount: included.filter((item: any) => !['FULFILLED', 'CANCELED'].includes(item.status)).length,
         stockCoveredQuantity: included.reduce((sum: number, item: any) => sum + item.stockCoveredQuantity, 0),
+        reservedQuantity: included.reduce((sum: number, item: any) => sum + item.reservationSummary.outstandingQuantity, 0),
+        issuedQuantity: included.reduce((sum: number, item: any) => sum + item.reservationSummary.issuedQuantity, 0),
+        requestedQuantity: included.reduce((sum: number, item: any) => sum + item.requestSummary.outstandingQuantity, 0),
+        deliveredQuantity: included.reduce((sum: number, item: any) => sum + item.requestSummary.deliveredQuantity, 0),
         stockQuantity: byType('STOCK'), buyQuantity: byType('BUY'), makeQuantity: byType('MAKE'), subcontractQuantity: byType('SUBCONTRACT'),
       },
     };
@@ -112,7 +145,7 @@ export class ManufacturingSupplyService {
         const included = !line.isOptional;
         const covered = takeAvailableStock(remainingByItem, { inventoryItemId: line.inventoryItemId, available, required, eligible: included && line.supplyType === 'STOCK' });
         const planned = included ? Math.max(0, required - covered) : 0;
-        const status = !included ? 'CANCELED' : covered >= required ? 'FULFILLED' : covered > 0 ? 'PARTIAL' : 'OPEN';
+        const status = !included ? 'CANCELED' : 'OPEN';
         return {
           tenantId, supplyPlanId: plan.id, bomLineId: line.id, inventoryItemId: line.inventoryItemId,
           positionSnapshot: line.position, levelSnapshot: line.level, itemCodeSnapshot: line.itemCode,
@@ -121,7 +154,7 @@ export class ManufacturingSupplyService {
           included, engineeringSupplyType: line.supplyType, plannedSupplyType: line.supplyType,
           criticalitySnapshot: line.criticality, stockOnHandSnapshot: onHand, stockReservedSnapshot: reserved,
           stockAvailableSnapshot: available, stockCoveredQuantity: covered, plannedQuantity: planned,
-          fulfilledQuantity: covered, status,
+          fulfilledQuantity: 0, status,
           supplier: line.preferredSupplier, expectedAt: line.leadTimeDays == null ? null : new Date(Date.now() + Number(line.leadTimeDays) * 86400000),
           notes: line.notes,
         };
@@ -147,6 +180,10 @@ export class ManufacturingSupplyService {
       const observedVersion = Number(dto?.lockVersion);
       if (!Number.isInteger(observedVersion) || observedVersion !== requirement.lockVersion) throw new ConflictException('La necesidad cambió; actualiza la pantalla');
       const data: any = { lockVersion: { increment: 1 }, updatedByUserId: actor.id };
+      const reservationCount = await tx.manufacturingStockReservation.count({ where: { tenantId, supplyRequirementId: requirementId } });
+      if (reservationCount && ((dto.included !== undefined && !!dto.included !== requirement.included) || (dto.plannedSupplyType !== undefined && String(dto.plannedSupplyType).toUpperCase() !== requirement.plannedSupplyType))) throw new ConflictException('Libera o entrega las reservas existentes antes de cambiar la ruta o excluir la necesidad');
+      const openRequestCount = await tx.manufacturingSupplyRequest.count({ where: { tenantId, supplyRequirementId: requirementId, status: { notIn: ['COMPLETED', 'CANCELED'] } } });
+      if (openRequestCount && ((dto.included !== undefined && !!dto.included !== requirement.included) || (dto.plannedSupplyType !== undefined && String(dto.plannedSupplyType).toUpperCase() !== requirement.plannedSupplyType))) throw new ConflictException('Completa o cancela las solicitudes pendientes antes de cambiar la ruta o excluir la necesidad');
       let included = dto.included === undefined ? requirement.included : !!dto.included;
       if (!requirement.isOptionalSnapshot && !included) throw new BadRequestException('Una línea obligatoria no puede excluirse del plan');
       if (dto.plannedSupplyType !== undefined) {
@@ -154,6 +191,7 @@ export class ManufacturingSupplyService {
       }
       const required = Number(requirement.requiredQuantity);
       let fulfilled = dto.fulfilledQuantity === undefined ? Number(requirement.fulfilledQuantity) : Number(dto.fulfilledQuantity);
+      if (requirement.plannedSupplyType === 'STOCK' && dto.fulfilledQuantity !== undefined && Math.abs(fulfilled - Number(requirement.fulfilledQuantity)) > 1e-9) throw new ConflictException('La cantidad cubierta por inventario se actualiza al entregar reservas');
       if (!Number.isFinite(fulfilled) || fulfilled < 0 || fulfilled > required) throw new BadRequestException('fulfilledQuantity debe estar entre cero y la cantidad requerida');
       let status = dto.status === undefined ? String(requirement.status) : String(dto.status).toUpperCase();
       if (!REQUIREMENT_STATUSES.has(status)) throw new BadRequestException('status inválido');
