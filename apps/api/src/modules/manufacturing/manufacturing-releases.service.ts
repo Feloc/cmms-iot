@@ -213,6 +213,10 @@ export class ManufacturingReleasesService {
       if (openReservations) throw new ConflictException('Libera o entrega las reservas de inventario pendientes antes de publicar una nueva liberación');
       const openRequests = await tx.manufacturingSupplyRequest.count({ where: { tenantId, supplyRequirement: { supplyPlan: { manufacturingOrderId: orderId, engineeringReleaseId: { not: releaseId } } }, status: { notIn: ['COMPLETED', 'CANCELED'] } } });
       if (openRequests) throw new ConflictException('Completa o cancela las solicitudes de abastecimiento pendientes antes de publicar una nueva liberación');
+      const openInspections = await tx.manufacturingSupplyDelivery.count({ where: { tenantId, supplyRequest: { supplyRequirement: { supplyPlan: { manufacturingOrderId: orderId, engineeringReleaseId: { not: releaseId } } } }, inspectionStatus: { not: 'CLOSED' } } });
+      if (openInspections) throw new ConflictException('Resuelve las inspecciones y cuarentenas pendientes antes de publicar una nueva liberación');
+      const activeKits = await tx.manufacturingKit.count({ where: { tenantId, manufacturingOrderId: orderId, supplyPlan: { engineeringReleaseId: { not: releaseId } }, status: { not: 'CANCELED' } } });
+      if (activeKits) throw new ConflictException('Cancela los kits preparados antes de publicar una nueva liberación');
       const now = new Date();
       await tx.engineeringRelease.updateMany({ where: { tenantId, manufacturingOrderId: orderId, status: 'RELEASED', id: { not: releaseId } }, data: { status: 'SUPERSEDED' } });
       await tx.manufacturingSupplyPlan.updateMany({ where: { tenantId, manufacturingOrderId: orderId, status: 'ACTIVE', engineeringReleaseId: { not: releaseId } }, data: { status: 'SUPERSEDED', lockVersion: { increment: 1 } } });

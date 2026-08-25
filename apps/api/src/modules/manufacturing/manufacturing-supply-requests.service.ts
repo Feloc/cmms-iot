@@ -36,7 +36,8 @@ export class ManufacturingSupplyRequestsService {
       const requirement = await this.requirement(tx, tenantId, requirementId); orderId = requirement.supplyPlan.manufacturingOrderId;
       const quantity = this.quantity(dto?.quantity);
       const aggregate = await tx.manufacturingSupplyRequest.aggregate({ where: { tenantId, supplyRequirementId: requirementId }, _sum: { requestedQuantity: true, canceledQuantity: true } });
-      const committed = Number(aggregate._sum.requestedQuantity || 0) - Number(aggregate._sum.canceledQuantity || 0);
+      const rejected = await tx.manufacturingSupplyDelivery.aggregate({ where: { tenantId, supplyRequest: { supplyRequirementId: requirementId } }, _sum: { rejectedQuantity: true } });
+      const committed = Number(aggregate._sum.requestedQuantity || 0) - Number(aggregate._sum.canceledQuantity || 0) - Number(rejected._sum.rejectedQuantity || 0);
       const remaining = Math.max(0, Number(requirement.requiredQuantity) - committed);
       if (quantity > remaining + 1e-9) throw new ConflictException(`La necesidad solo admite ${remaining} adicionales`);
       const last = await tx.manufacturingSupplyRequest.findFirst({ where: { tenantId, supplyRequirementId: requirementId }, orderBy: { sequence: 'desc' }, select: { sequence: true } });
@@ -84,13 +85,9 @@ export class ManufacturingSupplyRequestsService {
       const delivered = Number(request.deliveredQuantity) + quantity;
       const remaining = Number(request.requestedQuantity) - delivered - Number(request.canceledQuantity);
       const status = remaining <= 1e-9 ? 'COMPLETED' : 'PARTIAL';
-      await tx.manufacturingSupplyDelivery.create({ data: { tenantId, supplyRequestId: request.id, quantity, deliveredAt: this.date(dto?.deliveredAt, new Date())!, reference: this.text(dto?.reference), notes: this.text(dto?.notes), createdByUserId: actor.id, createdByName: actor.name } });
+      await tx.manufacturingSupplyDelivery.create({ data: { tenantId, supplyRequestId: request.id, quantity, inspectionStatus: 'PENDING', deliveredAt: this.date(dto?.deliveredAt, new Date())!, reference: this.text(dto?.reference), notes: this.text(dto?.notes), createdByUserId: actor.id, createdByName: actor.name } });
       await tx.manufacturingSupplyRequest.update({ where: { id: request.id }, data: { deliveredQuantity: delivered, status, completedAt: status === 'COMPLETED' ? new Date() : null, updatedByUserId: actor.id, lockVersion: { increment: 1 } } });
-      const required = Number(request.supplyRequirement.requiredQuantity);
-      const fulfilled = Math.min(required, Number(request.supplyRequirement.fulfilledQuantity) + quantity);
-      await tx.manufacturingSupplyRequirement.update({ where: { id: request.supplyRequirementId }, data: { fulfilledQuantity: fulfilled, status: fulfilled >= required ? 'FULFILLED' : 'PARTIAL', updatedByUserId: actor.id, lockVersion: { increment: 1 } } });
-      await this.completePlanIfReady(tx, tenantId, request.supplyRequirement.supplyPlanId);
-      await this.audit(tx, tenantId, orderId, request.id, 'SUPPLY_DELIVERY_RECORDED', `${request.requestCode}: ${quantity} recibidas/terminadas`, actor, { quantity, delivered, status, reference: dto?.reference });
+      await this.audit(tx, tenantId, orderId, request.id, 'SUPPLY_DELIVERY_RECORDED', `${request.requestCode}: ${quantity} recibidas, pendientes de inspección`, actor, { quantity, delivered, status, reference: dto?.reference });
       await tx.manufacturingOrder.update({ where: { id: orderId }, data: { version: { increment: 1 } } });
     }, { isolationLevel: 'Serializable' });
     return this.supply.list(orderId);
@@ -120,6 +117,5 @@ export class ManufacturingSupplyRequestsService {
   }
   private assertVersion(request: any, value: unknown) { const version = Number(value); if (!Number.isInteger(version) || version !== request.lockVersion) throw new ConflictException('La solicitud cambió; actualiza la pantalla'); }
   private mutable(request: any) { if (['COMPLETED', 'CANCELED'].includes(request.status)) throw new ConflictException('La solicitud ya está cerrada'); }
-  private async completePlanIfReady(tx: any, tenantId: string, planId: string) { const pending = await tx.manufacturingSupplyRequirement.count({ where: { tenantId, supplyPlanId: planId, included: true, status: { not: 'FULFILLED' } } }); if (!pending) await tx.manufacturingSupplyPlan.update({ where: { id: planId }, data: { status: 'COMPLETED', completedAt: new Date(), lockVersion: { increment: 1 } } }); }
   private async audit(tx: any, tenantId: string, orderId: string, entityId: string, action: string, summary: string, actor: Actor, afterData: unknown) { await tx.manufacturingAuditEvent.create({ data: { tenantId, manufacturingOrderId: orderId, entityType: 'ManufacturingSupplyRequest', entityId, action, summary, actorUserId: actor.id, actorName: actor.name, afterData: JSON.parse(JSON.stringify(afterData)) } }); }
 }

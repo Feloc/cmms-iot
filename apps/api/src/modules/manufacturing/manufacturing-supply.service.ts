@@ -45,7 +45,7 @@ export class ManufacturingSupplyService {
         include: {
           inventoryItem: { select: { id: true, sku: true, name: true, uom: true, qty: true, status: true, stocks: { orderBy: [{ warehouse: 'asc' }, { binLocation: 'asc' }] } } },
           stockReservations: { orderBy: { createdAt: 'asc' } },
-          supplyRequests: { include: { deliveries: { orderBy: { deliveredAt: 'desc' } } }, orderBy: { sequence: 'asc' } },
+          supplyRequests: { include: { deliveries: { include: { inspectionDecisions: { orderBy: { inspectedAt: 'desc' } } }, orderBy: { deliveredAt: 'desc' } } }, orderBy: { sequence: 'asc' } },
         },
         orderBy: { positionSnapshot: 'asc' },
       },
@@ -72,14 +72,17 @@ export class ManufacturingSupplyService {
         ...request, requestedQuantity: this.number(request.requestedQuantity), deliveredQuantity: this.number(request.deliveredQuantity),
         canceledQuantity: this.number(request.canceledQuantity),
         outstandingQuantity: Math.max(0, this.number(request.requestedQuantity) - this.number(request.deliveredQuantity) - this.number(request.canceledQuantity)),
-        deliveries: (request.deliveries || []).map((delivery: any) => ({ ...delivery, quantity: this.number(delivery.quantity) })),
+        deliveries: (request.deliveries || []).map((delivery: any) => ({ ...delivery, quantity: this.number(delivery.quantity), acceptedQuantity: this.number(delivery.acceptedQuantity), rejectedQuantity: this.number(delivery.rejectedQuantity), quarantinedQuantity: this.number(delivery.quarantinedQuantity), inspectionDecisions: (delivery.inspectionDecisions || []).map((decision: any) => ({ ...decision, quantity: this.number(decision.quantity) })) })),
       }));
       const requestSummary = supplyRequests.reduce((summary: any, request: any) => ({
         requestedQuantity: summary.requestedQuantity + request.requestedQuantity,
         deliveredQuantity: summary.deliveredQuantity + request.deliveredQuantity,
         canceledQuantity: summary.canceledQuantity + request.canceledQuantity,
         outstandingQuantity: summary.outstandingQuantity + request.outstandingQuantity,
-      }), { requestedQuantity: 0, deliveredQuantity: 0, canceledQuantity: 0, outstandingQuantity: 0 });
+        acceptedQuantity: summary.acceptedQuantity + request.deliveries.reduce((sum: number, delivery: any) => sum + delivery.acceptedQuantity, 0),
+        rejectedQuantity: summary.rejectedQuantity + request.deliveries.reduce((sum: number, delivery: any) => sum + delivery.rejectedQuantity, 0),
+        quarantinedQuantity: summary.quarantinedQuantity + request.deliveries.reduce((sum: number, delivery: any) => sum + delivery.quarantinedQuantity, 0),
+      }), { requestedQuantity: 0, deliveredQuantity: 0, canceledQuantity: 0, outstandingQuantity: 0, acceptedQuantity: 0, rejectedQuantity: 0, quarantinedQuantity: 0 });
       return { ...item, stockReservations, reservationSummary, supplyRequests, requestSummary,
       quantityPerUnitSnapshot: this.number(item.quantityPerUnitSnapshot), requiredQuantity: this.number(item.requiredQuantity),
       stockOnHandSnapshot: this.number(item.stockOnHandSnapshot), stockReservedSnapshot: this.number(item.stockReservedSnapshot),
@@ -100,6 +103,9 @@ export class ManufacturingSupplyService {
         issuedQuantity: included.reduce((sum: number, item: any) => sum + item.reservationSummary.issuedQuantity, 0),
         requestedQuantity: included.reduce((sum: number, item: any) => sum + item.requestSummary.outstandingQuantity, 0),
         deliveredQuantity: included.reduce((sum: number, item: any) => sum + item.requestSummary.deliveredQuantity, 0),
+        acceptedQuantity: included.reduce((sum: number, item: any) => sum + item.requestSummary.acceptedQuantity, 0),
+        rejectedQuantity: included.reduce((sum: number, item: any) => sum + item.requestSummary.rejectedQuantity, 0),
+        quarantinedQuantity: included.reduce((sum: number, item: any) => sum + item.requestSummary.quarantinedQuantity, 0),
         stockQuantity: byType('STOCK'), buyQuantity: byType('BUY'), makeQuantity: byType('MAKE'), subcontractQuantity: byType('SUBCONTRACT'),
       },
     };
@@ -184,6 +190,8 @@ export class ManufacturingSupplyService {
       if (reservationCount && ((dto.included !== undefined && !!dto.included !== requirement.included) || (dto.plannedSupplyType !== undefined && String(dto.plannedSupplyType).toUpperCase() !== requirement.plannedSupplyType))) throw new ConflictException('Libera o entrega las reservas existentes antes de cambiar la ruta o excluir la necesidad');
       const openRequestCount = await tx.manufacturingSupplyRequest.count({ where: { tenantId, supplyRequirementId: requirementId, status: { notIn: ['COMPLETED', 'CANCELED'] } } });
       if (openRequestCount && ((dto.included !== undefined && !!dto.included !== requirement.included) || (dto.plannedSupplyType !== undefined && String(dto.plannedSupplyType).toUpperCase() !== requirement.plannedSupplyType))) throw new ConflictException('Completa o cancela las solicitudes pendientes antes de cambiar la ruta o excluir la necesidad');
+      const openInspectionCount = await tx.manufacturingSupplyDelivery.count({ where: { tenantId, supplyRequest: { supplyRequirementId: requirementId }, inspectionStatus: { not: 'CLOSED' } } });
+      if (openInspectionCount && ((dto.included !== undefined && !!dto.included !== requirement.included) || (dto.plannedSupplyType !== undefined && String(dto.plannedSupplyType).toUpperCase() !== requirement.plannedSupplyType))) throw new ConflictException('Resuelve las inspecciones y cuarentenas antes de cambiar la ruta o excluir la necesidad');
       let included = dto.included === undefined ? requirement.included : !!dto.included;
       if (!requirement.isOptionalSnapshot && !included) throw new BadRequestException('Una línea obligatoria no puede excluirse del plan');
       if (dto.plannedSupplyType !== undefined) {

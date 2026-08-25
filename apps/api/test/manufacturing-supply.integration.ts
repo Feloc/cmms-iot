@@ -4,6 +4,8 @@ import { tenantStorage } from '../src/common/tenant-context';
 import { ManufacturingSupplyService } from '../src/modules/manufacturing/manufacturing-supply.service';
 import { ManufacturingStockReservationsService } from '../src/modules/manufacturing/manufacturing-stock-reservations.service';
 import { ManufacturingSupplyRequestsService } from '../src/modules/manufacturing/manufacturing-supply-requests.service';
+import { ManufacturingSupplyInspectionsService } from '../src/modules/manufacturing/manufacturing-supply-inspections.service';
+import { ManufacturingKitsService } from '../src/modules/manufacturing/manufacturing-kits.service';
 
 async function main() {
   const prisma = new PrismaService();
@@ -45,6 +47,7 @@ async function main() {
     });
     orderId = order.id;
     orderNumber = order.number;
+    await prisma.manufacturedUnit.createMany({ data: [1, 2, 3].map((unitNumber) => ({ tenantId: admin.tenantId, manufacturingOrderId: order.id, unitNumber })) });
 
     const bom = await prisma.manufacturingBom.create({
       data: {
@@ -100,6 +103,8 @@ async function main() {
     const service = new ManufacturingSupplyService(prisma);
     const reservationService = new ManufacturingStockReservationsService(prisma, service);
     const requestService = new ManufacturingSupplyRequestsService(prisma, service);
+    const inspectionService = new ManufacturingSupplyInspectionsService(prisma, service);
+    const kitsService = new ManufacturingKitsService(prisma);
     await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => service.generate(order.id, { engineeringReleaseId: release.id }));
     let plans = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => service.list(order.id));
     assert.equal(plans.length, 1);
@@ -139,11 +144,21 @@ async function main() {
     let buyRequest = buy.supplyRequests[0];
     await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => requestService.deliver(buyRequest.id, { lockVersion: buyRequest.lockVersion, quantity: 2, reference: 'REM-1' }));
     plans = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => service.list(order.id)); buy = plans[0].requirements.find((line: any) => line.plannedSupplyType === 'BUY'); buyRequest = buy.supplyRequests[0];
+    let delivery = buyRequest.deliveries[0];
+    assert.equal(buy.fulfilledQuantity, 0);
+    await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => inspectionService.inspect(delivery.id, { lockVersion: delivery.lockVersion, acceptedQuantity: 1, rejectedQuantity: 1, reference: 'IC-1' }));
+    plans = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => service.list(order.id)); buy = plans[0].requirements.find((line: any) => line.plannedSupplyType === 'BUY'); buyRequest = buy.supplyRequests[0];
+    assert.equal(buy.fulfilledQuantity, 1);
     await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => requestService.cancel(buyRequest.id, { lockVersion: buyRequest.lockVersion, reason: 'Proveedor sin saldo' }));
     plans = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => service.list(order.id)); buy = plans[0].requirements.find((line: any) => line.plannedSupplyType === 'BUY');
-    await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => requestService.create(buy.id, { quantity: 4, supplierOrResponsible: 'Proveedor B', externalReference: 'OC-2' }));
+    await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => requestService.create(buy.id, { quantity: 5, supplierOrResponsible: 'Proveedor B', externalReference: 'OC-2' }));
     plans = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => service.list(order.id)); buy = plans[0].requirements.find((line: any) => line.plannedSupplyType === 'BUY'); const replacement = buy.supplyRequests[1];
-    await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => requestService.deliver(replacement.id, { lockVersion: replacement.lockVersion, quantity: 4, reference: 'REM-2' }));
+    await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => requestService.deliver(replacement.id, { lockVersion: replacement.lockVersion, quantity: 5, reference: 'REM-2' }));
+    plans = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => service.list(order.id)); buy = plans[0].requirements.find((line: any) => line.plannedSupplyType === 'BUY'); delivery = buy.supplyRequests[1].deliveries[0];
+    await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => inspectionService.inspect(delivery.id, { lockVersion: delivery.lockVersion, acceptedQuantity: 4, quarantinedQuantity: 1, reference: 'IC-2' }));
+    plans = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => service.list(order.id)); buy = plans[0].requirements.find((line: any) => line.plannedSupplyType === 'BUY'); delivery = buy.supplyRequests[1].deliveries[0];
+    assert.equal(delivery.inspectionStatus, 'QUARANTINED');
+    await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => inspectionService.resolveQuarantine(delivery.id, { lockVersion: delivery.lockVersion, acceptedQuantity: 1, reference: 'LIB-IC-2' }));
 
     plans = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => service.list(order.id)); const make = plans[0].requirements.find((line: any) => line.plannedSupplyType === 'MAKE');
     await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => requestService.create(make.id, { quantity: 3, supplierOrResponsible: 'Taller interno' }));
@@ -151,20 +166,29 @@ async function main() {
     await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => requestService.update(makeRequest.id, { lockVersion: makeRequest.lockVersion, status: 'IN_PROGRESS', externalReference: 'OP-INT-1' }));
     plans = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => service.list(order.id)); makeRequest = plans[0].requirements.find((line: any) => line.plannedSupplyType === 'MAKE').supplyRequests[0];
     await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => requestService.deliver(makeRequest.id, { lockVersion: makeRequest.lockVersion, quantity: 3, reference: 'LOTE-INT' }));
+    plans = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => service.list(order.id)); delivery = plans[0].requirements.find((line: any) => line.plannedSupplyType === 'MAKE').supplyRequests[0].deliveries[0];
+    await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => inspectionService.inspect(delivery.id, { lockVersion: delivery.lockVersion, acceptedQuantity: 3, reference: 'IC-MAKE' }));
 
     plans = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => service.list(order.id)); const subcontract = plans[0].requirements.find((line: any) => line.positionSnapshot === 50);
     await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => requestService.create(subcontract.id, { quantity: 3, supplierOrResponsible: 'Tercero CNC' }));
     plans = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => service.list(order.id)); let subRequest = plans[0].requirements.find((line: any) => line.positionSnapshot === 50).supplyRequests[0];
     await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => requestService.deliver(subRequest.id, { lockVersion: subRequest.lockVersion, quantity: 1 }));
+    plans = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => service.list(order.id)); subRequest = plans[0].requirements.find((line: any) => line.positionSnapshot === 50).supplyRequests[0]; delivery = subRequest.deliveries[0];
+    await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => inspectionService.inspect(delivery.id, { lockVersion: delivery.lockVersion, acceptedQuantity: 1 }));
     plans = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => service.list(order.id)); subRequest = plans[0].requirements.find((line: any) => line.positionSnapshot === 50).supplyRequests[0];
     await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => requestService.deliver(subRequest.id, { lockVersion: subRequest.lockVersion, quantity: 2 }));
+    plans = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => service.list(order.id)); subRequest = plans[0].requirements.find((line: any) => line.positionSnapshot === 50).supplyRequests[0]; delivery = subRequest.deliveries.find((item: any) => item.inspectionStatus === 'PENDING');
+    await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => inspectionService.inspect(delivery.id, { lockVersion: delivery.lockVersion, acceptedQuantity: 2 }));
     plans = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => service.list(order.id));
     assert.equal(plans[0].status, 'ACTIVE');
     assert.equal(plans[0].summary.fulfilledCount, 4);
     assert.equal(plans[0].summary.openCount, 1);
     assert.equal(plans[0].summary.reservedQuantity, 0);
     assert.equal(plans[0].summary.issuedQuantity, 5);
-    assert.equal(plans[0].summary.deliveredQuantity, 12);
+    assert.equal(plans[0].summary.deliveredQuantity, 13);
+    assert.equal(plans[0].summary.acceptedQuantity, 12);
+    assert.equal(plans[0].summary.rejectedQuantity, 1);
+    assert.equal(plans[0].summary.quarantinedQuantity, 0);
     assert.equal(plans[0].summary.requestedQuantity, 0);
 
     const finalStock = await prisma.inventoryStock.findUniqueOrThrow({ where: { id: firstStockId } });
@@ -184,12 +208,39 @@ async function main() {
     });
     assert.equal(reservationAuditCount, 5);
     const requestAuditCount = await prisma.manufacturingAuditEvent.count({ where: { manufacturingOrderId: order.id, action: { startsWith: 'SUPPLY_' } } });
-    assert.equal(requestAuditCount, 13);
-    console.log('OK: reservas y solicitudes BUY/MAKE/SUBCONTRACT con entregas parciales verificadas');
+    assert.equal(requestAuditCount, 19);
+    let kits = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => kitsService.generate(order.id));
+    assert.equal(kits.length, 3);
+    assert.deepEqual(kits.map((kit: any) => kit.summary.lineCount), [5, 5, 5]);
+    for (let kitIndex = 0; kitIndex < 3; kitIndex += 1) {
+      const kitId = kits[kitIndex].id;
+      for (const position of [10, 20, 30, 40, 50]) {
+        let currentKit = kits.find((item: any) => item.id === kitId);
+        const line = currentKit.lines.find((item: any) => item.positionSnapshot === position);
+        if (kitIndex === 2 && position === 10) {
+          await assert.rejects(() => tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => kitsService.allocate(line.id, { lockVersion: line.lockVersion, quantity: 1 })), /Solo hay 0 aprobadas/);
+          kits = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => kitsService.waive(line.id, { lockVersion: line.lockVersion, waivedQuantity: 1, reason: 'Liberación controlada para prueba integral' }));
+        } else {
+          kits = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => kitsService.allocate(line.id, { lockVersion: line.lockVersion, quantity: line.requiredQuantity }));
+        }
+      }
+      let currentKit = kits.find((item: any) => item.id === kitId);
+      assert.equal(currentKit.status, 'READY');
+      kits = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => kitsService.release(kitId, { lockVersion: currentKit.lockVersion, notes: 'Kit verificado y liberado' }));
+      currentKit = kits.find((item: any) => item.id === kitId);
+      assert.equal(currentKit.status, 'RELEASED');
+    }
+    assert.equal(kits.filter((kit: any) => kit.status === 'RELEASED').length, 3);
+    const kitAuditCount = await prisma.manufacturingAuditEvent.count({ where: { manufacturingOrderId: order.id, action: { in: ['MANUFACTURING_KIT_CREATED', 'KIT_MATERIAL_ALLOCATED', 'KIT_SHORTAGE_WAIVED', 'MANUFACTURING_KIT_RELEASED'] } } });
+    assert.equal(kitAuditCount, 21);
+    console.log('OK: recepción, calidad, kits por unidad, faltantes y liberación verificados');
   } finally {
     if (orderId) {
       if (orderNumber) await prisma.inventoryMovement.deleteMany({ where: { referenceType: 'MANUFACTURING_STOCK_RESERVATION', referenceLabel: { startsWith: orderNumber } } });
       await prisma.manufacturingStockReservation.deleteMany({ where: { supplyRequirement: { supplyPlan: { manufacturingOrderId: orderId } } } });
+      await prisma.manufacturingKitLine.deleteMany({ where: { kit: { manufacturingOrderId: orderId } } });
+      await prisma.manufacturingKit.deleteMany({ where: { manufacturingOrderId: orderId } });
+      await prisma.manufacturingInspectionDecision.deleteMany({ where: { supplyDelivery: { supplyRequest: { supplyRequirement: { supplyPlan: { manufacturingOrderId: orderId } } } } } });
       await prisma.manufacturingSupplyDelivery.deleteMany({ where: { supplyRequest: { supplyRequirement: { supplyPlan: { manufacturingOrderId: orderId } } } } });
       await prisma.manufacturingSupplyRequest.deleteMany({ where: { supplyRequirement: { supplyPlan: { manufacturingOrderId: orderId } } } });
       await prisma.manufacturingSupplyRequirement.deleteMany({ where: { supplyPlan: { manufacturingOrderId: orderId } } });

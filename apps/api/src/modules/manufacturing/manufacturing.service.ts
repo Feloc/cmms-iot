@@ -492,6 +492,10 @@ export class ManufacturingService {
         if (openReservations) throw new ConflictException('Libera o entrega las reservas de inventario pendientes antes de cancelar la orden');
         const openRequests = await tx.manufacturingSupplyRequest.count({ where: { tenantId, supplyRequirement: { supplyPlan: { manufacturingOrderId: id } }, status: { notIn: ['COMPLETED', 'CANCELED'] } } });
         if (openRequests) throw new ConflictException('Completa o cancela las solicitudes de abastecimiento pendientes antes de cancelar la orden');
+        const openInspections = await tx.manufacturingSupplyDelivery.count({ where: { tenantId, supplyRequest: { supplyRequirement: { supplyPlan: { manufacturingOrderId: id } } }, inspectionStatus: { not: 'CLOSED' } } });
+        if (openInspections) throw new ConflictException('Resuelve las inspecciones y cuarentenas pendientes antes de cancelar la orden');
+        const activeKits = await tx.manufacturingKit.count({ where: { tenantId, manufacturingOrderId: id, status: { not: 'CANCELED' } } });
+        if (activeKits) throw new ConflictException('Cancela los kits de materiales antes de cancelar la orden');
         data = { status: 'CANCELED', statusBeforeHold: null, canceledReason: reason, holdReason: null, version: { increment: 1 } };
         auditAction = 'ORDER_CANCELED';
         summary = `Orden ${current.number} cancelada`;
@@ -531,6 +535,10 @@ export class ManufacturingService {
       if (dto.status !== undefined) {
         const status = String(dto.status).toUpperCase();
         if (!UNIT_STATUSES.has(status)) throw new BadRequestException('Estado de unidad inválido');
+        if (status === 'CANCELED') {
+          const activeKit = await tx.manufacturingKit.count({ where: { tenantId, manufacturedUnitId: unitId, status: { not: 'CANCELED' } } });
+          if (activeKit) throw new ConflictException('Cancela el kit de materiales antes de cancelar la unidad');
+        }
         data.status = status;
       }
       if (!Object.keys(data).length) throw new BadRequestException('No hay cambios para aplicar');

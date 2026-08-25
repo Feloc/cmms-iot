@@ -9,6 +9,7 @@ export type PartCriticality = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
 export type EngineeringReleaseStatus = 'DRAFT' | 'RELEASED' | 'SUPERSEDED' | 'CANCELED';
 export type ManufacturingSupplyPlanStatus = 'ACTIVE' | 'SUPERSEDED' | 'COMPLETED' | 'CANCELED';
 export type ManufacturingSupplyRequirementStatus = 'OPEN' | 'IN_PROGRESS' | 'PARTIAL' | 'FULFILLED' | 'CANCELED';
+export type ManufacturingKitStatus = 'DRAFT' | 'PREPARING' | 'READY' | 'RELEASED' | 'CANCELED';
 
 export type ManufacturingUser = {
   id: string;
@@ -266,7 +267,7 @@ export type ManufacturingSupplyRequirement = {
   stockReservations: ManufacturingStockReservation[];
   reservationSummary: { reservedQuantity: number; issuedQuantity: number; releasedQuantity: number; outstandingQuantity: number };
   supplyRequests: ManufacturingSupplyRequest[];
-  requestSummary: { requestedQuantity: number; deliveredQuantity: number; canceledQuantity: number; outstandingQuantity: number };
+  requestSummary: { requestedQuantity: number; deliveredQuantity: number; canceledQuantity: number; outstandingQuantity: number; acceptedQuantity: number; rejectedQuantity: number; quarantinedQuantity: number };
 };
 
 export type ManufacturingInventoryStock = {
@@ -300,11 +301,27 @@ export type ManufacturingSupplyRequestStatus = 'REQUESTED' | 'IN_PROGRESS' | 'PA
 export type ManufacturingSupplyDelivery = {
   id: string;
   quantity: number;
+  acceptedQuantity: number;
+  rejectedQuantity: number;
+  quarantinedQuantity: number;
+  inspectionStatus: 'PENDING' | 'PARTIAL' | 'QUARANTINED' | 'CLOSED';
+  lockVersion: number;
   deliveredAt: string;
   reference?: string | null;
   notes?: string | null;
   createdByName: string;
   createdAt: string;
+  inspectionDecisions: ManufacturingInspectionDecision[];
+};
+
+export type ManufacturingInspectionDecision = {
+  id: string;
+  decisionType: 'ACCEPT' | 'REJECT' | 'QUARANTINE' | 'ACCEPT_FROM_QUARANTINE' | 'REJECT_FROM_QUARANTINE';
+  quantity: number;
+  inspectedAt: string;
+  reference?: string | null;
+  notes?: string | null;
+  inspectedByName: string;
 };
 
 export type ManufacturingSupplyRequest = {
@@ -343,7 +360,45 @@ export type ManufacturingSupplyPlan = {
   completedAt?: string | null;
   isCurrentRelease: boolean;
   requirements: ManufacturingSupplyRequirement[];
-  summary: { requirementCount: number; includedCount: number; fulfilledCount: number; openCount: number; stockCoveredQuantity: number; reservedQuantity: number; issuedQuantity: number; requestedQuantity: number; deliveredQuantity: number; stockQuantity: number; buyQuantity: number; makeQuantity: number; subcontractQuantity: number };
+  summary: { requirementCount: number; includedCount: number; fulfilledCount: number; openCount: number; stockCoveredQuantity: number; reservedQuantity: number; issuedQuantity: number; requestedQuantity: number; deliveredQuantity: number; acceptedQuantity: number; rejectedQuantity: number; quarantinedQuantity: number; stockQuantity: number; buyQuantity: number; makeQuantity: number; subcontractQuantity: number };
+};
+
+export type ManufacturingKitLine = {
+  id: string;
+  kitId: string;
+  supplyRequirementId: string;
+  positionSnapshot: number;
+  itemCodeSnapshot: string;
+  descriptionSnapshot: string;
+  uomSnapshot: string;
+  requiredQuantity: number;
+  allocatedQuantity: number;
+  waivedQuantity: number;
+  shortageQuantity: number;
+  availableToAllocate: number;
+  waiverReason?: string | null;
+  waivedByName?: string | null;
+  lockVersion: number;
+  supplyRequirement: { fulfilledQuantity: number; plannedSupplyType: SupplyType };
+};
+
+export type ManufacturingKit = {
+  id: string;
+  manufacturingOrderId: string;
+  supplyPlanId: string;
+  manufacturedUnitId: string;
+  kitCode: string;
+  name: string;
+  status: ManufacturingKitStatus;
+  releaseCodeSnapshot: string;
+  lockVersion: number;
+  releasedAt?: string | null;
+  releasedByName?: string | null;
+  releaseNotes?: string | null;
+  canceledReason?: string | null;
+  manufacturedUnit: ManufacturedUnit;
+  lines: ManufacturingKitLine[];
+  summary: { lineCount: number; completeCount: number; shortageCount: number; allocatedQuantity: number; waivedQuantity: number };
 };
 
 export type Paginated<T> = {

@@ -13,9 +13,11 @@ import { ManufacturingSupplyController } from './manufacturing-supply.controller
 import { ManufacturingSupplyService } from './manufacturing-supply.service';
 import { ManufacturingStockReservationsService } from './manufacturing-stock-reservations.service';
 import { ManufacturingSupplyRequestsService } from './manufacturing-supply-requests.service';
+import { ManufacturingSupplyInspectionsService } from './manufacturing-supply-inspections.service';
+import { ManufacturingKitsService } from './manufacturing-kits.service';
 
 @Module({
   controllers: [ManufacturingController, ManufacturingDocumentsController, ManufacturingBomsController, ManufacturingReleasesController, ManufacturingSupplyController],
-  providers: [ManufacturingService, ManufacturingDocumentsService, ManufacturingBomsService, ManufacturingBomImportService, ManufacturingReleasesService, ManufacturingSupplyService, ManufacturingStockReservationsService, ManufacturingSupplyRequestsService, PrismaService],
+  providers: [ManufacturingService, ManufacturingDocumentsService, ManufacturingBomsService, ManufacturingBomImportService, ManufacturingReleasesService, ManufacturingSupplyService, ManufacturingStockReservationsService, ManufacturingSupplyRequestsService, ManufacturingSupplyInspectionsService, ManufacturingKitsService, PrismaService],
 })
 export class ManufacturingModule {}

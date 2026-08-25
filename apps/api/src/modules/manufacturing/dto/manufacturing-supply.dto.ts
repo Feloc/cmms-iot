@@ -55,3 +55,43 @@ export class CancelManufacturingSupplyRequestDto {
   lockVersion!: number;
   reason!: string;
 }
+
+export class InspectManufacturingSupplyDeliveryDto {
+  lockVersion!: number;
+  acceptedQuantity?: number | string;
+  rejectedQuantity?: number | string;
+  quarantinedQuantity?: number | string;
+  inspectedAt?: string | Date;
+  reference?: string | null;
+  notes?: string | null;
+}
+
+export class ResolveManufacturingQuarantineDto {
+  lockVersion!: number;
+  acceptedQuantity?: number | string;
+  rejectedQuantity?: number | string;
+  inspectedAt?: string | Date;
+  reference?: string | null;
+  notes?: string | null;
+}
+
+export class AdjustManufacturingKitLineDto {
+  lockVersion!: number;
+  quantity!: number | string;
+}
+
+export class WaiveManufacturingKitLineDto {
+  lockVersion!: number;
+  waivedQuantity!: number | string;
+  reason?: string | null;
+}
+
+export class ReleaseManufacturingKitDto {
+  lockVersion!: number;
+  notes?: string | null;
+}
+
+export class CancelManufacturingKitDto {
+  lockVersion!: number;
+  reason!: string;
+}
