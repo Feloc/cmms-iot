@@ -215,6 +215,8 @@ export class ManufacturingReleasesService {
       if (openRequests) throw new ConflictException('Completa o cancela las solicitudes de abastecimiento pendientes antes de publicar una nueva liberación');
       const openInspections = await tx.manufacturingSupplyDelivery.count({ where: { tenantId, supplyRequest: { supplyRequirement: { supplyPlan: { manufacturingOrderId: orderId, engineeringReleaseId: { not: releaseId } } } }, inspectionStatus: { not: 'CLOSED' } } });
       if (openInspections) throw new ConflictException('Resuelve las inspecciones y cuarentenas pendientes antes de publicar una nueva liberación');
+      const assemblyExecutions = await tx.manufacturingAssemblyExecution.count({ where: { tenantId, manufacturingOrderId: orderId } });
+      if (assemblyExecutions) throw new ConflictException('La orden ya tiene ejecuciones de ensamble; gestiona el cambio mediante un proceso de desviación');
       const activeKits = await tx.manufacturingKit.count({ where: { tenantId, manufacturingOrderId: orderId, supplyPlan: { engineeringReleaseId: { not: releaseId } }, status: { not: 'CANCELED' } } });
       if (activeKits) throw new ConflictException('Cancela los kits preparados antes de publicar una nueva liberación');
       const now = new Date();

@@ -494,6 +494,8 @@ export class ManufacturingService {
         if (openRequests) throw new ConflictException('Completa o cancela las solicitudes de abastecimiento pendientes antes de cancelar la orden');
         const openInspections = await tx.manufacturingSupplyDelivery.count({ where: { tenantId, supplyRequest: { supplyRequirement: { supplyPlan: { manufacturingOrderId: id } } }, inspectionStatus: { not: 'CLOSED' } } });
         if (openInspections) throw new ConflictException('Resuelve las inspecciones y cuarentenas pendientes antes de cancelar la orden');
+        const assemblyExecutions = await tx.manufacturingAssemblyExecution.count({ where: { tenantId, manufacturingOrderId: id } });
+        if (assemblyExecutions) throw new ConflictException('La orden tiene ejecuciones de ensamble y no puede cancelarse directamente');
         const activeKits = await tx.manufacturingKit.count({ where: { tenantId, manufacturingOrderId: id, status: { not: 'CANCELED' } } });
         if (activeKits) throw new ConflictException('Cancela los kits de materiales antes de cancelar la orden');
         data = { status: 'CANCELED', statusBeforeHold: null, canceledReason: reason, holdReason: null, version: { increment: 1 } };
@@ -536,6 +538,8 @@ export class ManufacturingService {
         const status = String(dto.status).toUpperCase();
         if (!UNIT_STATUSES.has(status)) throw new BadRequestException('Estado de unidad inválido');
         if (status === 'CANCELED') {
+          const assemblyExecution = await tx.manufacturingAssemblyExecution.count({ where: { tenantId, kit: { manufacturedUnitId: unitId } } });
+          if (assemblyExecution) throw new ConflictException('La unidad tiene una ejecución de ensamble y no puede cancelarse directamente');
           const activeKit = await tx.manufacturingKit.count({ where: { tenantId, manufacturedUnitId: unitId, status: { not: 'CANCELED' } } });
           if (activeKit) throw new ConflictException('Cancela el kit de materiales antes de cancelar la unidad');
         }

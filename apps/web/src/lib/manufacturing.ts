@@ -10,6 +10,8 @@ export type EngineeringReleaseStatus = 'DRAFT' | 'RELEASED' | 'SUPERSEDED' | 'CA
 export type ManufacturingSupplyPlanStatus = 'ACTIVE' | 'SUPERSEDED' | 'COMPLETED' | 'CANCELED';
 export type ManufacturingSupplyRequirementStatus = 'OPEN' | 'IN_PROGRESS' | 'PARTIAL' | 'FULFILLED' | 'CANCELED';
 export type ManufacturingKitStatus = 'DRAFT' | 'PREPARING' | 'READY' | 'RELEASED' | 'CANCELED';
+export type ManufacturingAssemblyExecutionStatus = 'PLANNED' | 'IN_PROGRESS' | 'ON_HOLD' | 'COMPLETED' | 'CANCELED';
+export type ManufacturingAssemblyOperationStatus = 'PENDING' | 'IN_PROGRESS' | 'PAUSED' | 'BLOCKED' | 'COMPLETED' | 'NOT_APPLICABLE';
 
 export type ManufacturingUser = {
   id: string;
@@ -399,6 +401,52 @@ export type ManufacturingKit = {
   manufacturedUnit: ManufacturedUnit;
   lines: ManufacturingKitLine[];
   summary: { lineCount: number; completeCount: number; shortageCount: number; allocatedQuantity: number; waivedQuantity: number };
+};
+
+export type ManufacturingAssemblyOperation = {
+  id: string;
+  executionId: string;
+  position: number;
+  phase?: string | null;
+  name: string;
+  instructions?: string | null;
+  estimatedMinutes: number;
+  plannedTechnicians: number;
+  dependsOnPositions: number[];
+  required: boolean;
+  evidenceRequired: boolean;
+  status: ManufacturingAssemblyOperationStatus;
+  progressPercent: number;
+  assignedUserId?: string | null;
+  assignedUserName?: string | null;
+  notes?: string | null;
+  blockedReason?: string | null;
+  lockVersion: number;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  actualMinutes: number;
+  consumedQuantity: number;
+  timeLogs: Array<{ id: string; userId: string; userName: string; startedAt: string; endedAt?: string | null; note?: string | null }>;
+  evidence: Array<{ id: string; title: string; reference?: string | null; url?: string | null; notes?: string | null; createdByName: string; createdAt: string }>;
+  consumptions: Array<{ id: string; kitLineId: string; quantity: number; notes?: string | null; consumedByName: string; consumedAt: string; kitLine: ManufacturingKitLine }>;
+};
+
+export type ManufacturingAssemblyExecution = {
+  id: string;
+  manufacturingOrderId: string;
+  kitId: string;
+  executionCode: string;
+  templateCode: string;
+  templateName: string;
+  templateVersion: number;
+  status: ManufacturingAssemblyExecutionStatus;
+  lockVersion: number;
+  plannedMinutes: number;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  kit: ManufacturingKit;
+  operations: ManufacturingAssemblyOperation[];
+  summary: { operationCount: number; completedCount: number; blockedCount: number; actualMinutes: number; progressPercent: number };
 };
 
 export type Paginated<T> = {

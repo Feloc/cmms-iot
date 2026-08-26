@@ -6,6 +6,7 @@ import { ManufacturingStockReservationsService } from '../src/modules/manufactur
 import { ManufacturingSupplyRequestsService } from '../src/modules/manufacturing/manufacturing-supply-requests.service';
 import { ManufacturingSupplyInspectionsService } from '../src/modules/manufacturing/manufacturing-supply-inspections.service';
 import { ManufacturingKitsService } from '../src/modules/manufacturing/manufacturing-kits.service';
+import { ManufacturingAssemblyService } from '../src/modules/manufacturing/manufacturing-assembly.service';
 
 async function main() {
   const prisma = new PrismaService();
@@ -13,6 +14,7 @@ async function main() {
   let orderId: string | undefined;
   let orderNumber: string | undefined;
   let itemId: string | undefined;
+  let templateId: string | undefined;
 
   try {
     const admin = await prisma.user.findFirst({
@@ -20,6 +22,24 @@ async function main() {
       select: { id: true, tenantId: true },
     });
     assert(admin, 'Se requiere un usuario administrador para la prueba');
+
+    const template = await prisma.assemblyTemplate.create({
+      data: {
+        tenantId: admin.tenantId,
+        code: `ENS-${stamp}`,
+        name: 'Ruta temporal de ensamble',
+        version: 1,
+        active: true,
+        steps: {
+          create: [
+            { tenantId: admin.tenantId, position: 10, phase: 'Mecánica', name: 'Preparación mecánica', estimatedMinutes: 30, dependsOnPositions: [] },
+            { tenantId: admin.tenantId, position: 20, phase: 'Eléctrica', name: 'Integración eléctrica', estimatedMinutes: 45, dependsOnPositions: [10], evidenceRequired: true },
+            { tenantId: admin.tenantId, position: 30, phase: 'Automatización', name: 'Integración de control', estimatedMinutes: 60, dependsOnPositions: [20] },
+          ],
+        },
+      },
+    });
+    templateId = template.id;
 
     const item = await prisma.inventoryItem.create({
       data: {
@@ -105,6 +125,7 @@ async function main() {
     const requestService = new ManufacturingSupplyRequestsService(prisma, service);
     const inspectionService = new ManufacturingSupplyInspectionsService(prisma, service);
     const kitsService = new ManufacturingKitsService(prisma);
+    const assemblyService = new ManufacturingAssemblyService(prisma);
     await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => service.generate(order.id, { engineeringReleaseId: release.id }));
     let plans = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => service.list(order.id));
     assert.equal(plans.length, 1);
@@ -233,11 +254,75 @@ async function main() {
     assert.equal(kits.filter((kit: any) => kit.status === 'RELEASED').length, 3);
     const kitAuditCount = await prisma.manufacturingAuditEvent.count({ where: { manufacturingOrderId: order.id, action: { in: ['MANUFACTURING_KIT_CREATED', 'KIT_MATERIAL_ALLOCATED', 'KIT_SHORTAGE_WAIVED', 'MANUFACTURING_KIT_RELEASED'] } } });
     assert.equal(kitAuditCount, 21);
-    console.log('OK: recepción, calidad, kits por unidad, faltantes y liberación verificados');
+
+    let executions = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => assemblyService.create(kits[0].id, { templateId: template.id }));
+    assert.equal(executions.length, 1);
+    assert.equal(executions[0].status, 'PLANNED');
+    assert.equal(executions[0].operations.length, 3);
+    assert.equal(executions[0].plannedMinutes, 135);
+
+    let [mechanical, electrical, control] = executions[0].operations;
+    await assert.rejects(
+      () => tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => assemblyService.operationAction(electrical.id, 'start', { lockVersion: electrical.lockVersion })),
+      /predecesoras/,
+    );
+
+    executions = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => assemblyService.operationAction(mechanical.id, 'start', { lockVersion: mechanical.lockVersion }));
+    mechanical = executions[0].operations[0];
+    assert.equal(executions[0].status, 'IN_PROGRESS');
+    executions = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => assemblyService.startTime(mechanical.id, { note: 'Inicio de preparación' }));
+    mechanical = executions[0].operations[0];
+    const openTimeLog = mechanical.timeLogs.find((log: any) => !log.endedAt);
+    assert(openTimeLog);
+    const consumableLine = executions[0].kit.lines.find((line: any) => line.positionSnapshot === 10);
+    assert(consumableLine);
+    executions = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => assemblyService.addConsumption(mechanical.id, { kitLineId: consumableLine.id, quantity: 1, notes: 'Material instalado' }));
+    mechanical = executions[0].operations[0];
+    assert.equal(mechanical.consumedQuantity, 1);
+    await assert.rejects(
+      () => tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => assemblyService.addConsumption(mechanical.id, { kitLineId: consumableLine.id, quantity: 1 })),
+      /Solo hay 0 asignadas/,
+    );
+    executions = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => assemblyService.stopTime(openTimeLog.id, { note: 'Preparación terminada' }));
+    mechanical = executions[0].operations[0];
+    executions = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => assemblyService.operationAction(mechanical.id, 'complete', { lockVersion: mechanical.lockVersion }));
+
+    electrical = executions[0].operations[1];
+    executions = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => assemblyService.operationAction(electrical.id, 'start', { lockVersion: electrical.lockVersion }));
+    electrical = executions[0].operations[1];
+    await assert.rejects(
+      () => tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => assemblyService.operationAction(electrical.id, 'complete', { lockVersion: electrical.lockVersion })),
+      /requiere evidencia/,
+    );
+    executions = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => assemblyService.addEvidence(electrical.id, { title: 'Verificación de cableado', reference: 'REG-ENS-001' }));
+    electrical = executions[0].operations[1];
+    executions = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => assemblyService.operationAction(electrical.id, 'complete', { lockVersion: electrical.lockVersion }));
+
+    control = executions[0].operations[2];
+    executions = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => assemblyService.operationAction(control.id, 'start', { lockVersion: control.lockVersion }));
+    control = executions[0].operations[2];
+    executions = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => assemblyService.operationAction(control.id, 'block', { lockVersion: control.lockVersion, reason: 'Pendiente parámetro del variador' }));
+    control = executions[0].operations[2];
+    assert.equal(control.status, 'BLOCKED');
+    executions = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => assemblyService.operationAction(control.id, 'resume', { lockVersion: control.lockVersion }));
+    control = executions[0].operations[2];
+    executions = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => assemblyService.operationAction(control.id, 'complete', { lockVersion: control.lockVersion }));
+    assert.equal(executions[0].status, 'COMPLETED');
+    assert.equal(executions[0].summary.progressPercent, 100);
+    assert.equal(executions[0].summary.completedCount, 3);
+    const assemblyAuditCount = await prisma.manufacturingAuditEvent.count({ where: { manufacturingOrderId: order.id, action: { startsWith: 'ASSEMBLY_' } } });
+    const assemblyCreatedCount = await prisma.manufacturingAuditEvent.count({ where: { manufacturingOrderId: order.id, action: 'MANUFACTURING_ASSEMBLY_CREATED' } });
+    assert.equal(assemblyAuditCount + assemblyCreatedCount, 13);
+    console.log('OK: abastecimiento, kits y ejecución de ensamble integral verificados');
   } finally {
     if (orderId) {
       if (orderNumber) await prisma.inventoryMovement.deleteMany({ where: { referenceType: 'MANUFACTURING_STOCK_RESERVATION', referenceLabel: { startsWith: orderNumber } } });
       await prisma.manufacturingStockReservation.deleteMany({ where: { supplyRequirement: { supplyPlan: { manufacturingOrderId: orderId } } } });
+      await prisma.manufacturingAssemblyConsumption.deleteMany({ where: { operation: { execution: { manufacturingOrderId: orderId } } } });
+      await prisma.manufacturingAssemblyEvidence.deleteMany({ where: { operation: { execution: { manufacturingOrderId: orderId } } } });
+      await prisma.manufacturingAssemblyTimeLog.deleteMany({ where: { operation: { execution: { manufacturingOrderId: orderId } } } });
+      await prisma.manufacturingAssemblyOperation.deleteMany({ where: { execution: { manufacturingOrderId: orderId } } });
+      await prisma.manufacturingAssemblyExecution.deleteMany({ where: { manufacturingOrderId: orderId } });
       await prisma.manufacturingKitLine.deleteMany({ where: { kit: { manufacturingOrderId: orderId } } });
       await prisma.manufacturingKit.deleteMany({ where: { manufacturingOrderId: orderId } });
       await prisma.manufacturingInspectionDecision.deleteMany({ where: { supplyDelivery: { supplyRequest: { supplyRequirement: { supplyPlan: { manufacturingOrderId: orderId } } } } } });
@@ -253,6 +338,10 @@ async function main() {
       await prisma.manufacturingOrder.deleteMany({ where: { id: orderId } });
     }
     if (itemId) await prisma.inventoryItem.deleteMany({ where: { id: itemId } });
+    if (templateId) {
+      await prisma.assemblyTemplateStep.deleteMany({ where: { templateId } });
+      await prisma.assemblyTemplate.deleteMany({ where: { id: templateId } });
+    }
     await prisma.$disconnect();
   }
 }

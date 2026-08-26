@@ -178,6 +178,23 @@ enum ManufacturingKitStatus {
   CANCELED
 }
 
+enum ManufacturingAssemblyExecutionStatus {
+  PLANNED
+  IN_PROGRESS
+  ON_HOLD
+  COMPLETED
+  CANCELED
+}
+
+enum ManufacturingAssemblyOperationStatus {
+  PENDING
+  IN_PROGRESS
+  PAUSED
+  BLOCKED
+  COMPLETED
+  NOT_APPLICABLE
+}
+
 // Repuestos en una Orden de Servicio: primero se registran como necesarios (diagnóstico)
 // y luego se marcan como cambiados (historial en el activo).
 enum ServiceOrderPartStage {
@@ -340,6 +357,11 @@ model Tenant {
   manufacturingInspectionDecisions ManufacturingInspectionDecision[]
   manufacturingKits ManufacturingKit[]
   manufacturingKitLines ManufacturingKitLine[]
+  manufacturingAssemblyExecutions ManufacturingAssemblyExecution[]
+  manufacturingAssemblyOperations ManufacturingAssemblyOperation[]
+  manufacturingAssemblyTimeLogs ManufacturingAssemblyTimeLog[]
+  manufacturingAssemblyEvidence ManufacturingAssemblyEvidence[]
+  manufacturingAssemblyConsumptions ManufacturingAssemblyConsumption[]
 
   workOrderReports WorkOrderReport[]
 }
@@ -793,6 +815,7 @@ model AssemblyTemplate {
 
   steps      AssemblyTemplateStep[]
   executions AssemblyExecution[]
+  manufacturingExecutions ManufacturingAssemblyExecution[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -819,6 +842,7 @@ model AssemblyTemplateStep {
   evidenceRequired   Boolean          @default(false)
 
   activities AssemblyActivity[]
+  manufacturingOperations ManufacturingAssemblyOperation[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1773,6 +1797,7 @@ model ManufacturingOrder {
   engineeringReleases EngineeringRelease[]
   supplyPlans ManufacturingSupplyPlan[]
   kits ManufacturingKit[]
+  assemblyExecutions ManufacturingAssemblyExecution[]
 
   @@unique([tenantId, number])
   @@index([tenantId, status, updatedAt(sort: Desc)])
@@ -2286,6 +2311,7 @@ model ManufacturingKit {
   updatedAt        DateTime @updatedAt
 
   lines ManufacturingKitLine[]
+  assemblyExecution ManufacturingAssemblyExecution?
 
   @@unique([supplyPlanId, manufacturedUnitId])
   @@unique([tenantId, kitCode])
@@ -2319,7 +2345,139 @@ model ManufacturingKitLine {
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 
+  assemblyConsumptions ManufacturingAssemblyConsumption[]
+
   @@unique([kitId, supplyRequirementId])
   @@index([tenantId, kitId, positionSnapshot])
   @@index([tenantId, supplyRequirementId])
+}
+
+model ManufacturingAssemblyExecution {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  manufacturingOrderId String
+  manufacturingOrder   ManufacturingOrder @relation(fields: [manufacturingOrderId], references: [id], onDelete: Cascade)
+  kitId                 String @unique
+  kit                   ManufacturingKit @relation(fields: [kitId], references: [id], onDelete: Restrict)
+  templateId            String?
+  template              AssemblyTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+
+  executionCode      String
+  templateCode       String
+  templateName       String
+  templateVersion    Int
+  status             ManufacturingAssemblyExecutionStatus @default(PLANNED)
+  lockVersion        Int @default(1)
+  plannedMinutes     Int
+  startedAt          DateTime?
+  completedAt        DateTime?
+  heldAt             DateTime?
+  holdReason         String?
+  createdByUserId    String
+  createdByName      String
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  operations ManufacturingAssemblyOperation[]
+
+  @@unique([tenantId, executionCode])
+  @@index([tenantId, manufacturingOrderId, status])
+  @@index([tenantId, status, updatedAt(sort: Desc)])
+}
+
+model ManufacturingAssemblyOperation {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  executionId String
+  execution   ManufacturingAssemblyExecution @relation(fields: [executionId], references: [id], onDelete: Cascade)
+  templateStepId String?
+  templateStep   AssemblyTemplateStep? @relation(fields: [templateStepId], references: [id], onDelete: SetNull)
+
+  position           Int
+  phase              String?
+  name               String
+  instructions       String?
+  estimatedMinutes   Int
+  plannedTechnicians Int @default(1)
+  dependsOnPositions Json @default("[]")
+  required           Boolean @default(true)
+  evidenceRequired   Boolean @default(false)
+  status             ManufacturingAssemblyOperationStatus @default(PENDING)
+  progressPercent    Int @default(0)
+  assignedUserId     String?
+  assignedUserName   String?
+  notes              String?
+  blockedReason      String?
+  lockVersion        Int @default(1)
+  startedAt          DateTime?
+  completedAt        DateTime?
+  completedByUserId  String?
+  completedByName    String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  timeLogs     ManufacturingAssemblyTimeLog[]
+  evidence     ManufacturingAssemblyEvidence[]
+  consumptions ManufacturingAssemblyConsumption[]
+
+  @@unique([executionId, position])
+  @@index([tenantId, executionId, status, position])
+  @@index([tenantId, assignedUserId, status])
+}
+
+model ManufacturingAssemblyTimeLog {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  operationId String
+  operation   ManufacturingAssemblyOperation @relation(fields: [operationId], references: [id], onDelete: Cascade)
+  userId      String
+  userName    String
+  startedAt   DateTime
+  endedAt     DateTime?
+  note        String?
+  createdAt   DateTime @default(now())
+
+  @@index([tenantId, operationId, startedAt(sort: Desc)])
+  @@index([tenantId, userId, startedAt(sort: Desc)])
+}
+
+model ManufacturingAssemblyEvidence {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  operationId String
+  operation   ManufacturingAssemblyOperation @relation(fields: [operationId], references: [id], onDelete: Cascade)
+  title       String
+  reference   String?
+  url         String?
+  notes       String?
+  createdByUserId String
+  createdByName   String
+  createdAt       DateTime @default(now())
+
+  @@index([tenantId, operationId, createdAt(sort: Desc)])
+}
+
+model ManufacturingAssemblyConsumption {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  operationId String
+  operation   ManufacturingAssemblyOperation @relation(fields: [operationId], references: [id], onDelete: Cascade)
+  kitLineId   String
+  kitLine     ManufacturingKitLine @relation(fields: [kitLineId], references: [id], onDelete: Restrict)
+  quantity    Decimal @db.Decimal(18, 6)
+  notes       String?
+  consumedByUserId String
+  consumedByName   String
+  consumedAt       DateTime @default(now())
+  createdAt        DateTime @default(now())
+
+  @@index([tenantId, operationId, consumedAt(sort: Desc)])
+  @@index([tenantId, kitLineId])
 }
