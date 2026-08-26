@@ -46,7 +46,7 @@ export async function seedPlatform(prisma: any) {
   // 2) Usuario admin inicial
   const existingAdmin = await prisma.user.findFirst({
     where: { tenantId: tenant.id, email: adminEmail },
-    select: { id: true, email: true, role: true },
+    select: { id: true, email: true, role: true, password: true },
   });
 
   if (!existingAdmin) {
@@ -66,6 +66,27 @@ export async function seedPlatform(prisma: any) {
     // eslint-disable-next-line no-console
     console.log(`[seed] Admin creado: ${created.email} (role=${created.role})`);
   } else {
+    // Cuando la contraseña está configurada explícitamente, la variable de
+    // entorno es la fuente de verdad también para instalaciones existentes.
+    // Así una restauración de base o una rotación del secreto no deja al
+    // administrador de plataforma inaccesible. El valor por defecto de
+    // desarrollo nunca sobrescribe una cuenta existente.
+    if (process.env.PLATFORM_ADMIN_PASSWORD) {
+      const passwordMatches = await bcrypt.compare(adminPassword, existingAdmin.password);
+      if (!passwordMatches) {
+        const passwordHash = await bcrypt.hash(adminPassword, 10);
+        await prisma.user.update({
+          where: { id: existingAdmin.id },
+          data: {
+            password: passwordHash,
+            authVersion: { increment: 1 },
+          },
+        });
+        // eslint-disable-next-line no-console
+        console.log(`[seed] Contraseña sincronizada: ${existingAdmin.email}`);
+      }
+    }
+
     // eslint-disable-next-line no-console
     console.log(`[seed] Admin existe: ${existingAdmin.email} (role=${existingAdmin.role})`);
   }
