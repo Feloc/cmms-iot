@@ -58,13 +58,13 @@ DO $$ BEGIN
   ALTER TABLE "ManufacturingKit" ADD CONSTRAINT "ManufacturingKit_tenantId_fkey" FOREIGN KEY ("tenantId") REFERENCES "Tenant"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN
-  ALTER TABLE "ManufacturingKit" ADD CONSTRAINT "ManufacturingKit_orderId_fkey" FOREIGN KEY ("manufacturingOrderId") REFERENCES "ManufacturingOrder"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  ALTER TABLE "ManufacturingKit" ADD CONSTRAINT "ManufacturingKit_manufacturingOrderId_fkey" FOREIGN KEY ("manufacturingOrderId") REFERENCES "ManufacturingOrder"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN
   ALTER TABLE "ManufacturingKit" ADD CONSTRAINT "ManufacturingKit_supplyPlanId_fkey" FOREIGN KEY ("supplyPlanId") REFERENCES "ManufacturingSupplyPlan"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN
-  ALTER TABLE "ManufacturingKit" ADD CONSTRAINT "ManufacturingKit_unitId_fkey" FOREIGN KEY ("manufacturedUnitId") REFERENCES "ManufacturedUnit"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+  ALTER TABLE "ManufacturingKit" ADD CONSTRAINT "ManufacturingKit_manufacturedUnitId_fkey" FOREIGN KEY ("manufacturedUnitId") REFERENCES "ManufacturedUnit"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN
   ALTER TABLE "ManufacturingKitLine" ADD CONSTRAINT "ManufacturingKitLine_tenantId_fkey" FOREIGN KEY ("tenantId") REFERENCES "Tenant"("id") ON DELETE CASCADE ON UPDATE CASCADE;
@@ -73,13 +73,13 @@ DO $$ BEGIN
   ALTER TABLE "ManufacturingKitLine" ADD CONSTRAINT "ManufacturingKitLine_kitId_fkey" FOREIGN KEY ("kitId") REFERENCES "ManufacturingKit"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN
-  ALTER TABLE "ManufacturingKitLine" ADD CONSTRAINT "ManufacturingKitLine_requirementId_fkey" FOREIGN KEY ("supplyRequirementId") REFERENCES "ManufacturingSupplyRequirement"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+  ALTER TABLE "ManufacturingKitLine" ADD CONSTRAINT "ManufacturingKitLine_supplyRequirementId_fkey" FOREIGN KEY ("supplyRequirementId") REFERENCES "ManufacturingSupplyRequirement"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
-CREATE UNIQUE INDEX IF NOT EXISTS "ManufacturingKit_plan_unit_key" ON "ManufacturingKit" ("supplyPlanId", "manufacturedUnitId");
-CREATE UNIQUE INDEX IF NOT EXISTS "ManufacturingKit_tenant_code_key" ON "ManufacturingKit" ("tenantId", "kitCode");
-CREATE INDEX IF NOT EXISTS "ManufacturingKit_tenant_order_status_idx" ON "ManufacturingKit" ("tenantId", "manufacturingOrderId", "status");
-CREATE INDEX IF NOT EXISTS "ManufacturingKit_tenant_plan_status_idx" ON "ManufacturingKit" ("tenantId", "supplyPlanId", "status");
-CREATE UNIQUE INDEX IF NOT EXISTS "ManufacturingKitLine_kit_requirement_key" ON "ManufacturingKitLine" ("kitId", "supplyRequirementId");
-CREATE INDEX IF NOT EXISTS "ManufacturingKitLine_tenant_kit_position_idx" ON "ManufacturingKitLine" ("tenantId", "kitId", "positionSnapshot");
-CREATE INDEX IF NOT EXISTS "ManufacturingKitLine_tenant_requirement_idx" ON "ManufacturingKitLine" ("tenantId", "supplyRequirementId");
+CREATE UNIQUE INDEX IF NOT EXISTS "ManufacturingKit_supplyPlanId_manufacturedUnitId_key" ON "ManufacturingKit" ("supplyPlanId", "manufacturedUnitId");
+CREATE UNIQUE INDEX IF NOT EXISTS "ManufacturingKit_tenantId_kitCode_key" ON "ManufacturingKit" ("tenantId", "kitCode");
+CREATE INDEX IF NOT EXISTS "ManufacturingKit_tenantId_manufacturingOrderId_status_idx" ON "ManufacturingKit" ("tenantId", "manufacturingOrderId", "status");
+CREATE INDEX IF NOT EXISTS "ManufacturingKit_tenantId_supplyPlanId_status_idx" ON "ManufacturingKit" ("tenantId", "supplyPlanId", "status");
+CREATE UNIQUE INDEX IF NOT EXISTS "ManufacturingKitLine_kitId_supplyRequirementId_key" ON "ManufacturingKitLine" ("kitId", "supplyRequirementId");
+CREATE INDEX IF NOT EXISTS "ManufacturingKitLine_tenantId_kitId_positionSnapshot_idx" ON "ManufacturingKitLine" ("tenantId", "kitId", "positionSnapshot");
+CREATE INDEX IF NOT EXISTS "ManufacturingKitLine_tenantId_supplyRequirementId_idx" ON "ManufacturingKitLine" ("tenantId", "supplyRequirementId");

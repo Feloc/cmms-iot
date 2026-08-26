@@ -58,12 +58,12 @@ DO $$ BEGIN
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
 DO $$ BEGIN
-  ALTER TABLE "ManufacturingInspectionDecision" ADD CONSTRAINT "ManufacturingInspectionDecision_deliveryId_fkey"
+  ALTER TABLE "ManufacturingInspectionDecision" ADD CONSTRAINT "ManufacturingInspectionDecision_supplyDeliveryId_fkey"
     FOREIGN KEY ("supplyDeliveryId") REFERENCES "ManufacturingSupplyDelivery"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
 
-CREATE INDEX IF NOT EXISTS "ManufacturingInspectionDecision_tenant_delivery_inspected_idx"
+CREATE INDEX IF NOT EXISTS "ManufacturingInspectionDecision_tenantId_supplyDeliveryId_inspectedAt_idx"
   ON "ManufacturingInspectionDecision" ("tenantId", "supplyDeliveryId", "inspectedAt" DESC);
-CREATE INDEX IF NOT EXISTS "ManufacturingInspectionDecision_tenant_type_inspected_idx"
+CREATE INDEX IF NOT EXISTS "ManufacturingInspectionDecision_tenantId_decisionType_inspectedAt_idx"
   ON "ManufacturingInspectionDecision" ("tenantId", "decisionType", "inspectedAt" DESC);

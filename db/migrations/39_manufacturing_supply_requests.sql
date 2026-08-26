@@ -56,7 +56,7 @@ DO $$ BEGIN
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
 DO $$ BEGIN
-  ALTER TABLE "ManufacturingSupplyRequest" ADD CONSTRAINT "ManufacturingSupplyRequest_requirementId_fkey"
+  ALTER TABLE "ManufacturingSupplyRequest" ADD CONSTRAINT "ManufacturingSupplyRequest_supplyRequirementId_fkey"
     FOREIGN KEY ("supplyRequirementId") REFERENCES "ManufacturingSupplyRequirement"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
@@ -66,18 +66,18 @@ DO $$ BEGIN
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
 DO $$ BEGIN
-  ALTER TABLE "ManufacturingSupplyDelivery" ADD CONSTRAINT "ManufacturingSupplyDelivery_requestId_fkey"
+  ALTER TABLE "ManufacturingSupplyDelivery" ADD CONSTRAINT "ManufacturingSupplyDelivery_supplyRequestId_fkey"
     FOREIGN KEY ("supplyRequestId") REFERENCES "ManufacturingSupplyRequest"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
 
-CREATE UNIQUE INDEX IF NOT EXISTS "ManufacturingSupplyRequest_requirement_sequence_key"
+CREATE UNIQUE INDEX IF NOT EXISTS "ManufacturingSupplyRequest_supplyRequirementId_sequence_key"
   ON "ManufacturingSupplyRequest" ("supplyRequirementId", "sequence");
-CREATE UNIQUE INDEX IF NOT EXISTS "ManufacturingSupplyRequest_tenant_code_key"
+CREATE UNIQUE INDEX IF NOT EXISTS "ManufacturingSupplyRequest_tenantId_requestCode_key"
   ON "ManufacturingSupplyRequest" ("tenantId", "requestCode");
-CREATE INDEX IF NOT EXISTS "ManufacturingSupplyRequest_tenant_type_status_promised_idx"
+CREATE INDEX IF NOT EXISTS "ManufacturingSupplyRequest_tenantId_requestType_status_promisedAt_idx"
   ON "ManufacturingSupplyRequest" ("tenantId", "requestType", "status", "promisedAt");
-CREATE INDEX IF NOT EXISTS "ManufacturingSupplyRequest_tenant_requirement_status_idx"
+CREATE INDEX IF NOT EXISTS "ManufacturingSupplyRequest_tenantId_supplyRequirementId_status_idx"
   ON "ManufacturingSupplyRequest" ("tenantId", "supplyRequirementId", "status");
-CREATE INDEX IF NOT EXISTS "ManufacturingSupplyDelivery_tenant_request_delivered_idx"
+CREATE INDEX IF NOT EXISTS "ManufacturingSupplyDelivery_tenantId_supplyRequestId_deliveredAt_idx"
   ON "ManufacturingSupplyDelivery" ("tenantId", "supplyRequestId", "deliveredAt" DESC);

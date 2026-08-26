@@ -102,9 +102,83 @@ WHERE part."replacementServiceOrderPartId" IS NOT NULL
 SQL
 }
 
+normalize_prisma_schema_object_names() {
+  echo "[api] Normalizing legacy manufacturing constraint and index names before Prisma schema sync"
+  psql "$PSQL_DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+DO $$
+DECLARE
+  item record;
+  table_oid regclass;
+BEGIN
+  FOR item IN
+    SELECT * FROM (VALUES
+      ('ManufacturingSupplyRequest', 'ManufacturingSupplyRequest_requirementId_fkey', 'ManufacturingSupplyRequest_supplyRequirementId_fkey'),
+      ('ManufacturingSupplyDelivery', 'ManufacturingSupplyDelivery_requestId_fkey', 'ManufacturingSupplyDelivery_supplyRequestId_fkey'),
+      ('ManufacturingInspectionDecision', 'ManufacturingInspectionDecision_deliveryId_fkey', 'ManufacturingInspectionDecision_supplyDeliveryId_fkey'),
+      ('ManufacturingKit', 'ManufacturingKit_orderId_fkey', 'ManufacturingKit_manufacturingOrderId_fkey'),
+      ('ManufacturingKit', 'ManufacturingKit_unitId_fkey', 'ManufacturingKit_manufacturedUnitId_fkey'),
+      ('ManufacturingKitLine', 'ManufacturingKitLine_requirementId_fkey', 'ManufacturingKitLine_supplyRequirementId_fkey')
+    ) AS aliases(table_name, legacy_name, canonical_name)
+  LOOP
+    table_oid := to_regclass(format('public.%I', item.table_name));
+    IF table_oid IS NULL OR NOT EXISTS (
+      SELECT 1 FROM pg_constraint
+      WHERE conrelid = table_oid AND conname = item.legacy_name
+    ) THEN
+      CONTINUE;
+    END IF;
+
+    IF EXISTS (
+      SELECT 1 FROM pg_constraint
+      WHERE conrelid = table_oid AND conname = item.canonical_name
+    ) THEN
+      EXECUTE format('ALTER TABLE public.%I DROP CONSTRAINT %I', item.table_name, item.legacy_name);
+    ELSE
+      EXECUTE format(
+        'ALTER TABLE public.%I RENAME CONSTRAINT %I TO %I',
+        item.table_name,
+        item.legacy_name,
+        item.canonical_name
+      );
+    END IF;
+  END LOOP;
+
+  FOR item IN
+    SELECT * FROM (VALUES
+      ('ManufacturingSupplyRequest_requirement_sequence_key', 'ManufacturingSupplyRequest_supplyRequirementId_sequence_key'),
+      ('ManufacturingSupplyRequest_tenant_code_key', 'ManufacturingSupplyRequest_tenantId_requestCode_key'),
+      ('ManufacturingSupplyRequest_tenant_type_status_promised_idx', 'ManufacturingSupplyRequest_tenantId_requestType_status_promisedAt_idx'),
+      ('ManufacturingSupplyRequest_tenant_requirement_status_idx', 'ManufacturingSupplyRequest_tenantId_supplyRequirementId_status_idx'),
+      ('ManufacturingSupplyDelivery_tenant_request_delivered_idx', 'ManufacturingSupplyDelivery_tenantId_supplyRequestId_deliveredAt_idx'),
+      ('ManufacturingInspectionDecision_tenant_delivery_inspected_idx', 'ManufacturingInspectionDecision_tenantId_supplyDeliveryId_inspectedAt_idx'),
+      ('ManufacturingInspectionDecision_tenant_type_inspected_idx', 'ManufacturingInspectionDecision_tenantId_decisionType_inspectedAt_idx'),
+      ('ManufacturingKit_plan_unit_key', 'ManufacturingKit_supplyPlanId_manufacturedUnitId_key'),
+      ('ManufacturingKit_tenant_code_key', 'ManufacturingKit_tenantId_kitCode_key'),
+      ('ManufacturingKit_tenant_order_status_idx', 'ManufacturingKit_tenantId_manufacturingOrderId_status_idx'),
+      ('ManufacturingKit_tenant_plan_status_idx', 'ManufacturingKit_tenantId_supplyPlanId_status_idx'),
+      ('ManufacturingKitLine_kit_requirement_key', 'ManufacturingKitLine_kitId_supplyRequirementId_key'),
+      ('ManufacturingKitLine_tenant_kit_position_idx', 'ManufacturingKitLine_tenantId_kitId_positionSnapshot_idx'),
+      ('ManufacturingKitLine_tenant_requirement_idx', 'ManufacturingKitLine_tenantId_supplyRequirementId_idx')
+    ) AS aliases(legacy_name, canonical_name)
+  LOOP
+    IF to_regclass(format('public.%I', item.legacy_name)) IS NULL THEN
+      CONTINUE;
+    END IF;
+
+    IF to_regclass(format('public.%I', item.canonical_name)) IS NOT NULL THEN
+      EXECUTE format('DROP INDEX public.%I', item.legacy_name);
+    ELSE
+      EXECUTE format('ALTER INDEX public.%I RENAME TO %I', item.legacy_name, item.canonical_name);
+    END IF;
+  END LOOP;
+END $$;
+SQL
+}
+
 cd "$APP_ROOT"
 
 prepare_service_order_part_links
+normalize_prisma_schema_object_names
 
 # Ensure Prisma client exists (should be generated during npm ci)
 # Apply schema:
