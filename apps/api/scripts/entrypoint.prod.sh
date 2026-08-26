@@ -117,7 +117,21 @@ BEGIN
       ('ManufacturingInspectionDecision', 'ManufacturingInspectionDecision_deliveryId_fkey', 'ManufacturingInspectionDecision_supplyDeliveryId_fkey'),
       ('ManufacturingKit', 'ManufacturingKit_orderId_fkey', 'ManufacturingKit_manufacturingOrderId_fkey'),
       ('ManufacturingKit', 'ManufacturingKit_unitId_fkey', 'ManufacturingKit_manufacturedUnitId_fkey'),
-      ('ManufacturingKitLine', 'ManufacturingKitLine_requirementId_fkey', 'ManufacturingKitLine_supplyRequirementId_fkey')
+      ('ManufacturingKitLine', 'ManufacturingKitLine_requirementId_fkey', 'ManufacturingKitLine_supplyRequirementId_fkey'),
+      ('ManufacturingAssemblyExecution', 'ManufacturingAssemblyExecution_tenant_fkey', 'ManufacturingAssemblyExecution_tenantId_fkey'),
+      ('ManufacturingAssemblyExecution', 'ManufacturingAssemblyExecution_order_fkey', 'ManufacturingAssemblyExecution_manufacturingOrderId_fkey'),
+      ('ManufacturingAssemblyExecution', 'ManufacturingAssemblyExecution_kit_fkey', 'ManufacturingAssemblyExecution_kitId_fkey'),
+      ('ManufacturingAssemblyExecution', 'ManufacturingAssemblyExecution_template_fkey', 'ManufacturingAssemblyExecution_templateId_fkey'),
+      ('ManufacturingAssemblyOperation', 'ManufacturingAssemblyOperation_tenant_fkey', 'ManufacturingAssemblyOperation_tenantId_fkey'),
+      ('ManufacturingAssemblyOperation', 'ManufacturingAssemblyOperation_execution_fkey', 'ManufacturingAssemblyOperation_executionId_fkey'),
+      ('ManufacturingAssemblyOperation', 'ManufacturingAssemblyOperation_step_fkey', 'ManufacturingAssemblyOperation_templateStepId_fkey'),
+      ('ManufacturingAssemblyTimeLog', 'ManufacturingAssemblyTimeLog_tenant_fkey', 'ManufacturingAssemblyTimeLog_tenantId_fkey'),
+      ('ManufacturingAssemblyTimeLog', 'ManufacturingAssemblyTimeLog_operation_fkey', 'ManufacturingAssemblyTimeLog_operationId_fkey'),
+      ('ManufacturingAssemblyEvidence', 'ManufacturingAssemblyEvidence_tenant_fkey', 'ManufacturingAssemblyEvidence_tenantId_fkey'),
+      ('ManufacturingAssemblyEvidence', 'ManufacturingAssemblyEvidence_operation_fkey', 'ManufacturingAssemblyEvidence_operationId_fkey'),
+      ('ManufacturingAssemblyConsumption', 'ManufacturingAssemblyConsumption_tenant_fkey', 'ManufacturingAssemblyConsumption_tenantId_fkey'),
+      ('ManufacturingAssemblyConsumption', 'ManufacturingAssemblyConsumption_operation_fkey', 'ManufacturingAssemblyConsumption_operationId_fkey'),
+      ('ManufacturingAssemblyConsumption', 'ManufacturingAssemblyConsumption_kit_line_fkey', 'ManufacturingAssemblyConsumption_kitLineId_fkey')
     ) AS aliases(table_name, legacy_name, canonical_name)
   LOOP
     table_oid := to_regclass(format('public.%I', item.table_name));
@@ -158,7 +172,19 @@ BEGIN
       ('ManufacturingKit_tenant_plan_status_idx', 'ManufacturingKit_tenantId_supplyPlanId_status_idx'),
       ('ManufacturingKitLine_kit_requirement_key', 'ManufacturingKitLine_kitId_supplyRequirementId_key'),
       ('ManufacturingKitLine_tenant_kit_position_idx', 'ManufacturingKitLine_tenantId_kitId_positionSnapshot_idx'),
-      ('ManufacturingKitLine_tenant_requirement_idx', 'ManufacturingKitLine_tenantId_supplyRequirementId_idx')
+      ('ManufacturingKitLine_tenant_requirement_idx', 'ManufacturingKitLine_tenantId_supplyRequirementId_idx'),
+      ('ManufacturingAssemblyExecution_kit_key', 'ManufacturingAssemblyExecution_kitId_key'),
+      ('ManufacturingAssemblyExecution_tenant_code_key', 'ManufacturingAssemblyExecution_tenantId_executionCode_key'),
+      ('ManufacturingAssemblyExecution_tenant_order_status_idx', 'ManufacturingAssemblyExecution_tenantId_manufacturingOrderId_status_idx'),
+      ('ManufacturingAssemblyExecution_tenant_status_updated_idx', 'ManufacturingAssemblyExecution_tenantId_status_updatedAt_idx'),
+      ('ManufacturingAssemblyOperation_execution_position_key', 'ManufacturingAssemblyOperation_executionId_position_key'),
+      ('ManufacturingAssemblyOperation_tenant_execution_status_position_idx', 'ManufacturingAssemblyOperation_tenantId_executionId_status_position_idx'),
+      ('ManufacturingAssemblyOperation_tenant_assignee_status_idx', 'ManufacturingAssemblyOperation_tenantId_assignedUserId_status_idx'),
+      ('ManufacturingAssemblyTimeLog_tenant_operation_started_idx', 'ManufacturingAssemblyTimeLog_tenantId_operationId_startedAt_idx'),
+      ('ManufacturingAssemblyTimeLog_tenant_user_started_idx', 'ManufacturingAssemblyTimeLog_tenantId_userId_startedAt_idx'),
+      ('ManufacturingAssemblyEvidence_tenant_operation_created_idx', 'ManufacturingAssemblyEvidence_tenantId_operationId_createdAt_idx'),
+      ('ManufacturingAssemblyConsumption_tenant_operation_consumed_idx', 'ManufacturingAssemblyConsumption_tenantId_operationId_consumedAt_idx'),
+      ('ManufacturingAssemblyConsumption_tenant_kit_line_idx', 'ManufacturingAssemblyConsumption_tenantId_kitLineId_idx')
     ) AS aliases(legacy_name, canonical_name)
   LOOP
     IF to_regclass(format('public.%I', item.legacy_name)) IS NULL THEN
