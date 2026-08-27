@@ -12,6 +12,10 @@ export type ManufacturingSupplyRequirementStatus = 'OPEN' | 'IN_PROGRESS' | 'PAR
 export type ManufacturingKitStatus = 'DRAFT' | 'PREPARING' | 'READY' | 'RELEASED' | 'CANCELED';
 export type ManufacturingAssemblyExecutionStatus = 'PLANNED' | 'IN_PROGRESS' | 'ON_HOLD' | 'COMPLETED' | 'CANCELED';
 export type ManufacturingAssemblyOperationStatus = 'PENDING' | 'IN_PROGRESS' | 'PAUSED' | 'BLOCKED' | 'COMPLETED' | 'NOT_APPLICABLE';
+export type ManufacturingFatExecutionStatus = 'DRAFT' | 'IN_PROGRESS' | 'AWAITING_APPROVAL' | 'APPROVED' | 'REJECTED' | 'CANCELED';
+export type ManufacturingFatCaseResult = 'PENDING' | 'PASS' | 'FAIL' | 'NOT_APPLICABLE';
+export type ManufacturingFatResultType = 'BOOLEAN' | 'NUMERIC' | 'TEXT';
+export type ManufacturingFatDeviationStatus = 'OPEN' | 'IN_REWORK' | 'RESOLVED' | 'ACCEPTED_AS_IS';
 
 export type ManufacturingUser = {
   id: string;
@@ -447,6 +451,113 @@ export type ManufacturingAssemblyExecution = {
   kit: ManufacturingKit;
   operations: ManufacturingAssemblyOperation[];
   summary: { operationCount: number; completedCount: number; blockedCount: number; actualMinutes: number; progressPercent: number };
+};
+
+export type ManufacturingFatTemplateCase = {
+  id: string;
+  position: number;
+  section?: string | null;
+  name: string;
+  instructions?: string | null;
+  acceptanceCriteria: string;
+  resultType: ManufacturingFatResultType;
+  minimumValue?: number | string | null;
+  maximumValue?: number | string | null;
+  unit?: string | null;
+  required: boolean;
+  evidenceRequired: boolean;
+};
+
+export type ManufacturingFatTemplate = {
+  id: string;
+  code: string;
+  name: string;
+  description?: string | null;
+  version: number;
+  active: boolean;
+  cases: ManufacturingFatTemplateCase[];
+};
+
+export type ManufacturingFatEvidence = {
+  id: string;
+  title: string;
+  reference?: string | null;
+  url?: string | null;
+  notes?: string | null;
+  createdByName: string;
+  createdAt: string;
+};
+
+export type ManufacturingFatDeviation = {
+  id: string;
+  sequence: number;
+  deviationCode: string;
+  title: string;
+  description: string;
+  status: ManufacturingFatDeviationStatus;
+  correctiveAction?: string | null;
+  resolutionNotes?: string | null;
+  lockVersion: number;
+  openedByName: string;
+  resolvedByName?: string | null;
+  openedAt: string;
+  resolvedAt?: string | null;
+};
+
+export type ManufacturingFatCase = {
+  id: string;
+  executionId: string;
+  position: number;
+  section?: string | null;
+  name: string;
+  instructions?: string | null;
+  acceptanceCriteria: string;
+  resultType: ManufacturingFatResultType;
+  minimumValue?: number | null;
+  maximumValue?: number | null;
+  unit?: string | null;
+  required: boolean;
+  evidenceRequired: boolean;
+  result: ManufacturingFatCaseResult;
+  measuredValue?: number | null;
+  observedValue?: string | null;
+  notes?: string | null;
+  lockVersion: number;
+  testedAt?: string | null;
+  testedByName?: string | null;
+  evidence: ManufacturingFatEvidence[];
+  deviations: ManufacturingFatDeviation[];
+};
+
+export type ManufacturingFatApproval = {
+  id: string;
+  decision: 'APPROVED' | 'REJECTED';
+  comments?: string | null;
+  signedByName: string;
+  signedByRole: string;
+  signedAt: string;
+};
+
+export type ManufacturingFatExecution = {
+  id: string;
+  manufacturingOrderId: string;
+  manufacturedUnitId: string;
+  assemblyExecutionId: string;
+  sequence: number;
+  executionCode: string;
+  templateCode: string;
+  templateName: string;
+  templateVersion: number;
+  status: ManufacturingFatExecutionStatus;
+  lockVersion: number;
+  startedAt?: string | null;
+  submittedAt?: string | null;
+  decidedAt?: string | null;
+  manufacturedUnit: ManufacturedUnit;
+  assemblyExecution: { id: string; executionCode: string; status: ManufacturingAssemblyExecutionStatus; completedAt?: string | null };
+  cases: ManufacturingFatCase[];
+  approvals: ManufacturingFatApproval[];
+  summary: { caseCount: number; passedCount: number; failedCount: number; pendingCount: number; openDeviationCount: number; progressPercent: number; dispatchReady: boolean };
 };
 
 export type Paginated<T> = {

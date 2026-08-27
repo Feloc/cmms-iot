@@ -17,9 +17,11 @@ import { ManufacturingSupplyInspectionsService } from './manufacturing-supply-in
 import { ManufacturingKitsService } from './manufacturing-kits.service';
 import { ManufacturingAssemblyController } from './manufacturing-assembly.controller';
 import { ManufacturingAssemblyService } from './manufacturing-assembly.service';
+import { ManufacturingFatController } from './manufacturing-fat.controller';
+import { ManufacturingFatService } from './manufacturing-fat.service';
 
 @Module({
-  controllers: [ManufacturingController, ManufacturingDocumentsController, ManufacturingBomsController, ManufacturingReleasesController, ManufacturingSupplyController, ManufacturingAssemblyController],
-  providers: [ManufacturingService, ManufacturingDocumentsService, ManufacturingBomsService, ManufacturingBomImportService, ManufacturingReleasesService, ManufacturingSupplyService, ManufacturingStockReservationsService, ManufacturingSupplyRequestsService, ManufacturingSupplyInspectionsService, ManufacturingKitsService, ManufacturingAssemblyService, PrismaService],
+  controllers: [ManufacturingController, ManufacturingDocumentsController, ManufacturingBomsController, ManufacturingReleasesController, ManufacturingSupplyController, ManufacturingAssemblyController, ManufacturingFatController],
+  providers: [ManufacturingService, ManufacturingDocumentsService, ManufacturingBomsService, ManufacturingBomImportService, ManufacturingReleasesService, ManufacturingSupplyService, ManufacturingStockReservationsService, ManufacturingSupplyRequestsService, ManufacturingSupplyInspectionsService, ManufacturingKitsService, ManufacturingAssemblyService, ManufacturingFatService, PrismaService],
 })
 export class ManufacturingModule {}

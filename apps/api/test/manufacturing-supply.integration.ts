@@ -7,6 +7,7 @@ import { ManufacturingSupplyRequestsService } from '../src/modules/manufacturing
 import { ManufacturingSupplyInspectionsService } from '../src/modules/manufacturing/manufacturing-supply-inspections.service';
 import { ManufacturingKitsService } from '../src/modules/manufacturing/manufacturing-kits.service';
 import { ManufacturingAssemblyService } from '../src/modules/manufacturing/manufacturing-assembly.service';
+import { ManufacturingFatService } from '../src/modules/manufacturing/manufacturing-fat.service';
 
 async function main() {
   const prisma = new PrismaService();
@@ -15,6 +16,7 @@ async function main() {
   let orderNumber: string | undefined;
   let itemId: string | undefined;
   let templateId: string | undefined;
+  let fatTemplateId: string | undefined;
 
   try {
     const admin = await prisma.user.findFirst({
@@ -126,6 +128,7 @@ async function main() {
     const inspectionService = new ManufacturingSupplyInspectionsService(prisma, service);
     const kitsService = new ManufacturingKitsService(prisma);
     const assemblyService = new ManufacturingAssemblyService(prisma);
+    const fatService = new ManufacturingFatService(prisma);
     await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => service.generate(order.id, { engineeringReleaseId: release.id }));
     let plans = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => service.list(order.id));
     assert.equal(plans.length, 1);
@@ -313,11 +316,94 @@ async function main() {
     const assemblyAuditCount = await prisma.manufacturingAuditEvent.count({ where: { manufacturingOrderId: order.id, action: { startsWith: 'ASSEMBLY_' } } });
     const assemblyCreatedCount = await prisma.manufacturingAuditEvent.count({ where: { manufacturingOrderId: order.id, action: 'MANUFACTURING_ASSEMBLY_CREATED' } });
     assert.equal(assemblyAuditCount + assemblyCreatedCount, 13);
-    console.log('OK: abastecimiento, kits y ejecución de ensamble integral verificados');
+
+    const fatTemplate = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => fatService.createTemplate({
+      code: `FAT-${stamp}`,
+      name: 'Protocolo FAT temporal',
+      cases: [
+        { position: 10, section: 'Seguridad', name: 'Paro de emergencia', acceptanceCriteria: 'Detención segura', resultType: 'BOOLEAN', evidenceRequired: true },
+        { position: 20, section: 'Rendimiento', name: 'Corriente de operación', acceptanceCriteria: 'Entre 10 y 20 A', resultType: 'NUMERIC', minimumValue: 10, maximumValue: 20, unit: 'A' },
+        { position: 30, section: 'Documentación', name: 'Observación del cliente', acceptanceCriteria: 'Registro cuando aplique', resultType: 'TEXT', required: false },
+      ],
+    }));
+    fatTemplateId = fatTemplate.id;
+    await assert.rejects(
+      () => tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => fatService.createExecution(kits[1].manufacturedUnitId, { templateId: fatTemplate.id })),
+      /ensamble.*completado/i,
+    );
+
+    let fatExecutions = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => fatService.createExecution(kits[0].manufacturedUnitId, { templateId: fatTemplate.id }));
+    let fat = fatExecutions[0];
+    assert.equal(fat.status, 'DRAFT');
+    assert.equal(fat.cases.length, 3);
+    fatExecutions = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => fatService.start(fat.id, { lockVersion: fat.lockVersion }));
+    fat = fatExecutions[0];
+    let [safetyCase, numericCase, optionalCase] = fat.cases;
+    fatExecutions = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => fatService.recordCase(safetyCase.id, { lockVersion: safetyCase.lockVersion, result: 'FAIL', notes: 'El contacto auxiliar no conmuta' }));
+    fat = fatExecutions[0]; safetyCase = fat.cases[0];
+    assert.equal(safetyCase.deviations.length, 1);
+    let safetyDeviation = safetyCase.deviations[0];
+    await assert.rejects(
+      () => tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => fatService.submit(fat.id, { lockVersion: fat.lockVersion })),
+      /todos los casos/,
+    );
+    fatExecutions = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => fatService.updateDeviation(safetyDeviation.id, { lockVersion: safetyDeviation.lockVersion, status: 'IN_REWORK', correctiveAction: 'Reemplazar el contacto auxiliar' }));
+    fat = fatExecutions[0]; safetyCase = fat.cases[0]; safetyDeviation = safetyCase.deviations[0];
+    fatExecutions = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => fatService.updateDeviation(safetyDeviation.id, { lockVersion: safetyDeviation.lockVersion, status: 'RESOLVED', resolutionNotes: 'Contacto reemplazado y continuidad verificada' }));
+    fat = fatExecutions[0]; safetyCase = fat.cases[0];
+    fatExecutions = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => fatService.recordCase(safetyCase.id, { lockVersion: safetyCase.lockVersion, result: 'PASS', notes: 'Reprueba conforme' }));
+    fat = fatExecutions[0]; safetyCase = fat.cases[0];
+    fatExecutions = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => fatService.addEvidence(safetyCase.id, { title: 'Registro de paro', reference: 'FAT-EVID-001' }));
+    fat = fatExecutions[0]; numericCase = fat.cases[1];
+    fatExecutions = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => fatService.recordCase(numericCase.id, { lockVersion: numericCase.lockVersion, measuredValue: 25, notes: 'Corriente sobre el límite' }));
+    fat = fatExecutions[0]; numericCase = fat.cases[1];
+    assert.equal(numericCase.result, 'FAIL');
+    let numericDeviation = numericCase.deviations[0];
+    fatExecutions = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => fatService.updateDeviation(numericDeviation.id, { lockVersion: numericDeviation.lockVersion, status: 'ACCEPTED_AS_IS', resolutionNotes: 'Concesión temporal aprobada para el prototipo' }));
+    fat = fatExecutions[0]; optionalCase = fat.cases[2];
+    fatExecutions = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => fatService.recordCase(optionalCase.id, { lockVersion: optionalCase.lockVersion, result: 'NOT_APPLICABLE' }));
+    fat = fatExecutions[0];
+    fatExecutions = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => fatService.submit(fat.id, { lockVersion: fat.lockVersion }));
+    fat = fatExecutions[0];
+    assert.equal(fat.status, 'AWAITING_APPROVAL');
+    fatExecutions = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => fatService.decide(fat.id, { lockVersion: fat.lockVersion, decision: 'REJECTED', comments: 'Repetir sin concesión de corriente' }));
+    fat = fatExecutions[0];
+    assert.equal(fat.status, 'REJECTED');
+    let readiness = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => fatService.dispatchReadiness(kits[0].manufacturedUnitId));
+    assert.equal(readiness.ready, false);
+
+    fatExecutions = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => fatService.createExecution(kits[0].manufacturedUnitId, { templateId: fatTemplate.id }));
+    fat = fatExecutions.find((item: any) => item.sequence === 2);
+    assert(fat);
+    fatExecutions = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => fatService.start(fat.id, { lockVersion: fat.lockVersion }));
+    fat = fatExecutions.find((item: any) => item.sequence === 2); [safetyCase, numericCase, optionalCase] = fat.cases;
+    fatExecutions = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => fatService.recordCase(safetyCase.id, { lockVersion: safetyCase.lockVersion, result: 'PASS' }));
+    fat = fatExecutions.find((item: any) => item.sequence === 2); safetyCase = fat.cases[0];
+    fatExecutions = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => fatService.addEvidence(safetyCase.id, { title: 'Reprueba de paro', reference: 'FAT-EVID-002' }));
+    fat = fatExecutions.find((item: any) => item.sequence === 2); numericCase = fat.cases[1];
+    fatExecutions = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => fatService.recordCase(numericCase.id, { lockVersion: numericCase.lockVersion, measuredValue: 15 }));
+    fat = fatExecutions.find((item: any) => item.sequence === 2); optionalCase = fat.cases[2];
+    fatExecutions = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => fatService.recordCase(optionalCase.id, { lockVersion: optionalCase.lockVersion, result: 'NOT_APPLICABLE' }));
+    fat = fatExecutions.find((item: any) => item.sequence === 2);
+    fatExecutions = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => fatService.submit(fat.id, { lockVersion: fat.lockVersion }));
+    fat = fatExecutions.find((item: any) => item.sequence === 2);
+    fatExecutions = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => fatService.decide(fat.id, { lockVersion: fat.lockVersion, decision: 'APPROVED', comments: 'Protocolo conforme' }));
+    fat = fatExecutions.find((item: any) => item.sequence === 2);
+    assert.equal(fat.status, 'APPROVED');
+    assert.equal(fat.summary.dispatchReady, true);
+    readiness = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => fatService.dispatchReadiness(kits[0].manufacturedUnitId));
+    assert.equal(readiness.ready, true);
+    assert.deepEqual(readiness.reasons, []);
+    console.log('OK: abastecimiento, kits, ensamble, FAT, retrabajo, firma y compuerta de despacho verificados');
   } finally {
     if (orderId) {
       if (orderNumber) await prisma.inventoryMovement.deleteMany({ where: { referenceType: 'MANUFACTURING_STOCK_RESERVATION', referenceLabel: { startsWith: orderNumber } } });
       await prisma.manufacturingStockReservation.deleteMany({ where: { supplyRequirement: { supplyPlan: { manufacturingOrderId: orderId } } } });
+      await prisma.manufacturingFatApproval.deleteMany({ where: { execution: { manufacturingOrderId: orderId } } });
+      await prisma.manufacturingFatDeviation.deleteMany({ where: { execution: { manufacturingOrderId: orderId } } });
+      await prisma.manufacturingFatEvidence.deleteMany({ where: { fatCase: { execution: { manufacturingOrderId: orderId } } } });
+      await prisma.manufacturingFatCase.deleteMany({ where: { execution: { manufacturingOrderId: orderId } } });
+      await prisma.manufacturingFatExecution.deleteMany({ where: { manufacturingOrderId: orderId } });
       await prisma.manufacturingAssemblyConsumption.deleteMany({ where: { operation: { execution: { manufacturingOrderId: orderId } } } });
       await prisma.manufacturingAssemblyEvidence.deleteMany({ where: { operation: { execution: { manufacturingOrderId: orderId } } } });
       await prisma.manufacturingAssemblyTimeLog.deleteMany({ where: { operation: { execution: { manufacturingOrderId: orderId } } } });
@@ -341,6 +427,10 @@ async function main() {
     if (templateId) {
       await prisma.assemblyTemplateStep.deleteMany({ where: { templateId } });
       await prisma.assemblyTemplate.deleteMany({ where: { id: templateId } });
+    }
+    if (fatTemplateId) {
+      await prisma.manufacturingFatTemplateCase.deleteMany({ where: { templateId: fatTemplateId } });
+      await prisma.manufacturingFatTemplate.deleteMany({ where: { id: fatTemplateId } });
     }
     await prisma.$disconnect();
   }

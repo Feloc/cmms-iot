@@ -13,6 +13,7 @@ import { EngineeringReleasesTab } from './EngineeringReleasesTab';
 import { ManufacturingSupplyTab } from './ManufacturingSupplyTab';
 import { ManufacturingKitsTab } from './ManufacturingKitsTab';
 import { ManufacturingAssemblyTab } from './ManufacturingAssemblyTab';
+import { ManufacturingFatTab } from './ManufacturingFatTab';
 import {
   dateLabel,
   localDateInput,
@@ -27,7 +28,7 @@ import {
   type Paginated,
 } from '@/lib/manufacturing';
 
-type Tab = 'summary' | 'units' | 'members' | 'engineering' | 'bom' | 'releases' | 'supply' | 'kits' | 'assembly' | 'history';
+type Tab = 'summary' | 'units' | 'members' | 'engineering' | 'bom' | 'releases' | 'supply' | 'kits' | 'assembly' | 'fat' | 'history';
 
 export default function ManufacturingDetailPage() {
   const params = useParams();
@@ -71,7 +72,7 @@ export default function ManufacturingDetailPage() {
   const tabs: Array<{ key: Tab; label: string }> = [
     { key: 'summary', label: 'Resumen' }, { key: 'units', label: `Unidades (${data.units?.length || 0})` },
     { key: 'members', label: 'Equipo' }, { key: 'engineering', label: 'Ingeniería' },
-    { key: 'bom', label: 'BOM' }, { key: 'releases', label: 'Liberaciones' }, { key: 'supply', label: 'Abastecimiento' }, { key: 'kits', label: 'Kits' }, { key: 'assembly', label: 'Ejecución ensamble' },
+    { key: 'bom', label: 'BOM' }, { key: 'releases', label: 'Liberaciones' }, { key: 'supply', label: 'Abastecimiento' }, { key: 'kits', label: 'Kits' }, { key: 'assembly', label: 'Ejecución ensamble' }, { key: 'fat', label: 'FAT' },
     { key: 'history', label: 'Historial' },
   ];
 
@@ -101,6 +102,7 @@ export default function ManufacturingDetailPage() {
       {tab === 'supply' ? <ManufacturingSupplyTab order={data} role={role} auth={auth} onChanged={() => mutate()} /> : null}
       {tab === 'kits' ? <ManufacturingKitsTab order={data} role={role} auth={auth} onChanged={() => mutate()} /> : null}
       {tab === 'assembly' ? <ManufacturingAssemblyTab order={data} role={role} auth={auth} onChanged={() => mutate()} /> : null}
+      {tab === 'fat' ? <ManufacturingFatTab order={data} role={role} auth={auth} onChanged={() => mutate()} /> : null}
       {tab === 'history' ? <History items={history?.items || []} /> : null}
     </div>
   );
