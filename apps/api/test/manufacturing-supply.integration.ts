@@ -8,6 +8,7 @@ import { ManufacturingSupplyInspectionsService } from '../src/modules/manufactur
 import { ManufacturingKitsService } from '../src/modules/manufacturing/manufacturing-kits.service';
 import { ManufacturingAssemblyService } from '../src/modules/manufacturing/manufacturing-assembly.service';
 import { ManufacturingFatService } from '../src/modules/manufacturing/manufacturing-fat.service';
+import { ManufacturingDispatchService } from '../src/modules/manufacturing/manufacturing-dispatch.service';
 
 async function main() {
   const prisma = new PrismaService();
@@ -129,6 +130,7 @@ async function main() {
     const kitsService = new ManufacturingKitsService(prisma);
     const assemblyService = new ManufacturingAssemblyService(prisma);
     const fatService = new ManufacturingFatService(prisma);
+    const dispatchService = new ManufacturingDispatchService(prisma);
     await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => service.generate(order.id, { engineeringReleaseId: release.id }));
     let plans = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => service.list(order.id));
     assert.equal(plans.length, 1);
@@ -394,11 +396,74 @@ async function main() {
     readiness = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => fatService.dispatchReadiness(kits[0].manufacturedUnitId));
     assert.equal(readiness.ready, true);
     assert.deepEqual(readiness.reasons, []);
-    console.log('OK: abastecimiento, kits, ensamble, FAT, retrabajo, firma y compuerta de despacho verificados');
+    await assert.rejects(
+      () => tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => dispatchService.create(kits[1].manufacturedUnitId, { destination: 'Cliente temporal' })),
+      /FAT aprobado/,
+    );
+    await prisma.manufacturedUnit.update({ where: { id: kits[0].manufacturedUnitId }, data: { serialNumber: `SER-${stamp}` } });
+    let dispatches = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => dispatchService.create(kits[0].manufacturedUnitId, { destination: 'Planta cliente', deliveryAddress: 'Zona industrial temporal', plannedDispatchAt: '2026-09-15T08:00:00-05:00' }));
+    let dispatch = dispatches[0];
+    assert.equal(dispatch.status, 'DRAFT');
+    assert.equal(dispatch.checklistItems.length, 6);
+    dispatches = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => dispatchService.start(dispatch.id, { lockVersion: dispatch.lockVersion }));
+    dispatch = dispatches[0];
+    await assert.rejects(
+      () => tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => dispatchService.markReady(dispatch.id, { lockVersion: dispatch.lockVersion })),
+      /destino, dirección y transportista/,
+    );
+    dispatches = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => dispatchService.update(dispatch.id, { lockVersion: dispatch.lockVersion, carrierName: 'Transportes temporales', carrierReference: 'COT-001' }));
+    dispatch = dispatches[0];
+    let firstDispatchCheck = dispatch.checklistItems[0];
+    dispatches = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => dispatchService.updateChecklist(firstDispatchCheck.id, { lockVersion: firstDispatchCheck.lockVersion, status: 'COMPLETED', evidenceReference: 'EVID-TEMP' }));
+    dispatch = dispatches[0]; firstDispatchCheck = dispatch.checklistItems[0];
+    dispatches = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => dispatchService.updateChecklist(firstDispatchCheck.id, { lockVersion: firstDispatchCheck.lockVersion, status: 'PENDING' }));
+    dispatch = dispatches[0];
+    dispatches = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => dispatchService.addPackage(dispatch.id, { packageType: 'BOX', description: 'Bulto temporal corregible', grossWeightKg: 10 }));
+    dispatch = dispatches[0];
+    dispatches = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => dispatchService.removePackage(dispatch.packages[0].id));
+    dispatch = dispatches[0];
+    dispatches = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => dispatchService.addDocument(dispatch.id, { documentType: 'OTHER', title: 'Documento temporal', reference: 'TMP-DOC' }));
+    dispatch = dispatches[0];
+    dispatches = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => dispatchService.removeDocument(dispatch.documents[0].id));
+    dispatch = dispatches[0];
+    for (const item of dispatch.checklistItems) {
+      dispatches = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => dispatchService.updateChecklist(item.id, { lockVersion: item.lockVersion, status: 'COMPLETED', evidenceReference: item.evidenceRequired ? `EVID-${item.position}` : undefined, notes: 'Control verificado' }));
+      dispatch = dispatches[0];
+    }
+    dispatches = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => dispatchService.addPackage(dispatch.id, { packageType: 'CRATE', description: 'Máquina principal embalada', lengthCm: 240, widthCm: 160, heightCm: 210, netWeightKg: 1150, grossWeightKg: 1250, sealNumber: 'SELLO-001' }));
+    dispatch = dispatches[0];
+    assert.equal(dispatch.summary.grossWeightKg, 1250);
+    dispatches = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => dispatchService.addDocument(dispatch.id, { documentType: 'PACKING_LIST', title: 'Lista de empaque', reference: 'PKL-001' }));
+    dispatch = dispatches[0];
+    dispatches = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => dispatchService.markReady(dispatch.id, { lockVersion: dispatch.lockVersion }));
+    dispatch = dispatches[0];
+    assert.equal(dispatch.status, 'READY');
+    assert.equal(dispatch.serialNumberSnapshot, `SER-${stamp}`);
+    dispatches = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => dispatchService.authorize(dispatch.id, { lockVersion: dispatch.lockVersion }));
+    dispatch = dispatches[0];
+    assert.equal(dispatch.status, 'AUTHORIZED');
+    await assert.rejects(
+      () => tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => dispatchService.dispatch(dispatch.id, { lockVersion: dispatch.lockVersion, trackingNumber: 'GUIA-001' })),
+      /documento de transporte/,
+    );
+    dispatches = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => dispatchService.addDocument(dispatch.id, { documentType: 'TRANSPORT_DOCUMENT', title: 'Remesa terrestre', reference: 'REM-001' }));
+    dispatch = dispatches[0];
+    dispatches = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => dispatchService.dispatch(dispatch.id, { lockVersion: dispatch.lockVersion, trackingNumber: 'GUIA-001', driverName: 'Conductor temporal', vehiclePlate: 'TMP123' }));
+    dispatch = dispatches[0];
+    assert.equal(dispatch.status, 'DISPATCHED');
+    dispatches = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => dispatchService.deliver(dispatch.id, { lockVersion: dispatch.lockVersion, receivedByName: 'Cliente receptor', proofReference: 'POD-001' }));
+    dispatch = dispatches[0];
+    assert.equal(dispatch.status, 'DELIVERED');
+    assert.equal(dispatch.deliveryProofReference, 'POD-001');
+    console.log('OK: abastecimiento, kits, ensamble, FAT, despacho y entrega integral verificados');
   } finally {
     if (orderId) {
       if (orderNumber) await prisma.inventoryMovement.deleteMany({ where: { referenceType: 'MANUFACTURING_STOCK_RESERVATION', referenceLabel: { startsWith: orderNumber } } });
       await prisma.manufacturingStockReservation.deleteMany({ where: { supplyRequirement: { supplyPlan: { manufacturingOrderId: orderId } } } });
+      await prisma.manufacturingDispatchDocument.deleteMany({ where: { dispatch: { manufacturingOrderId: orderId } } });
+      await prisma.manufacturingDispatchPackage.deleteMany({ where: { dispatch: { manufacturingOrderId: orderId } } });
+      await prisma.manufacturingDispatchChecklistItem.deleteMany({ where: { dispatch: { manufacturingOrderId: orderId } } });
+      await prisma.manufacturingDispatch.deleteMany({ where: { manufacturingOrderId: orderId } });
       await prisma.manufacturingFatApproval.deleteMany({ where: { execution: { manufacturingOrderId: orderId } } });
       await prisma.manufacturingFatDeviation.deleteMany({ where: { execution: { manufacturingOrderId: orderId } } });
       await prisma.manufacturingFatEvidence.deleteMany({ where: { fatCase: { execution: { manufacturingOrderId: orderId } } } });

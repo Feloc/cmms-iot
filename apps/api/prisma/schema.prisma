@@ -229,6 +229,41 @@ enum ManufacturingFatApprovalDecision {
   REJECTED
 }
 
+enum ManufacturingDispatchStatus {
+  DRAFT
+  PREPARING
+  READY
+  AUTHORIZED
+  DISPATCHED
+  DELIVERED
+  CANCELED
+}
+
+enum ManufacturingDispatchChecklistStatus {
+  PENDING
+  COMPLETED
+  NOT_APPLICABLE
+}
+
+enum ManufacturingDispatchPackageType {
+  CRATE
+  PALLET
+  BOX
+  LOOSE
+  OTHER
+}
+
+enum ManufacturingDispatchDocumentType {
+  PACKING_LIST
+  TRANSPORT_DOCUMENT
+  COMMERCIAL_INVOICE
+  INSURANCE
+  CERTIFICATE
+  MANUAL
+  FAT_REPORT
+  OTHER
+}
+
 // Repuestos en una Orden de Servicio: primero se registran como necesarios (diagnóstico)
 // y luego se marcan como cambiados (historial en el activo).
 enum ServiceOrderPartStage {
@@ -403,6 +438,10 @@ model Tenant {
   manufacturingFatEvidence ManufacturingFatEvidence[]
   manufacturingFatDeviations ManufacturingFatDeviation[]
   manufacturingFatApprovals ManufacturingFatApproval[]
+  manufacturingDispatches ManufacturingDispatch[]
+  manufacturingDispatchChecklistItems ManufacturingDispatchChecklistItem[]
+  manufacturingDispatchPackages ManufacturingDispatchPackage[]
+  manufacturingDispatchDocuments ManufacturingDispatchDocument[]
 
   workOrderReports WorkOrderReport[]
 }
@@ -1840,6 +1879,7 @@ model ManufacturingOrder {
   kits ManufacturingKit[]
   assemblyExecutions ManufacturingAssemblyExecution[]
   fatExecutions ManufacturingFatExecution[]
+  dispatches ManufacturingDispatch[]
 
   @@unique([tenantId, number])
   @@index([tenantId, status, updatedAt(sort: Desc)])
@@ -1867,6 +1907,7 @@ model ManufacturedUnit {
 
   kits ManufacturingKit[]
   fatExecutions ManufacturingFatExecution[]
+  dispatch ManufacturingDispatch?
 
   @@unique([manufacturingOrderId, unitNumber])
   @@unique([tenantId, serialNumber])
@@ -2606,6 +2647,7 @@ model ManufacturingFatExecution {
   cases      ManufacturingFatCase[]
   deviations ManufacturingFatDeviation[]
   approvals  ManufacturingFatApproval[]
+  dispatch   ManufacturingDispatch?
 
   @@unique([manufacturedUnitId, sequence])
   @@unique([tenantId, executionCode])
@@ -2715,4 +2757,129 @@ model ManufacturingFatApproval {
   createdAt DateTime @default(now())
 
   @@index([tenantId, executionId, signedAt(sort: Desc)])
+}
+
+model ManufacturingDispatch {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  manufacturingOrderId String
+  manufacturingOrder   ManufacturingOrder @relation(fields: [manufacturingOrderId], references: [id], onDelete: Cascade)
+  manufacturedUnitId String @unique
+  manufacturedUnit   ManufacturedUnit @relation(fields: [manufacturedUnitId], references: [id], onDelete: Restrict)
+  fatExecutionId String @unique
+  fatExecution   ManufacturingFatExecution @relation(fields: [fatExecutionId], references: [id], onDelete: Restrict)
+
+  dispatchCode String
+  status       ManufacturingDispatchStatus @default(DRAFT)
+  lockVersion  Int @default(1)
+  serialNumberSnapshot String?
+  destination          String?
+  deliveryAddress      String?
+  contactName          String?
+  contactPhone         String?
+  responsibleUserId    String
+  responsibleName      String
+  carrierName          String?
+  carrierReference     String?
+  driverName           String?
+  vehiclePlate         String?
+  trackingNumber       String?
+  plannedDispatchAt    DateTime?
+  authorizedAt         DateTime?
+  authorizedByUserId   String?
+  authorizedByName     String?
+  authorizedByRole     String?
+  dispatchedAt         DateTime?
+  dispatchedByUserId   String?
+  dispatchedByName     String?
+  deliveredAt          DateTime?
+  receivedByName       String?
+  deliveryProofReference String?
+  canceledAt           DateTime?
+  canceledReason       String?
+  notes                String?
+  createdByUserId      String
+  createdByName        String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  checklistItems ManufacturingDispatchChecklistItem[]
+  packages       ManufacturingDispatchPackage[]
+  documents      ManufacturingDispatchDocument[]
+
+  @@unique([tenantId, dispatchCode])
+  @@index([tenantId, manufacturingOrderId, status])
+  @@index([tenantId, status, plannedDispatchAt])
+}
+
+model ManufacturingDispatchChecklistItem {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  dispatchId String
+  dispatch   ManufacturingDispatch @relation(fields: [dispatchId], references: [id], onDelete: Cascade)
+  position   Int
+  name       String
+  description String?
+  required         Boolean @default(true)
+  evidenceRequired Boolean @default(false)
+  status           ManufacturingDispatchChecklistStatus @default(PENDING)
+  evidenceReference String?
+  notes              String?
+  lockVersion         Int @default(1)
+  completedAt         DateTime?
+  completedByUserId   String?
+  completedByName     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([dispatchId, position])
+  @@index([tenantId, dispatchId, status, position])
+}
+
+model ManufacturingDispatchPackage {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  dispatchId String
+  dispatch   ManufacturingDispatch @relation(fields: [dispatchId], references: [id], onDelete: Cascade)
+  sequence   Int
+  packageCode String
+  packageType ManufacturingDispatchPackageType
+  description String
+  lengthCm    Decimal? @db.Decimal(18, 3)
+  widthCm     Decimal? @db.Decimal(18, 3)
+  heightCm    Decimal? @db.Decimal(18, 3)
+  netWeightKg   Decimal? @db.Decimal(18, 3)
+  grossWeightKg Decimal @db.Decimal(18, 3)
+  serialNumber  String?
+  sealNumber    String?
+  notes         String?
+  createdByUserId String
+  createdByName   String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([dispatchId, sequence])
+  @@unique([tenantId, packageCode])
+  @@index([tenantId, dispatchId, sequence])
+}
+
+model ManufacturingDispatchDocument {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  dispatchId String
+  dispatch   ManufacturingDispatch @relation(fields: [dispatchId], references: [id], onDelete: Cascade)
+  documentType ManufacturingDispatchDocumentType
+  title        String
+  reference    String?
+  url          String?
+  notes        String?
+  createdByUserId String
+  createdByName   String
+  createdAt DateTime @default(now())
+
+  @@index([tenantId, dispatchId, documentType, createdAt(sort: Desc)])
 }

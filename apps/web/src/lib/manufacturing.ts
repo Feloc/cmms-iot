@@ -16,6 +16,10 @@ export type ManufacturingFatExecutionStatus = 'DRAFT' | 'IN_PROGRESS' | 'AWAITIN
 export type ManufacturingFatCaseResult = 'PENDING' | 'PASS' | 'FAIL' | 'NOT_APPLICABLE';
 export type ManufacturingFatResultType = 'BOOLEAN' | 'NUMERIC' | 'TEXT';
 export type ManufacturingFatDeviationStatus = 'OPEN' | 'IN_REWORK' | 'RESOLVED' | 'ACCEPTED_AS_IS';
+export type ManufacturingDispatchStatus = 'DRAFT' | 'PREPARING' | 'READY' | 'AUTHORIZED' | 'DISPATCHED' | 'DELIVERED' | 'CANCELED';
+export type ManufacturingDispatchChecklistStatus = 'PENDING' | 'COMPLETED' | 'NOT_APPLICABLE';
+export type ManufacturingDispatchPackageType = 'CRATE' | 'PALLET' | 'BOX' | 'LOOSE' | 'OTHER';
+export type ManufacturingDispatchDocumentType = 'PACKING_LIST' | 'TRANSPORT_DOCUMENT' | 'COMMERCIAL_INVOICE' | 'INSURANCE' | 'CERTIFICATE' | 'MANUAL' | 'FAT_REPORT' | 'OTHER';
 
 export type ManufacturingUser = {
   id: string;
@@ -558,6 +562,87 @@ export type ManufacturingFatExecution = {
   cases: ManufacturingFatCase[];
   approvals: ManufacturingFatApproval[];
   summary: { caseCount: number; passedCount: number; failedCount: number; pendingCount: number; openDeviationCount: number; progressPercent: number; dispatchReady: boolean };
+};
+
+export type ManufacturingDispatchChecklistItem = {
+  id: string;
+  position: number;
+  name: string;
+  description?: string | null;
+  required: boolean;
+  evidenceRequired: boolean;
+  status: ManufacturingDispatchChecklistStatus;
+  evidenceReference?: string | null;
+  notes?: string | null;
+  lockVersion: number;
+  completedAt?: string | null;
+  completedByName?: string | null;
+};
+
+export type ManufacturingDispatchPackage = {
+  id: string;
+  sequence: number;
+  packageCode: string;
+  packageType: ManufacturingDispatchPackageType;
+  description: string;
+  lengthCm?: number | null;
+  widthCm?: number | null;
+  heightCm?: number | null;
+  netWeightKg?: number | null;
+  grossWeightKg: number;
+  serialNumber?: string | null;
+  sealNumber?: string | null;
+  notes?: string | null;
+};
+
+export type ManufacturingDispatchDocument = {
+  id: string;
+  documentType: ManufacturingDispatchDocumentType;
+  title: string;
+  reference?: string | null;
+  url?: string | null;
+  notes?: string | null;
+  createdByName: string;
+  createdAt: string;
+};
+
+export type ManufacturingDispatch = {
+  id: string;
+  manufacturingOrderId: string;
+  manufacturedUnitId: string;
+  fatExecutionId: string;
+  dispatchCode: string;
+  status: ManufacturingDispatchStatus;
+  lockVersion: number;
+  serialNumberSnapshot?: string | null;
+  destination?: string | null;
+  deliveryAddress?: string | null;
+  contactName?: string | null;
+  contactPhone?: string | null;
+  responsibleUserId: string;
+  responsibleName: string;
+  carrierName?: string | null;
+  carrierReference?: string | null;
+  driverName?: string | null;
+  vehiclePlate?: string | null;
+  trackingNumber?: string | null;
+  plannedDispatchAt?: string | null;
+  authorizedAt?: string | null;
+  authorizedByName?: string | null;
+  authorizedByRole?: string | null;
+  dispatchedAt?: string | null;
+  dispatchedByName?: string | null;
+  deliveredAt?: string | null;
+  receivedByName?: string | null;
+  deliveryProofReference?: string | null;
+  canceledReason?: string | null;
+  notes?: string | null;
+  manufacturedUnit: ManufacturedUnit;
+  fatExecution: { id: string; executionCode: string; sequence: number; status: ManufacturingFatExecutionStatus; decidedAt?: string | null };
+  checklistItems: ManufacturingDispatchChecklistItem[];
+  packages: ManufacturingDispatchPackage[];
+  documents: ManufacturingDispatchDocument[];
+  summary: { checklistCount: number; checklistCompletedCount: number; checklistPendingCount: number; packageCount: number; grossWeightKg: number; documentCount: number; fatGateOpen: boolean; progressPercent: number };
 };
 
 export type Paginated<T> = {

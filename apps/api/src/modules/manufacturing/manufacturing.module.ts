@@ -19,9 +19,11 @@ import { ManufacturingAssemblyController } from './manufacturing-assembly.contro
 import { ManufacturingAssemblyService } from './manufacturing-assembly.service';
 import { ManufacturingFatController } from './manufacturing-fat.controller';
 import { ManufacturingFatService } from './manufacturing-fat.service';
+import { ManufacturingDispatchController } from './manufacturing-dispatch.controller';
+import { ManufacturingDispatchService } from './manufacturing-dispatch.service';
 
 @Module({
-  controllers: [ManufacturingController, ManufacturingDocumentsController, ManufacturingBomsController, ManufacturingReleasesController, ManufacturingSupplyController, ManufacturingAssemblyController, ManufacturingFatController],
-  providers: [ManufacturingService, ManufacturingDocumentsService, ManufacturingBomsService, ManufacturingBomImportService, ManufacturingReleasesService, ManufacturingSupplyService, ManufacturingStockReservationsService, ManufacturingSupplyRequestsService, ManufacturingSupplyInspectionsService, ManufacturingKitsService, ManufacturingAssemblyService, ManufacturingFatService, PrismaService],
+  controllers: [ManufacturingController, ManufacturingDocumentsController, ManufacturingBomsController, ManufacturingReleasesController, ManufacturingSupplyController, ManufacturingAssemblyController, ManufacturingFatController, ManufacturingDispatchController],
+  providers: [ManufacturingService, ManufacturingDocumentsService, ManufacturingBomsService, ManufacturingBomImportService, ManufacturingReleasesService, ManufacturingSupplyService, ManufacturingStockReservationsService, ManufacturingSupplyRequestsService, ManufacturingSupplyInspectionsService, ManufacturingKitsService, ManufacturingAssemblyService, ManufacturingFatService, ManufacturingDispatchService, PrismaService],
 })
 export class ManufacturingModule {}
