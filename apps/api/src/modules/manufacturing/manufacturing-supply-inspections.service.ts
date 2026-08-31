@@ -27,7 +27,7 @@ export class ManufacturingSupplyInspectionsService {
       if (!delivery) throw new NotFoundException('Entrega no encontrada');
       const version = Number(dto?.lockVersion); if (!Number.isInteger(version) || version !== delivery.lockVersion) throw new ConflictException('La inspección cambió; actualiza la pantalla');
       const order = delivery.supplyRequest.supplyRequirement.supplyPlan.manufacturingOrder; orderId = order.id;
-      if (order.status === 'CANCELED') throw new ConflictException('La orden está cancelada'); if (order.status === 'ON_HOLD') throw new ConflictException('La orden está en pausa');
+      if (['CANCELED', 'COMPLETED'].includes(order.status)) throw new ConflictException('La orden está cerrada'); if (order.status === 'ON_HOLD') throw new ConflictException('La orden está en pausa');
       const accepted = this.amount(dto.acceptedQuantity); const rejected = this.amount(dto.rejectedQuantity);
       const quarantined = fromQuarantine ? 0 : this.amount((dto as InspectManufacturingSupplyDeliveryDto).quarantinedQuantity);
       const total = accepted + rejected + quarantined; if (total <= 0) throw new BadRequestException('Debes registrar al menos una cantidad');

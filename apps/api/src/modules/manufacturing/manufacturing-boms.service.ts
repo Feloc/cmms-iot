@@ -58,7 +58,7 @@ export class ManufacturingBomsService {
   }
 
   private mutableOrder(order: any) {
-    if (order.status === 'CANCELED') throw new ConflictException('La orden está cancelada');
+    if (['CANCELED', 'COMPLETED'].includes(order.status)) throw new ConflictException('La orden está cerrada');
     if (order.status === 'ON_HOLD') throw new ConflictException('La orden está en pausa');
   }
 

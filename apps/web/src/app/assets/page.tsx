@@ -53,7 +53,7 @@ type Filters = {
   customer: string;
   guarantee: '' | 'IN_WARRANTY' | 'OUT_OF_WARRANTY';
   pmConfigured: '' | 'CONFIGURED' | 'UNCONFIGURED';
-  status: '' | 'ACTIVE' | 'INACTIVE' | 'DECOMMISSIONED';
+  status: '' | 'COMMISSIONING' | 'ACTIVE' | 'INACTIVE' | 'DECOMMISSIONED';
 };
 
 export default function AssetsPage() {
@@ -447,6 +447,7 @@ function pmBadge(asset: Asset) {
                   onChange={(e) => setFilters((s) => ({ ...s, status: e.target.value as Filters['status'] }))}
                 >
                   <option value="">Todos</option>
+                  <option value="COMMISSIONING">En puesta en servicio</option>
                   <option value="ACTIVE">Activo</option>
                   <option value="INACTIVE">Inactivo</option>
                   <option value="DECOMMISSIONED">Baja</option>

@@ -21,7 +21,7 @@ type PreviewRow = {
   category?: string;
   location?: string;
   supplier?: string;
-  status?: 'ACTIVE' | 'INACTIVE' | 'DECOMMISSIONED' | string;
+  status?: 'COMMISSIONING' | 'ACTIVE' | 'INACTIVE' | 'DECOMMISSIONED' | string;
   criticality?: 'LOW' | 'MEDIUM' | 'HIGH' | string;
   nominalPower?: string | number;
   nominalPowerUnit?: string;
@@ -49,7 +49,7 @@ type CreateAssetDto = {
   nominalPowerUnit?: string;
   locationIdOrName?: string;
   categoryIdOrName?: string;
-  status?: 'ACTIVE' | 'INACTIVE' | 'DECOMMISSIONED';
+  status?: 'COMMISSIONING' | 'ACTIVE' | 'INACTIVE' | 'DECOMMISSIONED';
   criticality?: 'LOW' | 'MEDIUM' | 'HIGH';
   acquiredOn?: string; // YYYY-MM-DD
   guarantee?: string; // YYYY-MM-DD
@@ -468,6 +468,7 @@ export default function AssetNewPage() {
                   value={form.status}
                   onChange={(e) => setField('status', e.target.value as any)}
                 >
+                  <option value="COMMISSIONING">COMMISSIONING</option>
                   <option value="ACTIVE">ACTIVE</option>
                   <option value="INACTIVE">INACTIVE</option>
                   <option value="DECOMMISSIONED">DECOMMISSIONED</option>

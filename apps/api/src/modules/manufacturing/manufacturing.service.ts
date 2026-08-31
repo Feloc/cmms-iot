@@ -17,7 +17,7 @@ import {
 } from './dto/manufacturing.dto';
 import { formatManufacturingOrderNumber, resumableManufacturingStatus } from './manufacturing.domain';
 
-const ORDER_STATUSES = new Set(['DRAFT', 'ENGINEERING', 'RELEASED', 'ON_HOLD', 'CANCELED']);
+const ORDER_STATUSES = new Set(['DRAFT', 'ENGINEERING', 'RELEASED', 'COMPLETED', 'ON_HOLD', 'CANCELED']);
 const PRIORITIES = new Set(['LOW', 'MEDIUM', 'HIGH', 'URGENT']);
 const MEMBER_FUNCTIONS = new Set(['RESPONSIBLE', 'ENGINEERING', 'REVIEWER', 'OBSERVER']);
 const UNIT_STATUSES = new Set(['PLANNED', 'CANCELED']);
@@ -394,7 +394,7 @@ export class ManufacturingService {
         where: { id, tenantId }, include: { units: { orderBy: { unitNumber: 'asc' } } },
       });
       if (!current) throw new NotFoundException('Orden de manufactura no encontrada');
-      if (current.status === 'CANCELED') throw new ConflictException('No se puede modificar una orden cancelada');
+      if (['CANCELED', 'COMPLETED'].includes(current.status)) throw new ConflictException('No se puede modificar una orden cerrada');
       if (current.version !== version) throw new ConflictException('La orden cambió desde que fue abierta; actualiza la página');
 
       const data: any = {};
@@ -470,7 +470,7 @@ export class ManufacturingService {
       const actor = await this.requireAdmin(tx, tenantId, userId);
       const current = await tx.manufacturingOrder.findFirst({ where: { id, tenantId } });
       if (!current) throw new NotFoundException('Orden de manufactura no encontrada');
-      if (current.status === 'CANCELED') throw new ConflictException('La orden está cancelada');
+      if (['CANCELED', 'COMPLETED'].includes(current.status)) throw new ConflictException('La orden está cerrada');
 
       let data: any;
       let auditAction: string;
@@ -528,9 +528,10 @@ export class ManufacturingService {
       const actor = await this.requireAdmin(tx, tenantId, userId);
       const order = await tx.manufacturingOrder.findFirst({ where: { id, tenantId } });
       if (!order) throw new NotFoundException('Orden de manufactura no encontrada');
-      if (order.status === 'CANCELED') throw new ConflictException('No se puede modificar una orden cancelada');
+      if (['CANCELED', 'COMPLETED'].includes(order.status)) throw new ConflictException('No se puede modificar una orden cerrada');
       const unit = await tx.manufacturedUnit.findFirst({ where: { id: unitId, tenantId, manufacturingOrderId: id } });
       if (!unit) throw new NotFoundException('Unidad fabricada no encontrada');
+      if (unit.status === 'COMMISSIONED') throw new ConflictException('La unidad ya fue comisionada y su identidad quedó cerrada');
       const data: any = {};
       if (dto.serialNumber !== undefined) data.serialNumber = this.text(dto.serialNumber, 'serialNumber');
       if (dto.internalCode !== undefined) data.internalCode = this.text(dto.internalCode, 'internalCode');
@@ -570,7 +571,7 @@ export class ManufacturingService {
         where: { id, tenantId }, include: { members: true },
       });
       if (!order) throw new NotFoundException('Orden de manufactura no encontrada');
-      if (order.status === 'CANCELED') throw new ConflictException('No se puede modificar una orden cancelada');
+      if (['CANCELED', 'COMPLETED'].includes(order.status)) throw new ConflictException('No se puede modificar una orden cerrada');
       const members = this.normalizeMembers(dto?.members, order.responsibleUserId);
       await this.validateMemberUsers(tx, tenantId, members);
       await tx.manufacturingOrderMember.deleteMany({ where: { tenantId, manufacturingOrderId: id } });

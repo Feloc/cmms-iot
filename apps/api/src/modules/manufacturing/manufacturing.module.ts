@@ -21,9 +21,17 @@ import { ManufacturingFatController } from './manufacturing-fat.controller';
 import { ManufacturingFatService } from './manufacturing-fat.service';
 import { ManufacturingDispatchController } from './manufacturing-dispatch.controller';
 import { ManufacturingDispatchService } from './manufacturing-dispatch.service';
+import { AssembliesModule } from '../assemblies/assemblies.module';
+import { ManufacturingSiteDeploymentController } from './manufacturing-site-deployment.controller';
+import { ManufacturingSiteDeploymentService } from './manufacturing-site-deployment.service';
+import { ManufacturingSatController } from './manufacturing-sat.controller';
+import { ManufacturingSatService } from './manufacturing-sat.service';
+import { ManufacturingHandoverController } from './manufacturing-handover.controller';
+import { ManufacturingHandoverService } from './manufacturing-handover.service';
 
 @Module({
-  controllers: [ManufacturingController, ManufacturingDocumentsController, ManufacturingBomsController, ManufacturingReleasesController, ManufacturingSupplyController, ManufacturingAssemblyController, ManufacturingFatController, ManufacturingDispatchController],
-  providers: [ManufacturingService, ManufacturingDocumentsService, ManufacturingBomsService, ManufacturingBomImportService, ManufacturingReleasesService, ManufacturingSupplyService, ManufacturingStockReservationsService, ManufacturingSupplyRequestsService, ManufacturingSupplyInspectionsService, ManufacturingKitsService, ManufacturingAssemblyService, ManufacturingFatService, ManufacturingDispatchService, PrismaService],
+  imports: [AssembliesModule],
+  controllers: [ManufacturingController, ManufacturingDocumentsController, ManufacturingBomsController, ManufacturingReleasesController, ManufacturingSupplyController, ManufacturingAssemblyController, ManufacturingFatController, ManufacturingDispatchController, ManufacturingSiteDeploymentController, ManufacturingSatController, ManufacturingHandoverController],
+  providers: [ManufacturingService, ManufacturingDocumentsService, ManufacturingBomsService, ManufacturingBomImportService, ManufacturingReleasesService, ManufacturingSupplyService, ManufacturingStockReservationsService, ManufacturingSupplyRequestsService, ManufacturingSupplyInspectionsService, ManufacturingKitsService, ManufacturingAssemblyService, ManufacturingFatService, ManufacturingDispatchService, ManufacturingSiteDeploymentService, ManufacturingSatService, ManufacturingHandoverService, PrismaService],
 })
 export class ManufacturingModule {}

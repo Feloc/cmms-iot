@@ -41,6 +41,7 @@ export default function ManufacturingPage() {
     draft: items.filter((item) => item.status === 'DRAFT').length,
     engineering: items.filter((item) => item.status === 'ENGINEERING').length,
     released: items.filter((item) => item.status === 'RELEASED').length,
+    completed: items.filter((item) => item.status === 'COMPLETED').length,
     onHold: items.filter((item) => item.status === 'ON_HOLD').length,
   }), [items]);
 
@@ -56,11 +57,12 @@ export default function ManufacturingPage() {
         {role === 'ADMIN' ? <Link href="/manufacturing/new" className="rounded px-4 py-2 bg-black text-white text-sm">Nueva orden</Link> : null}
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
         <Stat label="En página" value={counts.visible} />
         <Stat label="Borrador" value={counts.draft} />
         <Stat label="Ingeniería" value={counts.engineering} tone="sky" />
         <Stat label="Liberadas" value={counts.released} tone="green" />
+        <Stat label="Completadas" value={counts.completed} />
         <Stat label="En pausa" value={counts.onHold} tone="amber" />
       </div>
 
@@ -76,6 +78,7 @@ export default function ManufacturingPage() {
           <option value="DRAFT">Borrador</option>
           <option value="ENGINEERING">Ingeniería</option>
           <option value="RELEASED">Liberada</option>
+          <option value="COMPLETED">Completada</option>
           <option value="ON_HOLD">En pausa</option>
           <option value="CANCELED">Cancelada</option>
         </select>

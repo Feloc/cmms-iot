@@ -22,7 +22,7 @@ export class ManufacturingSupplyRequestsService {
     if (!requirement) throw new NotFoundException('Necesidad de abastecimiento no encontrada');
     if (requirement.supplyPlan.status !== 'ACTIVE') throw new ConflictException('El plan de abastecimiento ya no está activo');
     const order = requirement.supplyPlan.manufacturingOrder;
-    if (order.status === 'CANCELED') throw new ConflictException('La orden está cancelada');
+    if (['CANCELED', 'COMPLETED'].includes(order.status)) throw new ConflictException('La orden está cerrada');
     if (order.status === 'ON_HOLD') throw new ConflictException('La orden está en pausa');
     if (!requirement.included || !EXECUTABLE_TYPES.has(requirement.plannedSupplyType)) throw new ConflictException('La necesidad no tiene una ruta operativa externa o interna válida');
     return requirement;
@@ -112,7 +112,7 @@ export class ManufacturingSupplyRequestsService {
     const request = await tx.manufacturingSupplyRequest.findFirst({ where: { id: requestId, tenantId }, include: { supplyRequirement: { include: { supplyPlan: { include: { manufacturingOrder: true } } } } } });
     if (!request) throw new NotFoundException('Solicitud no encontrada');
     const order = request.supplyRequirement.supplyPlan.manufacturingOrder;
-    if (order.status === 'CANCELED') throw new ConflictException('La orden está cancelada'); if (order.status === 'ON_HOLD') throw new ConflictException('La orden está en pausa');
+    if (['CANCELED', 'COMPLETED'].includes(order.status)) throw new ConflictException('La orden está cerrada'); if (order.status === 'ON_HOLD') throw new ConflictException('La orden está en pausa');
     return request;
   }
   private assertVersion(request: any, value: unknown) { const version = Number(value); if (!Number.isInteger(version) || version !== request.lockVersion) throw new ConflictException('La solicitud cambió; actualiza la pantalla'); }

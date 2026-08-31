@@ -38,7 +38,7 @@ export class ManufacturingStockReservationsService {
     });
     if (!requirement) throw new NotFoundException('Necesidad de abastecimiento no encontrada');
     if (requirement.supplyPlan.status !== 'ACTIVE') throw new ConflictException('El plan de abastecimiento ya no está activo');
-    if (requirement.supplyPlan.manufacturingOrder.status === 'CANCELED') throw new ConflictException('La orden está cancelada');
+    if (['CANCELED', 'COMPLETED'].includes(requirement.supplyPlan.manufacturingOrder.status)) throw new ConflictException('La orden está cerrada');
     if (requirement.supplyPlan.manufacturingOrder.status === 'ON_HOLD') throw new ConflictException('La orden está en pausa');
     if (!requirement.included || requirement.plannedSupplyType !== 'STOCK') throw new ConflictException('La necesidad no está activa con ruta de inventario');
     if (!requirement.inventoryItemId) throw new ConflictException('La necesidad no está vinculada a un artículo de inventario');
@@ -99,7 +99,7 @@ export class ManufacturingStockReservationsService {
       if (!Number.isInteger(observed) || observed !== reservation.lockVersion) throw new ConflictException('La reserva cambió; actualiza la pantalla');
       orderId = reservation.supplyRequirement.supplyPlan.manufacturingOrderId;
       const order = reservation.supplyRequirement.supplyPlan.manufacturingOrder;
-      if (order.status === 'CANCELED') throw new ConflictException('La orden está cancelada');
+      if (['CANCELED', 'COMPLETED'].includes(order.status)) throw new ConflictException('La orden está cerrada');
       if (order.status === 'ON_HOLD') throw new ConflictException('La orden está en pausa');
       await tx.$queryRaw`SELECT "id" FROM "InventoryStock" WHERE "id" = ${reservation.inventoryStockId} FOR UPDATE`;
       const stock = await tx.inventoryStock.findUnique({ where: { id: reservation.inventoryStockId } });

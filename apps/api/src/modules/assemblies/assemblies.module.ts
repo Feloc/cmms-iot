@@ -6,6 +6,6 @@ import { AssembliesService } from './assemblies.service';
 @Module({
   controllers: [AssembliesController],
   providers: [AssembliesService, PrismaService],
+  exports: [AssembliesService],
 })
 export class AssembliesModule {}
-

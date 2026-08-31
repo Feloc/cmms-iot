@@ -366,12 +366,17 @@ export class AssembliesService {
 
   async create(dto: CreateAssemblyDto) {
     const { tenantId, userId } = this.context();
-    const assetCode = String(dto?.assetCode || '').trim();
-    const templateId = String(dto?.templateId || '').trim();
-    if (!assetCode || !templateId) throw new BadRequestException('Activo y plantilla son obligatorios');
-
     return this.prisma.$transaction(async (tx: any) => {
       await this.requireAdmin(tx, tenantId, userId);
+      return this.createForAsset(tx, tenantId, dto);
+    });
+  }
+
+  /** Reutiliza el motor de Montajes dentro de una transacción iniciada por otro módulo. */
+  async createForAsset(tx: any, tenantId: string, dto: CreateAssemblyDto) {
+      const assetCode = String(dto?.assetCode || '').trim();
+      const templateId = String(dto?.templateId || '').trim();
+      if (!assetCode || !templateId) throw new BadRequestException('Activo y plantilla son obligatorios');
       const [asset, template] = await Promise.all([
         tx.asset.findFirst({ where: { tenantId, code: assetCode }, select: { code: true, name: true } }),
         tx.assemblyTemplate.findFirst({
@@ -452,7 +457,6 @@ export class AssembliesService {
         },
       });
       return { id: execution.id, workOrderId: workOrder.id };
-    });
   }
 
   async list(status?: string) {
@@ -923,6 +927,10 @@ export class AssembliesService {
         data: { status: 'IN_PROGRESS', blockedReason: null, startedAt: ctx.activity.startedAt || now },
       });
       await tx.assemblyExecution.update({ where: { id }, data: { status: 'IN_PROGRESS', startedAt: ctx.execution.startedAt || now } });
+      await tx.manufacturingSiteDeployment.updateMany({
+        where: { tenantId: ctx.tenantId, assemblyExecutionId: id },
+        data: { status: 'INSTALLING', lockVersion: { increment: 1 } },
+      });
       await tx.workOrder.update({
         where: { id: ctx.execution.workOrderId },
         data: { status: 'IN_PROGRESS', startedAt: ctx.execution.workOrder.startedAt || now, activityStartedAt: ctx.execution.workOrder.activityStartedAt || now },
@@ -1028,6 +1036,13 @@ export class AssembliesService {
     await tx.assemblyExecution.update({
       where: { id: execution.id },
       data: { status, completedAt: allDone ? now : null },
+    });
+    await tx.manufacturingSiteDeployment.updateMany({
+      where: { tenantId: execution.tenantId, assemblyExecutionId: execution.id },
+      data: {
+        status: allDone ? 'READY_FOR_SAT' : hasStarted ? 'INSTALLING' : 'INSTALLATION_PLANNED',
+        lockVersion: { increment: 1 },
+      },
     });
     await tx.workOrder.update({
       where: { id: execution.workOrderId },

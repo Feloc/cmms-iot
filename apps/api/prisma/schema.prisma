@@ -54,12 +54,14 @@ enum ManufacturingOrderStatus {
   DRAFT
   ENGINEERING
   RELEASED
+  COMPLETED
   ON_HOLD
   CANCELED
 }
 
 enum ManufacturedUnitStatus {
   PLANNED
+  COMMISSIONED
   CANCELED
 }
 
@@ -442,6 +444,20 @@ model Tenant {
   manufacturingDispatchChecklistItems ManufacturingDispatchChecklistItem[]
   manufacturingDispatchPackages ManufacturingDispatchPackage[]
   manufacturingDispatchDocuments ManufacturingDispatchDocument[]
+  manufacturingSiteDeployments ManufacturingSiteDeployment[]
+  manufacturingSiteReceiptChecks ManufacturingSiteReceiptCheck[]
+  manufacturingSatTemplates ManufacturingSatTemplate[]
+  manufacturingSatTemplateCases ManufacturingSatTemplateCase[]
+  manufacturingSatExecutions ManufacturingSatExecution[]
+  manufacturingSatCases ManufacturingSatCase[]
+  manufacturingSatEvidence ManufacturingSatEvidence[]
+  manufacturingSatDeviations ManufacturingSatDeviation[]
+  manufacturingSatAcceptances ManufacturingSatAcceptance[]
+  manufacturingHandovers ManufacturingHandover[]
+  manufacturingHandoverDocuments ManufacturingHandoverDocument[]
+  manufacturingHandoverTrainings ManufacturingHandoverTraining[]
+  manufacturingHandoverSpares ManufacturingHandoverSpare[]
+  manufacturingHandoverAcceptances ManufacturingHandoverAcceptance[]
 
   workOrderReports WorkOrderReport[]
 }
@@ -513,9 +529,107 @@ model User {
 }
 
 enum AssetStatus {
+  COMMISSIONING
   ACTIVE
   INACTIVE
   DECOMMISSIONED
+}
+
+enum ManufacturingSiteDeploymentStatus {
+  PENDING_RECEPTION
+  RECEPTION_IN_PROGRESS
+  RECEPTION_BLOCKED
+  RECEIVED
+  INSTALLATION_PLANNED
+  INSTALLING
+  READY_FOR_SAT
+  SAT_IN_PROGRESS
+  ACCEPTED
+  ACCEPTED_WITH_PENDING_ITEMS
+  CANCELED
+}
+
+enum ManufacturingSiteReceiptCheckStatus {
+  PENDING
+  PASSED
+  FAILED
+  NOT_APPLICABLE
+}
+
+enum ManufacturingSiteReceiptDecision {
+  ACCEPTED
+  ACCEPTED_WITH_OBSERVATIONS
+  BLOCKED
+}
+
+enum ManufacturingSatExecutionStatus {
+  DRAFT
+  IN_PROGRESS
+  AWAITING_ACCEPTANCE
+  ACCEPTED
+  ACCEPTED_WITH_PENDING_ITEMS
+  REJECTED
+  CANCELED
+}
+
+enum ManufacturingSatCaseResult {
+  PENDING
+  PASS
+  FAIL
+  NOT_APPLICABLE
+}
+
+enum ManufacturingSatResultType {
+  BOOLEAN
+  NUMERIC
+  TEXT
+}
+
+enum ManufacturingSatDeviationStatus {
+  OPEN
+  IN_REWORK
+  RESOLVED
+  ACCEPTED_AS_IS
+}
+
+enum ManufacturingSatDeviationSeverity {
+  MINOR
+  MAJOR
+  CRITICAL
+}
+
+enum ManufacturingSatAcceptanceDecision {
+  ACCEPTED
+  ACCEPTED_WITH_PENDING_ITEMS
+  REJECTED
+}
+
+enum ManufacturingHandoverStatus {
+  DRAFT
+  READY_FOR_DELIVERY
+  CLOSED
+  CANCELED
+}
+
+enum ManufacturingHandoverDocumentType {
+  AS_BUILT_MECHANICAL
+  AS_BUILT_ELECTRICAL
+  SOFTWARE_BACKUP
+  FAT_REPORT
+  SAT_REPORT
+  OPERATION_MANUAL
+  MAINTENANCE_MANUAL
+  CERTIFICATES
+  WARRANTY
+  SPARE_PARTS_LIST
+  TRAINING_RECORD
+  OTHER
+}
+
+enum ManufacturingHandoverItemStatus {
+  PENDING
+  PROVIDED
+  WAIVED
 }
 
 enum AssetCriticality {
@@ -554,6 +668,8 @@ model Asset {
   defaultRuleSetId String?
 
   acquiredOn        DateTime?
+  commissionedAt    DateTime?
+  maintenanceTransferredAt DateTime?
   guarantee         DateTime?
   latestHourmeter   Float?
   latestHourmeterAt DateTime?
@@ -568,6 +684,9 @@ model Asset {
   meterReadings                AssetMeterReading[]
   preventiveMaintenanceRecords AssetPreventiveMaintenance[]
   manufacturedUnit             ManufacturedUnit?
+  siteDeployment               ManufacturingSiteDeployment?
+  satExecutions                ManufacturingSatExecution[]
+  manufacturingHandover       ManufacturingHandover?
 
   @@unique([tenantId, code])
   @@unique([tenantId, serialNumber])
@@ -959,6 +1078,8 @@ model AssemblyExecution {
   activities        AssemblyActivity[]
   scheduleRevisions AssemblyScheduleRevision[]
   operationalAlerts AssemblyOperationalAlert[]
+  manufacturingSiteDeployment ManufacturingSiteDeployment?
+  manufacturingSatExecutions ManufacturingSatExecution[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1865,6 +1986,7 @@ model ManufacturingOrder {
   holdReason     String?
   canceledReason String?
   releasedAt     DateTime?
+  completedAt    DateTime?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
@@ -1880,6 +2002,9 @@ model ManufacturingOrder {
   assemblyExecutions ManufacturingAssemblyExecution[]
   fatExecutions ManufacturingFatExecution[]
   dispatches ManufacturingDispatch[]
+  siteDeployments ManufacturingSiteDeployment[]
+  satExecutions ManufacturingSatExecution[]
+  handovers ManufacturingHandover[]
 
   @@unique([tenantId, number])
   @@index([tenantId, status, updatedAt(sort: Desc)])
@@ -1908,6 +2033,9 @@ model ManufacturedUnit {
   kits ManufacturingKit[]
   fatExecutions ManufacturingFatExecution[]
   dispatch ManufacturingDispatch?
+  siteDeployment ManufacturingSiteDeployment?
+  satExecutions ManufacturingSatExecution[]
+  handover ManufacturingHandover?
 
   @@unique([manufacturingOrderId, unitNumber])
   @@unique([tenantId, serialNumber])
@@ -2807,6 +2935,7 @@ model ManufacturingDispatch {
   checklistItems ManufacturingDispatchChecklistItem[]
   packages       ManufacturingDispatchPackage[]
   documents      ManufacturingDispatchDocument[]
+  siteDeployment ManufacturingSiteDeployment?
 
   @@unique([tenantId, dispatchCode])
   @@index([tenantId, manufacturingOrderId, status])
@@ -2882,4 +3011,414 @@ model ManufacturingDispatchDocument {
   createdAt DateTime @default(now())
 
   @@index([tenantId, dispatchId, documentType, createdAt(sort: Desc)])
+}
+
+/// === Manufactura: recepción técnica e instalación en sitio ===
+model ManufacturingSiteDeployment {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  manufacturingOrderId String
+  manufacturingOrder   ManufacturingOrder @relation(fields: [manufacturingOrderId], references: [id], onDelete: Cascade)
+  manufacturedUnitId   String @unique
+  manufacturedUnit     ManufacturedUnit @relation(fields: [manufacturedUnitId], references: [id], onDelete: Restrict)
+  dispatchId            String @unique
+  dispatch              ManufacturingDispatch @relation(fields: [dispatchId], references: [id], onDelete: Restrict)
+  assetId               String? @unique
+  asset                 Asset? @relation(fields: [assetId], references: [id], onDelete: SetNull)
+  assemblyExecutionId   String? @unique
+  assemblyExecution     AssemblyExecution? @relation(fields: [assemblyExecutionId], references: [id], onDelete: SetNull)
+
+  deploymentCode String
+  status         ManufacturingSiteDeploymentStatus @default(PENDING_RECEPTION)
+  lockVersion    Int @default(1)
+
+  destination     String?
+  deliveryAddress String?
+  contactName     String?
+  contactPhone    String?
+
+  receiptDecision       ManufacturingSiteReceiptDecision?
+  receivedAt            DateTime?
+  receivedByUserId      String?
+  receivedByName        String?
+  receptionNotes        String?
+  receptionEvidenceReference String?
+
+  createdByUserId String
+  createdByName   String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  receiptChecks ManufacturingSiteReceiptCheck[]
+  satExecutions ManufacturingSatExecution[]
+  handover ManufacturingHandover?
+
+  @@unique([tenantId, deploymentCode])
+  @@index([tenantId, manufacturingOrderId, status])
+  @@index([tenantId, status, updatedAt(sort: Desc)])
+}
+
+model ManufacturingSiteReceiptCheck {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  deploymentId String
+  deployment   ManufacturingSiteDeployment @relation(fields: [deploymentId], references: [id], onDelete: Cascade)
+  position     Int
+  code         String
+  name         String
+  description  String?
+  required     Boolean @default(true)
+  evidenceRequired Boolean @default(false)
+  status       ManufacturingSiteReceiptCheckStatus @default(PENDING)
+  evidenceReference String?
+  notes        String?
+  lockVersion  Int @default(1)
+  completedAt  DateTime?
+  completedByUserId String?
+  completedByName   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([deploymentId, position])
+  @@unique([deploymentId, code])
+  @@index([tenantId, deploymentId, status, position])
+}
+
+/// === Manufactura: SAT y puesta en servicio ===
+model ManufacturingSatTemplate {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  code        String
+  name        String
+  description String?
+  version     Int @default(1)
+  active      Boolean @default(true)
+  createdByUserId String
+  createdByName   String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  cases ManufacturingSatTemplateCase[]
+  executions ManufacturingSatExecution[]
+
+  @@unique([tenantId, code, version])
+  @@index([tenantId, active, name])
+}
+
+model ManufacturingSatTemplateCase {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  templateId String
+  template   ManufacturingSatTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  position           Int
+  section            String?
+  name               String
+  instructions       String?
+  acceptanceCriteria String
+  resultType         ManufacturingSatResultType @default(BOOLEAN)
+  minimumValue       Decimal? @db.Decimal(18, 6)
+  maximumValue       Decimal? @db.Decimal(18, 6)
+  unit               String?
+  required           Boolean @default(true)
+  evidenceRequired   Boolean @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  executionCases ManufacturingSatCase[]
+
+  @@unique([templateId, position])
+  @@index([tenantId, templateId, position])
+}
+
+model ManufacturingSatExecution {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  manufacturingOrderId String
+  manufacturingOrder   ManufacturingOrder @relation(fields: [manufacturingOrderId], references: [id], onDelete: Cascade)
+  manufacturedUnitId String
+  manufacturedUnit   ManufacturedUnit @relation(fields: [manufacturedUnitId], references: [id], onDelete: Restrict)
+  siteDeploymentId String
+  siteDeployment   ManufacturingSiteDeployment @relation(fields: [siteDeploymentId], references: [id], onDelete: Restrict)
+  assemblyExecutionId String
+  assemblyExecution   AssemblyExecution @relation(fields: [assemblyExecutionId], references: [id], onDelete: Restrict)
+  assetId String
+  asset   Asset @relation(fields: [assetId], references: [id], onDelete: Restrict)
+  templateId String?
+  template   ManufacturingSatTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+
+  sequence        Int
+  executionCode   String
+  templateCode    String
+  templateName    String
+  templateVersion Int
+  status          ManufacturingSatExecutionStatus @default(DRAFT)
+  lockVersion     Int @default(1)
+  startedAt       DateTime?
+  submittedAt     DateTime?
+  decidedAt       DateTime?
+  commissionedAt  DateTime?
+  createdByUserId String
+  createdByName   String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  cases       ManufacturingSatCase[]
+  deviations  ManufacturingSatDeviation[]
+  acceptances ManufacturingSatAcceptance[]
+  handover    ManufacturingHandover?
+
+  @@unique([manufacturedUnitId, sequence])
+  @@unique([tenantId, executionCode])
+  @@index([tenantId, manufacturingOrderId, status])
+  @@index([tenantId, siteDeploymentId, createdAt(sort: Desc)])
+}
+
+model ManufacturingSatCase {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  executionId String
+  execution   ManufacturingSatExecution @relation(fields: [executionId], references: [id], onDelete: Cascade)
+  templateCaseId String?
+  templateCase   ManufacturingSatTemplateCase? @relation(fields: [templateCaseId], references: [id], onDelete: SetNull)
+
+  position           Int
+  section            String?
+  name               String
+  instructions       String?
+  acceptanceCriteria String
+  resultType         ManufacturingSatResultType
+  minimumValue       Decimal? @db.Decimal(18, 6)
+  maximumValue       Decimal? @db.Decimal(18, 6)
+  unit               String?
+  required           Boolean @default(true)
+  evidenceRequired   Boolean @default(false)
+  result             ManufacturingSatCaseResult @default(PENDING)
+  measuredValue      Decimal? @db.Decimal(18, 6)
+  observedValue      String?
+  notes              String?
+  lockVersion        Int @default(1)
+  testedAt           DateTime?
+  testedByUserId     String?
+  testedByName       String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  evidence   ManufacturingSatEvidence[]
+  deviations ManufacturingSatDeviation[]
+
+  @@unique([executionId, position])
+  @@index([tenantId, executionId, result, position])
+}
+
+model ManufacturingSatEvidence {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  satCaseId String
+  satCase   ManufacturingSatCase @relation(fields: [satCaseId], references: [id], onDelete: Cascade)
+  title     String
+  reference String?
+  url       String?
+  notes     String?
+  createdByUserId String
+  createdByName   String
+  createdAt DateTime @default(now())
+
+  @@index([tenantId, satCaseId, createdAt(sort: Desc)])
+}
+
+model ManufacturingSatDeviation {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  executionId String
+  execution   ManufacturingSatExecution @relation(fields: [executionId], references: [id], onDelete: Cascade)
+  satCaseId String
+  satCase   ManufacturingSatCase @relation(fields: [satCaseId], references: [id], onDelete: Cascade)
+
+  sequence         Int
+  deviationCode    String
+  title            String
+  description      String
+  severity         ManufacturingSatDeviationSeverity @default(MAJOR)
+  status           ManufacturingSatDeviationStatus @default(OPEN)
+  correctiveAction String?
+  resolutionNotes  String?
+  responsibleUserId String?
+  responsibleName   String?
+  dueAt              DateTime?
+  lockVersion      Int @default(1)
+  openedByUserId   String
+  openedByName     String
+  openedAt         DateTime @default(now())
+  resolvedByUserId String?
+  resolvedByName   String?
+  resolvedAt       DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([executionId, sequence])
+  @@unique([tenantId, deviationCode])
+  @@index([tenantId, executionId, status])
+  @@index([tenantId, satCaseId, status])
+  @@index([tenantId, responsibleUserId, dueAt])
+}
+
+model ManufacturingSatAcceptance {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  executionId String
+  execution   ManufacturingSatExecution @relation(fields: [executionId], references: [id], onDelete: Cascade)
+  decision    ManufacturingSatAcceptanceDecision
+  comments    String?
+  clientName      String
+  clientRole      String
+  clientCompany   String?
+  clientSignature String
+  signedByUserId  String
+  signedByName    String
+  signedByRole    String
+  signedAt DateTime @default(now())
+  createdAt DateTime @default(now())
+
+  @@index([tenantId, executionId, signedAt(sort: Desc)])
+}
+
+/// === Manufactura: expediente y entrega final ===
+model ManufacturingHandover {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  manufacturingOrderId String
+  manufacturingOrder   ManufacturingOrder @relation(fields: [manufacturingOrderId], references: [id], onDelete: Cascade)
+  manufacturedUnitId String @unique
+  manufacturedUnit   ManufacturedUnit @relation(fields: [manufacturedUnitId], references: [id], onDelete: Restrict)
+  siteDeploymentId String @unique
+  siteDeployment   ManufacturingSiteDeployment @relation(fields: [siteDeploymentId], references: [id], onDelete: Restrict)
+  satExecutionId String @unique
+  satExecution   ManufacturingSatExecution @relation(fields: [satExecutionId], references: [id], onDelete: Restrict)
+  assetId String @unique
+  asset   Asset @relation(fields: [assetId], references: [id], onDelete: Restrict)
+
+  handoverCode     String
+  status           ManufacturingHandoverStatus @default(DRAFT)
+  trainingRequired Boolean @default(true)
+  notes            String?
+  lockVersion      Int @default(1)
+  readyAt          DateTime?
+  closedAt         DateTime?
+  createdByUserId  String
+  createdByName    String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  documents  ManufacturingHandoverDocument[]
+  trainings  ManufacturingHandoverTraining[]
+  spares     ManufacturingHandoverSpare[]
+  acceptance ManufacturingHandoverAcceptance?
+
+  @@unique([tenantId, handoverCode])
+  @@index([tenantId, manufacturingOrderId, status])
+  @@index([tenantId, status, updatedAt(sort: Desc)])
+}
+
+model ManufacturingHandoverDocument {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  handoverId String
+  handover   ManufacturingHandover @relation(fields: [handoverId], references: [id], onDelete: Cascade)
+
+  position    Int
+  documentType ManufacturingHandoverDocumentType
+  name        String
+  required    Boolean @default(true)
+  status      ManufacturingHandoverItemStatus @default(PENDING)
+  reference   String?
+  url         String?
+  revision    String?
+  notes       String?
+  waiverReason String?
+  lockVersion Int @default(1)
+  providedAt DateTime?
+  providedByUserId String?
+  providedByName String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([handoverId, position])
+  @@unique([handoverId, documentType])
+  @@index([tenantId, handoverId, status, position])
+}
+
+model ManufacturingHandoverTraining {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  handoverId String
+  handover   ManufacturingHandover @relation(fields: [handoverId], references: [id], onDelete: Cascade)
+
+  topic             String
+  deliveredAt       DateTime
+  durationHours     Decimal @db.Decimal(8, 2)
+  instructorName    String
+  clientContactName String
+  attendeeCount     Int
+  evidenceReference String
+  notes             String?
+  createdByUserId   String
+  createdByName     String
+  createdAt DateTime @default(now())
+
+  @@index([tenantId, handoverId, deliveredAt(sort: Desc)])
+}
+
+model ManufacturingHandoverSpare {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  handoverId String
+  handover   ManufacturingHandover @relation(fields: [handoverId], references: [id], onDelete: Cascade)
+
+  itemCode          String?
+  description       String
+  quantity          Decimal @db.Decimal(18, 6)
+  unit              String
+  recommendedStock  Decimal? @db.Decimal(18, 6)
+  notes             String?
+  createdAt DateTime @default(now())
+
+  @@index([tenantId, handoverId, description])
+}
+
+model ManufacturingHandoverAcceptance {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  handoverId String @unique
+  handover   ManufacturingHandover @relation(fields: [handoverId], references: [id], onDelete: Cascade)
+
+  clientName      String
+  clientRole      String
+  clientCompany   String?
+  clientSignature String
+  comments        String?
+  deliveredByUserId String
+  deliveredByName   String
+  deliveredByRole   String
+  signedAt DateTime @default(now())
+  createdAt DateTime @default(now())
+
+  @@index([tenantId, signedAt(sort: Desc)])
 }

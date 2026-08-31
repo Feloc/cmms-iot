@@ -226,7 +226,7 @@ export class ManufacturingFatService {
       const execution = await tx.manufacturingFatExecution.findFirst({ where: { id: executionId, tenantId }, include: { manufacturingOrder: { include: { members: { where: { userId: actor.id } } } } } });
       if (!execution) throw new NotFoundException('Ejecución FAT no encontrada'); orderId = execution.manufacturingOrderId;
       if (actor.role === 'TECH' && execution.manufacturingOrder.responsibleUserId !== actor.id && !execution.manufacturingOrder.members.length) throw new NotFoundException('Ejecución FAT no encontrada');
-      if (['CANCELED', 'ON_HOLD'].includes(execution.manufacturingOrder.status)) throw new ConflictException('La orden no permite ejecutar FAT');
+      if (['CANCELED', 'ON_HOLD', 'COMPLETED'].includes(execution.manufacturingOrder.status)) throw new ConflictException('La orden no permite ejecutar FAT');
       await command(tx, execution, actor); await tx.manufacturingOrder.update({ where: { id: orderId }, data: { version: { increment: 1 } } });
     }, { isolationLevel: 'Serializable' });
     return this.list(orderId);
@@ -236,7 +236,7 @@ export class ManufacturingFatService {
     const fatCase = await tx.manufacturingFatCase.findFirst({ where: { id: caseId, tenantId }, include: { execution: { include: { manufacturingOrder: { include: { members: { where: { userId: actor.id } } } } } } } });
     if (!fatCase) throw new NotFoundException('Caso FAT no encontrado'); const order = fatCase.execution.manufacturingOrder;
     if (actor.role === 'TECH' && order.responsibleUserId !== actor.id && !order.members.length) throw new NotFoundException('Caso FAT no encontrado');
-    if (['CANCELED', 'ON_HOLD'].includes(order.status)) throw new ConflictException('La orden no permite ejecutar FAT'); return fatCase;
+    if (['CANCELED', 'ON_HOLD', 'COMPLETED'].includes(order.status)) throw new ConflictException('La orden no permite ejecutar FAT'); return fatCase;
   }
   private serialize(execution: any) {
     const cases = execution.cases.map((fatCase: any) => ({ ...fatCase, minimumValue: fatCase.minimumValue === null ? null : Number(fatCase.minimumValue), maximumValue: fatCase.maximumValue === null ? null : Number(fatCase.maximumValue), measuredValue: fatCase.measuredValue === null ? null : Number(fatCase.measuredValue) }));

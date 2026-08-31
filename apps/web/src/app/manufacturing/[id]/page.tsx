@@ -15,6 +15,8 @@ import { ManufacturingKitsTab } from './ManufacturingKitsTab';
 import { ManufacturingAssemblyTab } from './ManufacturingAssemblyTab';
 import { ManufacturingFatTab } from './ManufacturingFatTab';
 import { ManufacturingDispatchTab } from './ManufacturingDispatchTab';
+import { ManufacturingSiteDeploymentTab } from './ManufacturingSiteDeploymentTab';
+import { ManufacturingHandoverTab } from './ManufacturingHandoverTab';
 import {
   dateLabel,
   localDateInput,
@@ -29,7 +31,7 @@ import {
   type Paginated,
 } from '@/lib/manufacturing';
 
-type Tab = 'summary' | 'units' | 'members' | 'engineering' | 'bom' | 'releases' | 'supply' | 'kits' | 'assembly' | 'fat' | 'dispatch' | 'history';
+type Tab = 'summary' | 'units' | 'members' | 'engineering' | 'bom' | 'releases' | 'supply' | 'kits' | 'assembly' | 'fat' | 'dispatch' | 'site' | 'handover' | 'history';
 
 export default function ManufacturingDetailPage() {
   const params = useParams();
@@ -73,7 +75,7 @@ export default function ManufacturingDetailPage() {
   const tabs: Array<{ key: Tab; label: string }> = [
     { key: 'summary', label: 'Resumen' }, { key: 'units', label: `Unidades (${data.units?.length || 0})` },
     { key: 'members', label: 'Equipo' }, { key: 'engineering', label: 'Ingeniería' },
-    { key: 'bom', label: 'BOM' }, { key: 'releases', label: 'Liberaciones' }, { key: 'supply', label: 'Abastecimiento' }, { key: 'kits', label: 'Kits' }, { key: 'assembly', label: 'Ejecución ensamble' }, { key: 'fat', label: 'FAT' }, { key: 'dispatch', label: 'Despacho' },
+    { key: 'bom', label: 'BOM' }, { key: 'releases', label: 'Liberaciones' }, { key: 'supply', label: 'Abastecimiento' }, { key: 'kits', label: 'Kits' }, { key: 'assembly', label: 'Ejecución ensamble' }, { key: 'fat', label: 'FAT' }, { key: 'dispatch', label: 'Despacho' }, { key: 'site', label: 'Instalación / SAT' }, { key: 'handover', label: 'Entrega final' },
     { key: 'history', label: 'Historial' },
   ];
 
@@ -83,14 +85,15 @@ export default function ManufacturingDetailPage() {
         <div><Link href="/manufacturing" className="text-sm text-gray-600 hover:underline">← Manufactura</Link><h1 className="text-2xl font-semibold mt-1">{data.number} · {data.projectName}</h1><p className="text-sm text-gray-600">{[data.productCode, data.productName, data.model].filter(Boolean).join(' · ')}</p></div>
         <div className="flex flex-wrap items-center gap-2">
           <span className={`rounded-full px-3 py-1 text-sm ${manufacturingStatusClass[data.status]}`}>{manufacturingStatusLabel[data.status]}</span>
-          {isAdmin && data.status !== 'CANCELED' ? data.status === 'ON_HOLD' ? <button disabled={busy} className="border rounded px-3 py-2 text-sm" onClick={() => orderAction('resume')}>Reanudar</button> : <button disabled={busy} className="border rounded px-3 py-2 text-sm" onClick={() => orderAction('hold')}>Pausar</button> : null}
-          {isAdmin && data.status !== 'CANCELED' ? <button disabled={busy} className="border border-red-200 text-red-700 rounded px-3 py-2 text-sm" onClick={() => orderAction('cancel')}>Cancelar</button> : null}
+          {isAdmin && !['CANCELED', 'COMPLETED'].includes(data.status) ? data.status === 'ON_HOLD' ? <button disabled={busy} className="border rounded px-3 py-2 text-sm" onClick={() => orderAction('resume')}>Reanudar</button> : <button disabled={busy} className="border rounded px-3 py-2 text-sm" onClick={() => orderAction('hold')}>Pausar</button> : null}
+          {isAdmin && !['CANCELED', 'COMPLETED'].includes(data.status) ? <button disabled={busy} className="border border-red-200 text-red-700 rounded px-3 py-2 text-sm" onClick={() => orderAction('cancel')}>Cancelar</button> : null}
         </div>
       </div>
 
       {message ? <div className="border border-red-200 bg-red-50 text-red-700 rounded p-3 text-sm whitespace-pre-wrap">{message}</div> : null}
       {data.status === 'ON_HOLD' ? <div className="border border-amber-200 bg-amber-50 text-amber-900 rounded p-3 text-sm"><strong>Orden en pausa:</strong> {data.holdReason}</div> : null}
       {data.status === 'CANCELED' ? <div className="border border-red-200 bg-red-50 text-red-800 rounded p-3 text-sm"><strong>Orden cancelada:</strong> {data.canceledReason}</div> : null}
+      {data.status === 'COMPLETED' ? <div className="border border-violet-200 bg-violet-50 text-violet-900 rounded p-3 text-sm"><strong>Orden completada:</strong> todas las unidades fueron entregadas y transferidas a mantenimiento.</div> : null}
 
       <div className="border-b overflow-x-auto"><div className="flex min-w-max">{tabs.map((item) => <button key={item.key} className={`px-4 py-2 text-sm border-b-2 ${tab === item.key ? 'border-black font-medium' : 'border-transparent text-gray-600'}`} onClick={() => setTab(item.key)}>{item.label}</button>)}</div></div>
 
@@ -105,6 +108,8 @@ export default function ManufacturingDetailPage() {
       {tab === 'assembly' ? <ManufacturingAssemblyTab order={data} role={role} auth={auth} onChanged={() => mutate()} /> : null}
       {tab === 'fat' ? <ManufacturingFatTab order={data} role={role} auth={auth} onChanged={() => mutate()} /> : null}
       {tab === 'dispatch' ? <ManufacturingDispatchTab order={data} role={role} auth={auth} onChanged={() => mutate()} /> : null}
+      {tab === 'site' ? <ManufacturingSiteDeploymentTab order={data} role={role} auth={auth} onChanged={() => mutate()} /> : null}
+      {tab === 'handover' ? <ManufacturingHandoverTab order={data} role={role} auth={auth} onChanged={() => mutate()} /> : null}
       {tab === 'history' ? <History items={history?.items || []} /> : null}
     </div>
   );
@@ -148,14 +153,14 @@ function Summary({ order, isAdmin, users, auth, onSaved }: { order: Manufacturin
     <EditField label="Responsable"><select className="border rounded px-3 py-2 w-full" value={form.responsibleUserId} onChange={(e) => field('responsibleUserId', e.target.value)}>{users.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}</select></EditField>
   </div><EditField label="Descripción"><textarea className="border rounded px-3 py-2 w-full min-h-20" value={form.description} onChange={(e) => field('description', e.target.value)} /></EditField><div className="flex justify-end"><button disabled={busy} className="bg-black text-white rounded px-4 py-2" onClick={save}>{busy ? 'Guardando…' : 'Guardar cambios'}</button></div></div>;
 
-  return <div className="space-y-4"><div className="flex justify-between"><h2 className="text-lg font-semibold">Resumen de la orden</h2>{isAdmin && order.status !== 'CANCELED' ? <button className="border rounded px-3 py-2 text-sm" onClick={() => setEditing(true)}>Editar</button> : null}</div><div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
+  return <div className="space-y-4"><div className="flex justify-between"><h2 className="text-lg font-semibold">Resumen de la orden</h2>{isAdmin && !['CANCELED', 'COMPLETED'].includes(order.status) ? <button className="border rounded px-3 py-2 text-sm" onClick={() => setEditing(true)}>Editar</button> : null}</div><div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
     <Info label="Cliente" value={order.customerName} sub={order.customerReference} /><Info label="Responsable" value={order.responsibleUser?.name} sub={order.responsibleUser?.email} /><Info label="Cantidad" value={String(order.quantity)} sub="unidades planificadas" /><Info label="Entrega solicitada" value={dateLabel(order.requestedDeliveryAt)} />
     <Info label="Inicio planificado" value={dateLabel(order.plannedStartAt)} /><Info label="Fin planificado" value={dateLabel(order.plannedEndAt)} /><Info label="Destino" value={order.destination} /><Info label="Referencia comercial" value={order.commercialReference} />
   </div>{order.description ? <div className="border rounded-lg p-4"><div className="text-xs text-gray-500 mb-1">Descripción y alcance</div><p className="text-sm whitespace-pre-wrap">{order.description}</p></div> : null}</div>;
 }
 
 function Units({ order, isAdmin, auth, onSaved }: { order: ManufacturingOrder; isAdmin: boolean; auth: { token?: string; tenantSlug?: string }; onSaved: (order: ManufacturingOrder) => Promise<any> | any }) {
-  return <div className="space-y-3"><div><h2 className="text-lg font-semibold">Unidades físicas</h2><p className="text-sm text-gray-600">Los números de serie pueden asignarse durante la fabricación.</p></div><div className="grid md:grid-cols-2 gap-3">{(order.units || []).map((unit) => <UnitCard key={unit.id} unit={unit} orderId={order.id} editable={isAdmin && order.status !== 'CANCELED'} auth={auth} onSaved={onSaved} />)}</div></div>;
+  return <div className="space-y-3"><div><h2 className="text-lg font-semibold">Unidades físicas</h2><p className="text-sm text-gray-600">Los números de serie pueden asignarse durante la fabricación.</p></div><div className="grid md:grid-cols-2 gap-3">{(order.units || []).map((unit) => <UnitCard key={unit.id} unit={unit} orderId={order.id} editable={isAdmin && !['CANCELED', 'COMPLETED'].includes(order.status) && unit.status !== 'COMMISSIONED'} auth={auth} onSaved={onSaved} />)}</div></div>;
 }
 
 function UnitCard({ unit, orderId, editable, auth, onSaved }: { unit: ManufacturedUnit; orderId: string; editable: boolean; auth: { token?: string; tenantSlug?: string }; onSaved: (order: ManufacturingOrder) => Promise<any> | any }) {
@@ -165,7 +170,7 @@ function UnitCard({ unit, orderId, editable, auth, onSaved }: { unit: Manufactur
   const [busy, setBusy] = useState(false); const [error, setError] = useState('');
   useEffect(() => { setSerialNumber(unit.serialNumber || ''); setInternalCode(unit.internalCode || ''); setStatus(unit.status); }, [unit]);
   async function save() { if (!auth.token || !auth.tenantSlug) return; setBusy(true); setError(''); try { const next = await apiFetch<ManufacturingOrder>(`/manufacturing/orders/${orderId}/units/${unit.id}`, { method: 'PATCH', token: auth.token, tenantSlug: auth.tenantSlug, body: { serialNumber, internalCode, status } }); await onSaved(next); } catch (err: any) { setError(err?.message || 'No se pudo actualizar'); } finally { setBusy(false); } }
-  return <div className="border rounded-lg p-4 space-y-3"><div className="flex justify-between"><strong>Unidad {unit.unitNumber}</strong><span className={`text-xs px-2 py-1 rounded-full ${status === 'PLANNED' ? 'bg-sky-100 text-sky-800' : 'bg-red-100 text-red-800'}`}>{status === 'PLANNED' ? 'Planificada' : 'Cancelada'}</span></div>{error ? <div className="text-xs text-red-700">{error}</div> : null}<div className="grid grid-cols-2 gap-2"><EditField label="Código interno"><input disabled={!editable} className="border rounded px-3 py-2 w-full disabled:bg-gray-50" value={internalCode} onChange={(e) => setInternalCode(e.target.value)} /></EditField><EditField label="Número de serie"><input disabled={!editable} className="border rounded px-3 py-2 w-full disabled:bg-gray-50" value={serialNumber} onChange={(e) => setSerialNumber(e.target.value)} /></EditField></div>{editable ? <div className="flex justify-between"><select className="border rounded px-2 py-1 text-sm" value={status} onChange={(e) => setStatus(e.target.value as ManufacturedUnit['status'])}><option value="PLANNED">Planificada</option><option value="CANCELED">Cancelada</option></select><button disabled={busy} className="border rounded px-3 py-1.5 text-sm" onClick={save}>{busy ? 'Guardando…' : 'Guardar'}</button></div> : null}</div>;
+  return <div className="border rounded-lg p-4 space-y-3"><div className="flex justify-between"><strong>Unidad {unit.unitNumber}</strong><span className={`text-xs px-2 py-1 rounded-full ${status === 'PLANNED' ? 'bg-sky-100 text-sky-800' : status === 'COMMISSIONED' ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-800'}`}>{status === 'PLANNED' ? 'Planificada' : status === 'COMMISSIONED' ? 'Comisionada' : 'Cancelada'}</span></div>{error ? <div className="text-xs text-red-700">{error}</div> : null}<div className="grid grid-cols-2 gap-2"><EditField label="Código interno"><input disabled={!editable} className="border rounded px-3 py-2 w-full disabled:bg-gray-50" value={internalCode} onChange={(e) => setInternalCode(e.target.value)} /></EditField><EditField label="Número de serie"><input disabled={!editable} className="border rounded px-3 py-2 w-full disabled:bg-gray-50" value={serialNumber} onChange={(e) => setSerialNumber(e.target.value)} /></EditField></div>{editable ? <div className="flex justify-between"><select className="border rounded px-2 py-1 text-sm" value={status} onChange={(e) => setStatus(e.target.value as ManufacturedUnit['status'])}><option value="PLANNED">Planificada</option><option value="CANCELED">Cancelada</option></select><button disabled={busy} className="border rounded px-3 py-1.5 text-sm" onClick={save}>{busy ? 'Guardando…' : 'Guardar'}</button></div> : null}</div>;
 }
 
 function Members({ order, users, isAdmin, auth, onSaved }: { order: ManufacturingOrder; users: ManufacturingUser[]; isAdmin: boolean; auth: { token?: string; tenantSlug?: string }; onSaved: (order: ManufacturingOrder) => Promise<any> | any }) {

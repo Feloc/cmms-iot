@@ -26,7 +26,7 @@ type FindAllQuery = {
   customer?: string;
   guarantee?: 'IN_WARRANTY' | 'OUT_OF_WARRANTY' | '';
   pmConfigured?: 'CONFIGURED' | 'UNCONFIGURED' | '';
-  status?: 'ACTIVE' | 'INACTIVE' | 'DECOMMISSIONED' | '';
+  status?: 'COMMISSIONING' | 'ACTIVE' | 'INACTIVE' | 'DECOMMISSIONED' | '';
   locationId?: string;
   categoryId?: string;
   page?: number; // 1-based

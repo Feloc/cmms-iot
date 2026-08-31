@@ -1,4 +1,4 @@
-export type ManufacturingOrderStatus = 'DRAFT' | 'ENGINEERING' | 'RELEASED' | 'ON_HOLD' | 'CANCELED';
+export type ManufacturingOrderStatus = 'DRAFT' | 'ENGINEERING' | 'RELEASED' | 'COMPLETED' | 'ON_HOLD' | 'CANCELED';
 export type ManufacturingMemberFunction = 'RESPONSIBLE' | 'ENGINEERING' | 'REVIEWER' | 'OBSERVER';
 export type EngineeringDiscipline = 'MECHANICAL' | 'ELECTRICAL' | 'PNEUMATIC' | 'HYDRAULIC' | 'AUTOMATION' | 'SOFTWARE' | 'QUALITY' | 'GENERAL';
 export type EngineeringDocumentType = 'DRAWING' | 'SCHEMATIC' | 'SPECIFICATION' | 'DATASHEET' | 'PROGRAM' | 'MANUAL' | 'CALCULATION' | 'PROCEDURE' | 'OTHER';
@@ -20,6 +20,18 @@ export type ManufacturingDispatchStatus = 'DRAFT' | 'PREPARING' | 'READY' | 'AUT
 export type ManufacturingDispatchChecklistStatus = 'PENDING' | 'COMPLETED' | 'NOT_APPLICABLE';
 export type ManufacturingDispatchPackageType = 'CRATE' | 'PALLET' | 'BOX' | 'LOOSE' | 'OTHER';
 export type ManufacturingDispatchDocumentType = 'PACKING_LIST' | 'TRANSPORT_DOCUMENT' | 'COMMERCIAL_INVOICE' | 'INSURANCE' | 'CERTIFICATE' | 'MANUAL' | 'FAT_REPORT' | 'OTHER';
+export type ManufacturingSiteDeploymentStatus = 'PENDING_RECEPTION' | 'RECEPTION_IN_PROGRESS' | 'RECEPTION_BLOCKED' | 'RECEIVED' | 'INSTALLATION_PLANNED' | 'INSTALLING' | 'READY_FOR_SAT' | 'SAT_IN_PROGRESS' | 'ACCEPTED' | 'ACCEPTED_WITH_PENDING_ITEMS' | 'CANCELED';
+export type ManufacturingSiteReceiptCheckStatus = 'PENDING' | 'PASSED' | 'FAILED' | 'NOT_APPLICABLE';
+export type ManufacturingSiteReceiptDecision = 'ACCEPTED' | 'ACCEPTED_WITH_OBSERVATIONS' | 'BLOCKED';
+export type ManufacturingSatExecutionStatus = 'DRAFT' | 'IN_PROGRESS' | 'AWAITING_ACCEPTANCE' | 'ACCEPTED' | 'ACCEPTED_WITH_PENDING_ITEMS' | 'REJECTED' | 'CANCELED';
+export type ManufacturingSatCaseResult = 'PENDING' | 'PASS' | 'FAIL' | 'NOT_APPLICABLE';
+export type ManufacturingSatResultType = 'BOOLEAN' | 'NUMERIC' | 'TEXT';
+export type ManufacturingSatDeviationStatus = 'OPEN' | 'IN_REWORK' | 'RESOLVED' | 'ACCEPTED_AS_IS';
+export type ManufacturingSatDeviationSeverity = 'MINOR' | 'MAJOR' | 'CRITICAL';
+export type ManufacturingSatAcceptanceDecision = 'ACCEPTED' | 'ACCEPTED_WITH_PENDING_ITEMS' | 'REJECTED';
+export type ManufacturingHandoverStatus = 'DRAFT' | 'READY_FOR_DELIVERY' | 'CLOSED' | 'CANCELED';
+export type ManufacturingHandoverDocumentType = 'AS_BUILT_MECHANICAL' | 'AS_BUILT_ELECTRICAL' | 'SOFTWARE_BACKUP' | 'FAT_REPORT' | 'SAT_REPORT' | 'OPERATION_MANUAL' | 'MAINTENANCE_MANUAL' | 'CERTIFICATES' | 'WARRANTY' | 'SPARE_PARTS_LIST' | 'TRAINING_RECORD' | 'OTHER';
+export type ManufacturingHandoverItemStatus = 'PENDING' | 'PROVIDED' | 'WAIVED';
 
 export type ManufacturingUser = {
   id: string;
@@ -33,7 +45,7 @@ export type ManufacturedUnit = {
   unitNumber: number;
   serialNumber?: string | null;
   internalCode?: string | null;
-  status: 'PLANNED' | 'CANCELED';
+  status: 'PLANNED' | 'COMMISSIONED' | 'CANCELED';
   assetId?: string | null;
   updatedAt: string;
 };
@@ -86,6 +98,7 @@ export type ManufacturingOrder = {
   holdReason?: string | null;
   canceledReason?: string | null;
   releasedAt?: string | null;
+  completedAt?: string | null;
   createdAt: string;
   updatedAt: string;
   units?: ManufacturedUnit[];
@@ -645,6 +658,134 @@ export type ManufacturingDispatch = {
   summary: { checklistCount: number; checklistCompletedCount: number; checklistPendingCount: number; packageCount: number; grossWeightKg: number; documentCount: number; fatGateOpen: boolean; progressPercent: number };
 };
 
+export type ManufacturingSiteReceiptCheck = {
+  id: string;
+  position: number;
+  code: string;
+  name: string;
+  description?: string | null;
+  required: boolean;
+  evidenceRequired: boolean;
+  status: ManufacturingSiteReceiptCheckStatus;
+  evidenceReference?: string | null;
+  notes?: string | null;
+  lockVersion: number;
+  completedAt?: string | null;
+  completedByName?: string | null;
+};
+
+export type ManufacturingSiteDeployment = {
+  id: string;
+  manufacturingOrderId: string;
+  manufacturedUnitId: string;
+  dispatchId: string;
+  assetId?: string | null;
+  assemblyExecutionId?: string | null;
+  deploymentCode: string;
+  status: ManufacturingSiteDeploymentStatus;
+  lockVersion: number;
+  destination?: string | null;
+  deliveryAddress?: string | null;
+  contactName?: string | null;
+  contactPhone?: string | null;
+  receiptDecision?: ManufacturingSiteReceiptDecision | null;
+  receivedAt?: string | null;
+  receivedByName?: string | null;
+  receptionNotes?: string | null;
+  receptionEvidenceReference?: string | null;
+  manufacturedUnit: ManufacturedUnit;
+  dispatch: ManufacturingDispatch;
+  asset?: { id: string; code: string; name: string; status: string; customer?: string | null; model?: string | null; serialNumber?: string | null } | null;
+  assemblyExecution?: { id: string; status: string; templateName: string; templateVersion: number; scheduledStartAt?: string | null; completedAt?: string | null; workOrder: { id: string; title: string; status: string; receiverSignature?: string | null } } | null;
+  receiptChecks: ManufacturingSiteReceiptCheck[];
+  summary: { checkCount: number; passedCount: number; failedCount: number; pendingCount: number; receiptProgressPercent: number; installationProgressPercent: number; readyForSat: boolean };
+};
+
+export type ManufacturingSatTemplateCase = {
+  id: string; position: number; section?: string | null; name: string; instructions?: string | null;
+  acceptanceCriteria: string; resultType: ManufacturingSatResultType; minimumValue?: number | string | null;
+  maximumValue?: number | string | null; unit?: string | null; required: boolean; evidenceRequired: boolean;
+};
+
+export type ManufacturingSatTemplate = {
+  id: string; code: string; name: string; description?: string | null; version: number; active: boolean;
+  cases: ManufacturingSatTemplateCase[];
+};
+
+export type ManufacturingSatEvidence = {
+  id: string; title: string; reference?: string | null; url?: string | null; notes?: string | null;
+  createdByName: string; createdAt: string;
+};
+
+export type ManufacturingSatDeviation = {
+  id: string; sequence: number; deviationCode: string; title: string; description: string;
+  severity: ManufacturingSatDeviationSeverity; status: ManufacturingSatDeviationStatus;
+  correctiveAction?: string | null; resolutionNotes?: string | null; responsibleUserId?: string | null;
+  responsibleName?: string | null; dueAt?: string | null; lockVersion: number; openedByName: string;
+  resolvedByName?: string | null; openedAt: string; resolvedAt?: string | null;
+};
+
+export type ManufacturingSatCase = {
+  id: string; executionId: string; position: number; section?: string | null; name: string;
+  instructions?: string | null; acceptanceCriteria: string; resultType: ManufacturingSatResultType;
+  minimumValue?: number | null; maximumValue?: number | null; unit?: string | null; required: boolean;
+  evidenceRequired: boolean; result: ManufacturingSatCaseResult; measuredValue?: number | null;
+  observedValue?: string | null; notes?: string | null; lockVersion: number; testedAt?: string | null;
+  testedByName?: string | null; evidence: ManufacturingSatEvidence[]; deviations: ManufacturingSatDeviation[];
+};
+
+export type ManufacturingSatAcceptance = {
+  id: string; decision: ManufacturingSatAcceptanceDecision; comments?: string | null; clientName: string;
+  clientRole: string; clientCompany?: string | null; clientSignature: string; signedByName: string;
+  signedByRole: string; signedAt: string;
+};
+
+export type ManufacturingSatExecution = {
+  id: string; manufacturingOrderId: string; manufacturedUnitId: string; siteDeploymentId: string;
+  assemblyExecutionId: string; assetId: string; sequence: number; executionCode: string; templateCode: string;
+  templateName: string; templateVersion: number; status: ManufacturingSatExecutionStatus; lockVersion: number;
+  startedAt?: string | null; submittedAt?: string | null; decidedAt?: string | null; commissionedAt?: string | null;
+  manufacturedUnit: ManufacturedUnit; asset: { id: string; code: string; name: string; status: string; commissionedAt?: string | null; guarantee?: string | null };
+  siteDeployment: { id: string; deploymentCode: string; status: ManufacturingSiteDeploymentStatus };
+  assemblyExecution: { id: string; status: string; completedAt?: string | null; workOrder: { id: string; title: string; technicianSignature?: string | null; receiverSignature?: string | null } };
+  cases: ManufacturingSatCase[]; acceptances: ManufacturingSatAcceptance[];
+  summary: { caseCount: number; passedCount: number; failedCount: number; pendingCount: number; openDeviationCount: number; criticalOpenCount: number; blockingOpenCount: number; progressPercent: number; commissioned: boolean };
+};
+
+export type ManufacturingHandoverDocument = {
+  id: string; position: number; documentType: ManufacturingHandoverDocumentType; name: string;
+  required: boolean; status: ManufacturingHandoverItemStatus; reference?: string | null; url?: string | null;
+  revision?: string | null; notes?: string | null; waiverReason?: string | null; lockVersion: number;
+  providedAt?: string | null; providedByName?: string | null;
+};
+
+export type ManufacturingHandoverTraining = {
+  id: string; topic: string; deliveredAt: string; durationHours: number; instructorName: string;
+  clientContactName: string; attendeeCount: number; evidenceReference: string; notes?: string | null;
+};
+
+export type ManufacturingHandoverSpare = {
+  id: string; itemCode?: string | null; description: string; quantity: number; unit: string;
+  recommendedStock?: number | null; notes?: string | null;
+};
+
+export type ManufacturingHandoverAcceptance = {
+  id: string; clientName: string; clientRole: string; clientCompany?: string | null;
+  clientSignature: string; comments?: string | null; deliveredByName: string; deliveredByRole: string; signedAt: string;
+};
+
+export type ManufacturingHandover = {
+  id: string; manufacturingOrderId: string; manufacturedUnitId: string; siteDeploymentId: string;
+  satExecutionId: string; assetId: string; handoverCode: string; status: ManufacturingHandoverStatus;
+  trainingRequired: boolean; notes?: string | null; lockVersion: number; readyAt?: string | null; closedAt?: string | null;
+  manufacturedUnit: ManufacturedUnit; siteDeployment: { id: string; deploymentCode: string; status: ManufacturingSiteDeploymentStatus };
+  satExecution: { id: string; executionCode: string; status: ManufacturingSatExecutionStatus };
+  asset: { id: string; code: string; name: string; status: string; commissionedAt?: string | null; maintenanceTransferredAt?: string | null; guarantee?: string | null };
+  documents: ManufacturingHandoverDocument[]; trainings: ManufacturingHandoverTraining[]; spares: ManufacturingHandoverSpare[];
+  acceptance?: ManufacturingHandoverAcceptance | null;
+  summary: { documentCount: number; providedCount: number; waivedCount: number; pendingRequiredCount: number; trainingComplete: boolean; spareCount: number; progressPercent: number; transferredToMaintenance: boolean };
+};
+
 export type Paginated<T> = {
   items: T[];
   total: number;
@@ -657,6 +798,7 @@ export const manufacturingStatusLabel: Record<ManufacturingOrderStatus, string> 
   DRAFT: 'Borrador',
   ENGINEERING: 'Ingeniería',
   RELEASED: 'Liberada',
+  COMPLETED: 'Completada',
   ON_HOLD: 'En pausa',
   CANCELED: 'Cancelada',
 };
@@ -665,6 +807,7 @@ export const manufacturingStatusClass: Record<ManufacturingOrderStatus, string> 
   DRAFT: 'bg-gray-100 text-gray-800',
   ENGINEERING: 'bg-sky-100 text-sky-800',
   RELEASED: 'bg-emerald-100 text-emerald-800',
+  COMPLETED: 'bg-violet-100 text-violet-800',
   ON_HOLD: 'bg-amber-100 text-amber-900',
   CANCELED: 'bg-red-100 text-red-800',
 };
