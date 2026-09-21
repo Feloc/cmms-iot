@@ -15,7 +15,7 @@ export class UpdateManufacturingDispatchDto extends CreateManufacturingDispatchD
   vehiclePlate?: string | null;
   trackingNumber?: string | null;
 }
-export class ManufacturingDispatchVersionDto { lockVersion!: number; }
+export class ManufacturingDispatchVersionDto { lockVersion!: number; approvalExceptionReason?: string; }
 export class UpdateManufacturingDispatchChecklistDto {
   lockVersion!: number;
   status!: 'PENDING' | 'COMPLETED' | 'NOT_APPLICABLE';

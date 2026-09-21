@@ -1,4 +1,5 @@
 'use client';
+import { RemovedPartDisposition } from './RemovedPartDisposition';
 
 import { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'next/navigation';
@@ -47,6 +48,40 @@ type Part = {
   delegatedServiceOrderId?: string | null;
   delegatedServiceOrderPartId?: string | null;
   delegatedServiceOrder?: { id: string; title?: string | null; status?: string | null; dueDate?: string | null } | null;
+};
+
+type AfterSalesPartDemand = {
+  id: string;
+  inventoryItemId: string;
+  inventoryItem: { sku: string; name: string; quickManufacturingProfiles?: { id: string; revision: number }[] };
+  directDeliveredQuantity?: number;
+  removedPartDisposition?: { disposition: string; notes: string; byName: string; at: string } | null;
+  serviceOrderPartId: string;
+  status: 'VALIDATED' | 'SOURCING' | 'IN_PRODUCTION' | 'QUALITY_PENDING' | 'READY' | 'PARTIALLY_FULFILLED' | 'FULFILLED' | 'ON_HOLD' | 'CANCELED';
+  replacementReason: 'NORMAL_WEAR' | 'PREMATURE_FAILURE' | 'ACCIDENTAL_DAMAGE' | 'DESIGN_DEFECT' | 'TRANSPORT_DAMAGE' | 'MISUSE' | 'UNKNOWN';
+  coverageStatus: 'PENDING_REVIEW' | 'WARRANTY_APPROVED' | 'WARRANTY_REJECTED' | 'CUSTOMER_BILLABLE' | 'GOODWILL' | 'INTERNAL_COST';
+  supplyRoute: 'STOCK' | 'BUY' | 'MAKE' | 'SUBCONTRACT';
+  requestedQuantity: number;
+  fulfilledQuantity: number;
+  installedQuantity: number;
+  requiredAt?: string | null;
+  notes?: string | null;
+  lockVersion: number;
+  manufacturingOrder?: { id: string; number: string; status: string; responsibleUser?: { id: string; name: string } | null } | null;
+  sourceManufacturingOrder?: { id: string; number: string; status: string } | null;
+};
+
+const demandStatusLabel: Record<AfterSalesPartDemand['status'], string> = {
+  VALIDATED: 'Validada', SOURCING: 'En abastecimiento', IN_PRODUCTION: 'En producción', QUALITY_PENDING: 'Pendiente calidad',
+  READY: 'Lista', PARTIALLY_FULFILLED: 'Atendida parcialmente', FULFILLED: 'Atendida', ON_HOLD: 'En pausa', CANCELED: 'Cancelada',
+};
+const demandReasonLabel: Record<AfterSalesPartDemand['replacementReason'], string> = {
+  NORMAL_WEAR: 'Desgaste normal', PREMATURE_FAILURE: 'Falla prematura', ACCIDENTAL_DAMAGE: 'Daño accidental', DESIGN_DEFECT: 'Defecto de diseño',
+  TRANSPORT_DAMAGE: 'Daño de transporte', MISUSE: 'Uso inadecuado', UNKNOWN: 'Por determinar',
+};
+const demandCoverageLabel: Record<AfterSalesPartDemand['coverageStatus'], string> = {
+  PENDING_REVIEW: 'Cobertura por revisar', WARRANTY_APPROVED: 'Garantía aprobada', WARRANTY_REJECTED: 'Garantía rechazada',
+  CUSTOMER_BILLABLE: 'Facturable al cliente', GOODWILL: 'Atención comercial', INTERNAL_COST: 'Costo interno',
 };
 
 type WorkLog = {
@@ -450,6 +485,8 @@ export default function ServiceOrderDetailPage() {
   const [partPhotoPreview, setPartPhotoPreview] = useState<{ url: string; label: string } | null>(null);
   const [partReplacementTarget, setPartReplacementTarget] = useState<Part | null>(null);
   const [partReplacementQty, setPartReplacementQty] = useState('1');
+  const [partDemandTarget, setPartDemandTarget] = useState<Part | null>(null);
+  const [partDemandForm, setPartDemandForm] = useState({ replacementReason: 'UNKNOWN', coverageStatus: 'PENDING_REVIEW', supplyRoute: 'MAKE', requiredAt: '', notes: '' });
   const [issueNoteText, setIssueNoteText] = useState('');
   const [hourmeterReading, setHourmeterReading] = useState<string>('');
   const [hourmeterPhase, setHourmeterPhase] = useState<'BEFORE' | 'AFTER' | 'OTHER'>('OTHER');
@@ -469,6 +506,11 @@ export default function ServiceOrderDetailPage() {
     id ? `/service-orders/${id}` : null,
     auth.token,
     auth.tenantSlug
+  );
+  const { data: partDemands, mutate: mutatePartDemands } = useApiSWR<AfterSalesPartDemand[]>(
+    id ? `/service-orders/${id}/part-demands` : null,
+    auth.token,
+    auth.tenantSlug,
   );
   const { data: techs } = useApiSWR<User[]>(`/users?role=TECH`, auth.token, auth.tenantSlug);
   const { data: pmPlans } = useApiSWR<PmPlan[]>(`/pm-plans`, auth.token, auth.tenantSlug);
@@ -826,6 +868,7 @@ const invPath = useMemo(() => {
   const requiredParts = allRequiredParts.filter((part) => !part.delegatedServiceOrderId);
   const delegatedRequiredParts = allRequiredParts.filter((part) => !!part.delegatedServiceOrderId);
   const replacedParts = (data?.serviceOrderParts ?? []).filter((p) => (p as any).stage === 'REPLACED');
+  const demandByPartId = new Map((partDemands ?? []).map((demand) => [demand.serviceOrderPartId, demand]));
   const partPhotoKey = useMemo(
     () => (data?.serviceOrderParts ?? []).map((p) => p.id).sort().join('|'),
     [data?.serviceOrderParts],
@@ -1277,6 +1320,58 @@ async function setTimestamp(key: TsKey, localValue: string) {
     });
   }
 
+  function openPartDemandDialog(part: Part) {
+    if (!part.inventoryItem) {
+      setUiErr('Vincula este repuesto al catálogo antes de gestionar su abastecimiento.');
+      return;
+    }
+    setUiErr('');
+    setPartDemandForm({ replacementReason: 'UNKNOWN', coverageStatus: 'PENDING_REVIEW', supplyRoute: 'MAKE', requiredAt: '', notes: part.notes ?? '' });
+    setPartDemandTarget(part);
+  }
+
+  async function createPartDemand() {
+    if (!partDemandTarget || !auth.token || !auth.tenantSlug) return;
+    setBusy(true); setUiErr(''); setUiInfo('');
+    try {
+      await apiFetch(`/service-orders/${id}/parts/${partDemandTarget.id}/demand`, {
+        method: 'POST', token: auth.token, tenantSlug: auth.tenantSlug,
+        body: {
+          requestedQuantity: Number(partDemandTarget.qty),
+          replacementReason: partDemandForm.replacementReason,
+          coverageStatus: partDemandForm.coverageStatus,
+          supplyRoute: partDemandForm.supplyRoute,
+          requiredAt: partDemandForm.requiredAt || null,
+          notes: partDemandForm.notes.trim() || null,
+        },
+      });
+      setPartDemandTarget(null);
+      setUiInfo('Demanda posventa creada y vinculada al repuesto requerido.');
+      await Promise.all([mutatePartDemands(), mutateIssue()]);
+    } catch (e: any) {
+      const parsed = parseApiError(e);
+      setUiErr(parsed.message || 'No se pudo crear la demanda posventa');
+    } finally { setBusy(false); }
+  }
+
+  async function createSparePartManufacturingOrder(demand: AfterSalesPartDemand, expedited = false) {
+    if (!isAdmin || !auth.token || !auth.tenantSlug) return;
+    if (!window.confirm(expedited ? '¿Crear OF abreviada con la receta aprobada y reservar los materiales disponibles?' : '¿Crear la orden de manufactura para la cantidad pendiente de este repuesto?')) return;
+    setBusy(true); setUiErr(''); setUiInfo('');
+    try {
+      const response: any = await apiFetch(`/service-orders/${id}/part-demands/${demand.id}/manufacturing-order`, {
+        method: 'POST', token: auth.token, tenantSlug: auth.tenantSlug, body: expedited ? { executionMode: 'EXPEDITED', profileId: demand.inventoryItem.quickManufacturingProfiles?.[0]?.id } : {},
+      });
+      await mutatePartDemands();
+      const orderId = String(response?.manufacturingOrderId || response?.manufacturingOrder?.id || '');
+      if (orderId) window.location.assign(`/manufacturing/${orderId}`);
+      else setUiInfo('Orden de manufactura creada.');
+    } catch (e: any) {
+      const parsed = parseApiError(e);
+      setUiErr(parsed.message || 'No se pudo crear la orden de manufactura');
+    } finally { setBusy(false); }
+  }
+
   async function updatePartNotes(part: Part, notes: string) {
     if (techBlocked) {
       setUiInfo('Tienes un WorkLog abierto en otra OS. Debes cerrarlo antes de modificar esta OS.');
@@ -1336,7 +1431,7 @@ async function setTimestamp(key: TsKey, localValue: string) {
         body: { qtyReplaced },
       });
       setPartReplacementTarget(null);
-      await mutate();
+      await Promise.all([mutate(), mutatePartDemands()]);
     } catch (e: any) {
       const parsed = parseApiError(e);
       if (applyWorkLogBlockIfPresent(parsed)) return;
@@ -1358,7 +1453,7 @@ async function setTimestamp(key: TsKey, localValue: string) {
     token: auth.token!,
     tenantSlug: auth.tenantSlug!,
   });
-  mutate();
+  await Promise.all([mutate(), mutatePartDemands()]);
 } catch (e: any) {
   const parsed = parseApiError(e);
   if (applyWorkLogBlockIfPresent(parsed)) return;
@@ -1752,6 +1847,7 @@ async function setTimestamp(key: TsKey, localValue: string) {
       <div className="space-y-1">
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <h1 className="text-xl font-semibold">{data.title}</h1>
+          {['ADMIN','TECH'].includes((session as any)?.user?.role || '') && <a className="rounded border px-3 py-2 text-sm" href={'/engineering-requests?new=1&workOrderId=' + data.id}>Solicitar reforma o mejora</a>}
           <div className="flex items-center gap-2">
             {isAdmin ? (
               <button
@@ -2987,6 +3083,7 @@ async function setTimestamp(key: TsKey, localValue: string) {
 
 	            <div className="space-y-2">
 	              <div className="text-sm font-medium">Repuestos necesarios (diagnóstico)</div>
+                  {isAdmin ? <RemovedPartDisposition serviceOrderId={id} demands={partDemands || []} auth={auth} onChanged={() => mutatePartDemands()} /> : null}
 	              {requiredParts.map((p) => (
 	                <div key={p.id} className="grid gap-3 border rounded px-3 py-3 md:grid-cols-[88px_1fr_auto] md:items-center">
 	                  <div className="relative h-20 w-20 overflow-hidden rounded border bg-gray-50">
@@ -3070,6 +3167,23 @@ async function setTimestamp(key: TsKey, localValue: string) {
 	                        ) : null}
 	                      </div>
 	                    ) : null}
+	                    {demandByPartId.get(p.id) ? (() => {
+	                      const demand = demandByPartId.get(p.id)!;
+	                      return <div className="rounded border border-violet-200 bg-violet-50 p-2 text-xs text-violet-950">
+	                        <div className="flex flex-wrap items-center gap-2">
+	                          <span className="font-semibold">Demanda posventa</span>
+	                          <span className="rounded-full bg-white px-2 py-0.5">{demandStatusLabel[demand.status]}</span>
+	                          <span>Ruta {demand.supplyRoute}</span>
+	                        </div>
+	                        <div className="mt-1 text-violet-800">{demandReasonLabel[demand.replacementReason]} · {demandCoverageLabel[demand.coverageStatus]} · {demand.fulfilledQuantity}/{demand.requestedQuantity} disponibles · {demand.installedQuantity}/{demand.requestedQuantity} instaladas</div>
+	                        <div className="mt-1 flex flex-wrap items-center gap-2">
+	                          {demand.sourceManufacturingOrder ? <a className="underline" href={`/manufacturing/${demand.sourceManufacturingOrder.id}`}>OF original {demand.sourceManufacturingOrder.number}</a> : null}
+	                          {demand.manufacturingOrder ? <a className="font-medium underline" href={`/manufacturing/${demand.manufacturingOrder.id}`}>OF recambio {demand.manufacturingOrder.number}</a> : null}
+	                          {isAdmin && demand.supplyRoute === 'MAKE' && !demand.manufacturingOrder && !['CANCELED', 'FULFILLED'].includes(demand.status) ? <button type="button" className="rounded bg-violet-700 px-2 py-1 text-white" disabled={busy} onClick={() => createSparePartManufacturingOrder(demand)}>Crear OF de recambio</button> : null}
+                              {isAdmin && demand.supplyRoute === 'MAKE' && !demand.manufacturingOrder && !['CANCELED', 'FULFILLED'].includes(demand.status) ? demand.inventoryItem.quickManufacturingProfiles?.length ? <button type="button" className="rounded bg-emerald-700 px-2 py-1 text-white" disabled={busy} onClick={() => createSparePartManufacturingOrder(demand, true)}>Crear OF abreviada · receta rev. {demand.inventoryItem.quickManufacturingProfiles[0].revision}</button> : <a className="underline" href={`/inventory/${demand.inventoryItemId}/manufacturing`}>Configurar perfil para OF abreviada</a> : null}
+	                        </div>
+	                      </div>;
+	                    })() : null}
 	                    <textarea
 	                      className="w-full rounded border px-2 py-1 text-sm"
 	                      rows={2}
@@ -3080,6 +3194,9 @@ async function setTimestamp(key: TsKey, localValue: string) {
 	                    />
 	                  </div>
 	                  <div className="flex items-center gap-3 md:justify-end">
+	                    {!demandByPartId.has(p.id) && p.inventoryItem ? (
+	                      <button type="button" className={actionButtonClass('secondary', 'sm')} disabled={busy || techBlocked || (!isAdmin && !isTech)} onClick={() => openPartDemandDialog(p)}>Gestionar suministro</button>
+	                    ) : null}
 	                    {(canChangeStatus) ? (
 	                      <button type="button" className={actionButtonClass('success', 'sm')} onClick={() => openPartReplacementDialog(p)}>Marcar como cambiado</button>
 	                    ) : null}
@@ -3267,6 +3384,34 @@ async function setTimestamp(key: TsKey, localValue: string) {
           </ul>
         </section>
       ) : null}
+
+      <Dialog open={!!partDemandTarget} onOpenChange={(open) => !open && !busy && setPartDemandTarget(null)}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Gestionar suministro posventa</DialogTitle>
+            <DialogDescription>
+              {partDemandTarget?.inventoryItem ? `${partDemandTarget.inventoryItem.sku} — ${partDemandTarget.inventoryItem.name}` : 'Repuesto requerido'} · Cantidad {partDemandTarget?.qty ?? 0}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-3 md:grid-cols-2">
+            <label className="space-y-1"><span className="text-sm font-medium">Motivo técnico</span><select className="w-full rounded border px-3 py-2" value={partDemandForm.replacementReason} onChange={(event) => setPartDemandForm((current) => ({ ...current, replacementReason: event.target.value }))} disabled={busy}>
+              <option value="UNKNOWN">Por determinar</option><option value="NORMAL_WEAR">Desgaste normal</option><option value="PREMATURE_FAILURE">Falla prematura</option><option value="ACCIDENTAL_DAMAGE">Daño accidental</option><option value="DESIGN_DEFECT">Defecto de diseño</option><option value="TRANSPORT_DAMAGE">Daño de transporte</option><option value="MISUSE">Uso inadecuado</option>
+            </select></label>
+            <label className="space-y-1"><span className="text-sm font-medium">Cobertura</span><select className="w-full rounded border px-3 py-2" value={partDemandForm.coverageStatus} onChange={(event) => setPartDemandForm((current) => ({ ...current, coverageStatus: event.target.value }))} disabled={busy}>
+              <option value="PENDING_REVIEW">Por revisar</option><option value="WARRANTY_APPROVED">Garantía aprobada</option><option value="WARRANTY_REJECTED">Garantía rechazada</option><option value="CUSTOMER_BILLABLE">Facturable al cliente</option><option value="GOODWILL">Atención comercial</option><option value="INTERNAL_COST">Costo interno</option>
+            </select></label>
+            <label className="space-y-1"><span className="text-sm font-medium">Ruta de suministro</span><select className="w-full rounded border px-3 py-2" value={partDemandForm.supplyRoute} onChange={(event) => setPartDemandForm((current) => ({ ...current, supplyRoute: event.target.value }))} disabled={busy}>
+              <option value="STOCK">Inventario</option><option value="BUY">Compra</option><option value="MAKE">Fabricación interna</option><option value="SUBCONTRACT">Subcontratación</option>
+            </select></label>
+            <label className="space-y-1"><span className="text-sm font-medium">Fecha requerida</span><input type="date" className="w-full rounded border px-3 py-2" value={partDemandForm.requiredAt} onChange={(event) => setPartDemandForm((current) => ({ ...current, requiredAt: event.target.value }))} disabled={busy} /></label>
+            <label className="space-y-1 md:col-span-2"><span className="text-sm font-medium">Notas</span><textarea className="w-full rounded border px-3 py-2" rows={3} value={partDemandForm.notes} onChange={(event) => setPartDemandForm((current) => ({ ...current, notes: event.target.value }))} disabled={busy} /></label>
+          </div>
+          <DialogFooter>
+            <button type="button" className={actionButtonClass('secondary')} onClick={() => setPartDemandTarget(null)} disabled={busy}>Cancelar</button>
+            <button type="button" className={actionButtonClass('primary')} onClick={createPartDemand} disabled={busy}>Crear demanda</button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={!!partReplacementTarget} onOpenChange={(open) => !open && !busy && setPartReplacementTarget(null)}>
         <DialogContent className="max-w-md">

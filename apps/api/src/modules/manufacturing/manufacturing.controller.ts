@@ -1,13 +1,19 @@
+import { UseGuards, UsePipes } from '@nestjs/common';
+import { ManufacturingAccessGuard } from './manufacturing-access.guard';
+import { ManufacturingValidationPipe } from './manufacturing-validation.pipe';
 import { Body, Controller, Get, Param, Patch, Post, Put, Query } from '@nestjs/common';
 import {
   CreateManufacturingOrderDto,
   ManufacturingReasonDto,
   ReplaceManufacturingMembersDto,
+  ReceiveSparePartOutputDto,
   UpdateManufacturedUnitDto,
   UpdateManufacturingOrderDto,
 } from './dto/manufacturing.dto';
 import { ManufacturingService } from './manufacturing.service';
 
+@UseGuards(ManufacturingAccessGuard)
+@UsePipes(ManufacturingValidationPipe)
 @Controller('manufacturing')
 export class ManufacturingController {
   constructor(private readonly service: ManufacturingService) {}
@@ -16,6 +22,7 @@ export class ManufacturingController {
   listOrders(
     @Query('q') q?: string,
     @Query('status') status?: string,
+    @Query('orderType') orderType?: string,
     @Query('responsibleUserId') responsibleUserId?: string,
     @Query('priority') priority?: string,
     @Query('deliveryFrom') deliveryFrom?: string,
@@ -26,7 +33,7 @@ export class ManufacturingController {
     @Query('sort') sort?: string,
   ) {
     return this.service.listOrders({
-      q, status, responsibleUserId, priority, deliveryFrom, deliveryTo,
+      q, status, orderType, responsibleUserId, priority, deliveryFrom, deliveryTo,
       engineeringPending, page, size, sort,
     });
   }
@@ -59,6 +66,11 @@ export class ManufacturingController {
   @Post('orders/:id/cancel')
   cancelOrder(@Param('id') id: string, @Body() dto: ManufacturingReasonDto) {
     return this.service.cancelOrder(id, dto);
+  }
+
+  @Post('orders/:id/receive-spare-output')
+  receiveSpareOutput(@Param('id') id: string, @Body() dto: ReceiveSparePartOutputDto) {
+    return this.service.receiveSparePartOutput(id, dto ?? ({} as ReceiveSparePartOutputDto));
   }
 
   @Get('orders/:id/history')

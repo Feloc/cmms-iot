@@ -59,6 +59,44 @@ enum ManufacturingOrderStatus {
   CANCELED
 }
 
+enum ManufacturingOrderType {
+  EQUIPMENT
+  SPARE_PART
+  REWORK
+  PROTOTYPE
+}
+
+enum AfterSalesPartDemandStatus {
+  VALIDATED
+  SOURCING
+  IN_PRODUCTION
+  QUALITY_PENDING
+  READY
+  PARTIALLY_FULFILLED
+  FULFILLED
+  ON_HOLD
+  CANCELED
+}
+
+enum AfterSalesReplacementReason {
+  NORMAL_WEAR
+  PREMATURE_FAILURE
+  ACCIDENTAL_DAMAGE
+  DESIGN_DEFECT
+  TRANSPORT_DAMAGE
+  MISUSE
+  UNKNOWN
+}
+
+enum AfterSalesCoverageStatus {
+  PENDING_REVIEW
+  WARRANTY_APPROVED
+  WARRANTY_REJECTED
+  CUSTOMER_BILLABLE
+  GOODWILL
+  INTERNAL_COST
+}
+
 enum ManufacturedUnitStatus {
   PLANNED
   COMMISSIONED
@@ -315,6 +353,7 @@ enum InventoryMovementSource {
   IMPORT
   WORK_ORDER
   SERVICE_ORDER
+  MANUFACTURING
   ADJUSTMENT
   SYSTEM
 }
@@ -410,6 +449,8 @@ model Tenant {
   assemblyOperationalAlerts    AssemblyOperationalAlert[]
   manufacturingNumberSequences ManufacturingNumberSequence[]
   manufacturingOrders          ManufacturingOrder[]
+  manufacturingQuickProfiles   ManufacturingQuickProfile[]
+  manufacturingQuickExecutions ManufacturingQuickExecution[]
   manufacturedUnits            ManufacturedUnit[]
   manufacturingOrderMembers    ManufacturingOrderMember[]
   manufacturingAuditEvents     ManufacturingAuditEvent[]
@@ -458,6 +499,8 @@ model Tenant {
   manufacturingHandoverTrainings ManufacturingHandoverTraining[]
   manufacturingHandoverSpares ManufacturingHandoverSpare[]
   manufacturingHandoverAcceptances ManufacturingHandoverAcceptance[]
+  afterSalesPartDemands               AfterSalesPartDemand[]
+  manufacturingOutputReceipts         ManufacturingOutputReceipt[]
 
   workOrderReports WorkOrderReport[]
 }
@@ -687,6 +730,8 @@ model Asset {
   siteDeployment               ManufacturingSiteDeployment?
   satExecutions                ManufacturingSatExecution[]
   manufacturingHandover       ManufacturingHandover?
+  afterSalesPartDemands        AfterSalesPartDemand[]
+  engineeringRequests          EngineeringRequest[]
 
   @@unique([tenantId, code])
   @@unique([tenantId, serialNumber])
@@ -860,6 +905,8 @@ model WorkOrder {
   attachments                          Attachment[]
   workNotes                            WorkNote[]
   assemblyExecution                    AssemblyExecution?
+  afterSalesPartDemands                AfterSalesPartDemand[]
+  engineeringRequestOrders             EngineeringRequestOrder[]
 
   @@index([tenantId, status])
   @@index([tenantId, commercialStatus])
@@ -1217,7 +1264,12 @@ model InventoryItem {
   manufacturingBomLines ManufacturingBomLine[]
   manufacturingSupplyRequirements ManufacturingSupplyRequirement[]
   manufacturingStockReservations ManufacturingStockReservation[]
+  afterSalesPartDemands           AfterSalesPartDemand[]
+  manufacturingOutputs            ManufacturingOrder[]             @relation("ManufacturingOrderOutputItem")
+  manufacturingOutputReceipts     ManufacturingOutputReceipt[]
+  quickManufacturingProfiles      ManufacturingQuickProfile[]
 
+  @@unique([tenantId, id])
   @@unique([tenantId, sku])
   @@index([tenantId, name])
   @@index([tenantId, oemPartNo])
@@ -1276,6 +1328,7 @@ model InventoryStock {
 
   movements InventoryMovement[]
   manufacturingStockReservations ManufacturingStockReservation[]
+  manufacturingOutputReceipts    ManufacturingOutputReceipt[]
 
   @@index([tenantId, inventoryItemId])
   @@index([tenantId, warehouse, binLocation])
@@ -1582,6 +1635,8 @@ model Attachment {
   manufacturingOrderId String?
   manufacturingOrder   ManufacturingOrder? @relation(fields: [manufacturingOrderId], references: [id], onDelete: Cascade)
   engineeringRevisionFile EngineeringDocumentRevision? @relation("EngineeringRevisionFile")
+  engineeringRequestId String?
+  engineeringRequest EngineeringRequest? @relation(fields: [engineeringRequestId], references: [id], onDelete: Restrict)
 
   type         AttachmentType
   filename     String
@@ -1927,6 +1982,10 @@ model ServiceOrderPart {
   delegatedParts            ServiceOrderPart[] @relation("ServiceOrderPartSource")
   replacementPart           ServiceOrderPart?  @relation("ServiceOrderPartReplacement", fields: [replacementServiceOrderPartId], references: [id], onDelete: SetNull)
   reflectedReplacementParts ServiceOrderPart[] @relation("ServiceOrderPartReplacement")
+  afterSalesDemand                AfterSalesPartDemand? @relation("AfterSalesDemandSourcePart")
+  installedFromAfterSalesDemandId String?
+  directIssuedQuantity            Decimal @default(0) @db.Decimal(18, 6)
+  installedFromAfterSalesDemand   AfterSalesPartDemand? @relation("AfterSalesDemandInstalledParts", fields: [installedFromAfterSalesDemandId], references: [id], onDelete: SetNull)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1937,6 +1996,7 @@ model ServiceOrderPart {
   @@index([tenantId, sourceServiceOrderPartId])
   @@index([tenantId, replacementServiceOrderId])
   @@index([tenantId, replacementServiceOrderPartId])
+  @@index([tenantId, installedFromAfterSalesDemandId])
 }
 
 /// === Manufactura: fundaciones ===
@@ -1958,6 +2018,9 @@ model ManufacturingOrder {
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   number           String
+  orderType        ManufacturingOrderType    @default(EQUIPMENT)
+  executionMode    String                    @default("STANDARD")
+  quickExecution   ManufacturingQuickExecution?
   status           ManufacturingOrderStatus  @default(DRAFT)
   statusBeforeHold ManufacturingOrderStatus?
   version          Int                       @default(1)
@@ -1983,6 +2046,9 @@ model ManufacturingOrder {
   createdByUserId   String
   createdByUser     User   @relation("ManufacturingOrderCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
 
+  outputInventoryItemId String?
+  outputInventoryItem   InventoryItem? @relation("ManufacturingOrderOutputItem", fields: [outputInventoryItemId], references: [id], onDelete: SetNull)
+
   holdReason     String?
   canceledReason String?
   releasedAt     DateTime?
@@ -2005,11 +2071,130 @@ model ManufacturingOrder {
   siteDeployments ManufacturingSiteDeployment[]
   satExecutions ManufacturingSatExecution[]
   handovers ManufacturingHandover[]
+  originatingAfterSalesDemands AfterSalesPartDemand[]           @relation("AfterSalesSourceOrder")
+  fulfillingAfterSalesDemands  AfterSalesPartDemand[]           @relation("AfterSalesManufacturingOrder")
+  outputReceipts               ManufacturingOutputReceipt[]
 
+  @@unique([tenantId, id])
   @@unique([tenantId, number])
   @@index([tenantId, status, updatedAt(sort: Desc)])
   @@index([tenantId, responsibleUserId, status])
   @@index([tenantId, requestedDeliveryAt])
+  @@index([tenantId, orderType, status, updatedAt(sort: Desc)])
+  @@index([tenantId, outputInventoryItemId])
+}
+
+model AfterSalesPartDemand {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  serviceOrderId             String
+  serviceOrder               WorkOrder          @relation(fields: [serviceOrderId], references: [id], onDelete: Cascade)
+  serviceOrderPartId         String             @unique
+  serviceOrderPart           ServiceOrderPart   @relation("AfterSalesDemandSourcePart", fields: [serviceOrderPartId], references: [id], onDelete: Cascade)
+  installedServiceOrderParts ServiceOrderPart[] @relation("AfterSalesDemandInstalledParts")
+  assetId                    String
+  asset                      Asset              @relation(fields: [assetId], references: [id], onDelete: Restrict)
+  inventoryItemId            String
+  inventoryItem              InventoryItem      @relation(fields: [inventoryItemId], references: [id], onDelete: Restrict)
+
+  sourceManufacturingOrderId String?
+  sourceManufacturingOrder   ManufacturingOrder? @relation("AfterSalesSourceOrder", fields: [sourceManufacturingOrderId], references: [id], onDelete: SetNull)
+  manufacturingOrderId       String?
+  manufacturingOrder         ManufacturingOrder? @relation("AfterSalesManufacturingOrder", fields: [manufacturingOrderId], references: [id], onDelete: SetNull)
+
+  status            AfterSalesPartDemandStatus  @default(VALIDATED)
+  replacementReason AfterSalesReplacementReason @default(UNKNOWN)
+  coverageStatus    AfterSalesCoverageStatus    @default(PENDING_REVIEW)
+  supplyRoute       SupplyType
+  requestedQuantity Decimal                     @db.Decimal(18, 6)
+  fulfilledQuantity Decimal                     @default(0) @db.Decimal(18, 6)
+  installedQuantity Decimal                     @default(0) @db.Decimal(18, 6)
+  directDeliveredQuantity Decimal               @default(0) @db.Decimal(18, 6)
+  removedPartDisposition Json?
+  requiredAt        DateTime?
+  notes             String?
+  holdReason        String?
+  canceledReason    String?
+  lockVersion       Int                         @default(1)
+  createdByUserId   String
+  createdByName     String
+  updatedByUserId   String?
+  createdAt         DateTime                    @default(now())
+  updatedAt         DateTime                    @updatedAt
+
+  @@index([tenantId, serviceOrderId, status])
+  @@index([tenantId, assetId, status, requiredAt])
+  @@index([tenantId, manufacturingOrderId])
+  @@index([tenantId, sourceManufacturingOrderId])
+  @@index([tenantId, inventoryItemId, status])
+}
+
+model ManufacturingOutputReceipt {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  manufacturingOrderId String
+  manufacturingOrder   ManufacturingOrder @relation(fields: [manufacturingOrderId], references: [id], onDelete: Restrict)
+  inventoryItemId      String
+  inventoryItem        InventoryItem      @relation(fields: [inventoryItemId], references: [id], onDelete: Restrict)
+  inventoryStockId     String
+  inventoryStock       InventoryStock     @relation(fields: [inventoryStockId], references: [id], onDelete: Restrict)
+
+  quantity            Decimal  @db.Decimal(18, 6)
+  warehouseSnapshot   String
+  binLocationSnapshot String?
+  reference           String?
+  notes               String?
+  createdByUserId     String
+  createdByName       String
+  createdAt           DateTime @default(now())
+
+  @@index([tenantId, manufacturingOrderId, createdAt(sort: Desc)])
+  @@index([tenantId, inventoryItemId, createdAt(sort: Desc)])
+  @@index([tenantId, inventoryStockId, createdAt(sort: Desc)])
+}
+
+/// Approved revisions are immutable; each order keeps its own recipe snapshot.
+model ManufacturingQuickProfile {
+  id              String @id @default(cuid())
+  tenantId        String
+  tenant          Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  inventoryItemId String
+  inventoryItem   InventoryItem @relation(fields: [inventoryItemId], references: [id], onDelete: Restrict)
+  revision        Int
+  status          String @default("DRAFT")
+  recipe          Json
+  validUntil      DateTime?
+  createdByUserId  String
+  approvedByUserId String?
+  approvedAt      DateTime?
+  approvalExceptionReason String?
+  createdAt       DateTime @default(now())
+  executions      ManufacturingQuickExecution[]
+
+  @@unique([tenantId, id])
+  @@unique([tenantId, inventoryItemId, revision])
+  @@index([tenantId, inventoryItemId, status])
+}
+
+model ManufacturingQuickExecution {
+  id                   String @id @default(cuid())
+  tenantId             String
+  tenant               Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  manufacturingOrderId String @unique
+  manufacturingOrder   ManufacturingOrder @relation(fields: [manufacturingOrderId], references: [id], onDelete: Restrict)
+  profileId            String
+  profile              ManufacturingQuickProfile @relation(fields: [profileId], references: [id], onDelete: Restrict)
+  recipeSnapshot       Json
+  state                Json
+  lockVersion          Int @default(1)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  @@index([tenantId, manufacturingOrderId])
 }
 
 model ManufacturedUnit {
@@ -2078,6 +2263,83 @@ model ManufacturingAuditEvent {
 
   @@index([tenantId, manufacturingOrderId, createdAt(sort: Desc)])
   @@index([tenantId, entityType, entityId])
+}
+
+model EngineeringRequest {
+  id String @id @default(cuid())
+  tenantId String
+  number String
+  assetId String
+  asset Asset @relation(fields: [assetId], references: [id], onDelete: Restrict)
+  assetSnapshot Json
+  title String
+  problem String
+  expectedBenefit String
+  requestType String
+  discipline String
+  priority String @default("MEDIUM")
+  desiredDate DateTime?
+  status String @default("DRAFT")
+  previousStatus String?
+  version Int @default(1)
+  requestedByUserId String
+  responsibleUserId String?
+  reviewerUserId String?
+  validatorUserId String?
+  originWorkOrderId String?
+  originNoticeId String?
+  proposal Json?
+  proposalAuthorId String?
+  approvedRevision Int?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  closedAt DateTime?
+  revisions EngineeringRequestRevision[]
+  events EngineeringRequestEvent[]
+  orders EngineeringRequestOrder[]
+  attachments Attachment[]
+  @@unique([tenantId, number])
+  @@index([tenantId, assetId, createdAt])
+  @@index([tenantId, status, updatedAt])
+}
+
+model EngineeringRequestRevision {
+  id String @id @default(cuid())
+  tenantId String
+  requestId String
+  request EngineeringRequest @relation(fields: [requestId], references: [id], onDelete: Restrict)
+  revision Int
+  snapshot Json
+  createdByUserId String
+  createdAt DateTime @default(now())
+  @@unique([requestId, revision])
+}
+
+model EngineeringRequestEvent {
+  id String @id @default(cuid())
+  tenantId String
+  requestId String
+  request EngineeringRequest @relation(fields: [requestId], references: [id], onDelete: Restrict)
+  action String
+  fromStatus String?
+  toStatus String?
+  actorId String
+  actorName String
+  note String?
+  details Json?
+  createdAt DateTime @default(now())
+  @@index([tenantId, requestId, createdAt])
+}
+
+model EngineeringRequestOrder {
+  id String @id @default(cuid())
+  tenantId String
+  requestId String
+  request EngineeringRequest @relation(fields: [requestId], references: [id], onDelete: Restrict)
+  workOrderId String
+  workOrder WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Restrict)
+  createdAt DateTime @default(now())
+  @@unique([requestId, workOrderId])
 }
 
 model EngineeringDocument {
@@ -2232,12 +2494,12 @@ model ManufacturingBomLine {
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
 
+  supplyRequirements ManufacturingSupplyRequirement[]
+
   @@unique([bomRevisionId, position])
   @@index([tenantId, bomRevisionId, level, position])
   @@index([tenantId, inventoryItemId])
   @@index([tenantId, drawingDocumentId, drawingRevisionId])
-
-  supplyRequirements ManufacturingSupplyRequirement[]
 }
 
 model EngineeringRelease {

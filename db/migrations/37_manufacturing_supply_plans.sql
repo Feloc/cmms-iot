@@ -74,7 +74,7 @@ CREATE TABLE IF NOT EXISTS "ManufacturingSupplyRequirement" (
   CONSTRAINT "ManufacturingSupplyRequirement_inventoryItemId_fkey" FOREIGN KEY ("inventoryItemId") REFERENCES "InventoryItem"("id") ON DELETE SET NULL ON UPDATE CASCADE,
   CONSTRAINT "ManufacturingSupplyRequirement_quantities_check" CHECK (
     "quantityPerUnitSnapshot" > 0 AND "orderQuantitySnapshot" > 0 AND "requiredQuantity" > 0 AND
-    "stockOnHandSnapshot" >= 0 AND "stockReservedSnapshot" >= 0 AND "stockAvailableSnapshot" >= 0 AND
+    "stockReservedSnapshot" >= 0 AND "stockAvailableSnapshot" >= 0 AND
     "stockCoveredQuantity" >= 0 AND "plannedQuantity" >= 0 AND "fulfilledQuantity" >= 0
   ),
   CONSTRAINT "ManufacturingSupplyRequirement_structure_check" CHECK ("positionSnapshot" > 0 AND "levelSnapshot" >= 0),
@@ -94,7 +94,7 @@ END $$;
 DO $$ BEGIN
   ALTER TABLE "ManufacturingSupplyRequirement" ADD CONSTRAINT "ManufacturingSupplyRequirement_quantities_check" CHECK (
     "quantityPerUnitSnapshot" > 0 AND "orderQuantitySnapshot" > 0 AND "requiredQuantity" > 0 AND
-    "stockOnHandSnapshot" >= 0 AND "stockReservedSnapshot" >= 0 AND "stockAvailableSnapshot" >= 0 AND
+    "stockReservedSnapshot" >= 0 AND "stockAvailableSnapshot" >= 0 AND
     "stockCoveredQuantity" >= 0 AND "plannedQuantity" >= 0 AND "fulfilledQuantity" >= 0
   );
 EXCEPTION WHEN duplicate_object THEN NULL;

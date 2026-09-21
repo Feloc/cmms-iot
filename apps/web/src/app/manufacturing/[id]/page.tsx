@@ -17,6 +17,9 @@ import { ManufacturingFatTab } from './ManufacturingFatTab';
 import { ManufacturingDispatchTab } from './ManufacturingDispatchTab';
 import { ManufacturingSiteDeploymentTab } from './ManufacturingSiteDeploymentTab';
 import { ManufacturingHandoverTab } from './ManufacturingHandoverTab';
+import { ManufacturingQuickTab } from './ManufacturingQuickTab';
+import { EnableQuickFlow } from './EnableQuickFlow';
+import { ManufacturingControl } from '../ManufacturingControl';
 import {
   dateLabel,
   localDateInput,
@@ -31,7 +34,7 @@ import {
   type Paginated,
 } from '@/lib/manufacturing';
 
-type Tab = 'summary' | 'units' | 'members' | 'engineering' | 'bom' | 'releases' | 'supply' | 'kits' | 'assembly' | 'fat' | 'dispatch' | 'site' | 'handover' | 'history';
+type Tab = 'summary' | 'quick' | 'units' | 'members' | 'engineering' | 'bom' | 'releases' | 'supply' | 'kits' | 'assembly' | 'fat' | 'dispatch' | 'site' | 'handover' | 'history';
 
 export default function ManufacturingDetailPage() {
   const params = useParams();
@@ -72,17 +75,22 @@ export default function ManufacturingDetailPage() {
   if (isLoading) return <div className="p-6 text-gray-500">Cargando orden de manufactura…</div>;
   if (error || !data) return <div className="p-6 text-red-700">No se pudo cargar la orden de manufactura.</div>;
 
-  const tabs: Array<{ key: Tab; label: string }> = [
+  const equipmentOnlyTabs: Array<{ key: Tab; label: string }> = [
+    { key: 'site', label: 'Instalación / SAT' }, { key: 'handover', label: 'Entrega final' },
+  ];
+  const tabs: Array<{ key: Tab; label: string }> = data.executionMode === 'EXPEDITED' ? [
+    { key: 'summary', label: 'Resumen' }, { key: 'quick', label: 'Ejecución rápida' }, { key: 'members', label: 'Equipo' }, { key: 'history', label: 'Historial' },
+  ] : [
     { key: 'summary', label: 'Resumen' }, { key: 'units', label: `Unidades (${data.units?.length || 0})` },
     { key: 'members', label: 'Equipo' }, { key: 'engineering', label: 'Ingeniería' },
-    { key: 'bom', label: 'BOM' }, { key: 'releases', label: 'Liberaciones' }, { key: 'supply', label: 'Abastecimiento' }, { key: 'kits', label: 'Kits' }, { key: 'assembly', label: 'Ejecución ensamble' }, { key: 'fat', label: 'FAT' }, { key: 'dispatch', label: 'Despacho' }, { key: 'site', label: 'Instalación / SAT' }, { key: 'handover', label: 'Entrega final' },
+    { key: 'bom', label: 'BOM' }, { key: 'releases', label: 'Liberaciones' }, { key: 'supply', label: 'Abastecimiento' }, { key: 'kits', label: 'Kits' }, { key: 'assembly', label: 'Ejecución ensamble' }, { key: 'fat', label: data.orderType === 'SPARE_PART' ? 'Calidad' : 'FAT' }, { key: 'dispatch', label: 'Despacho' }, ...(data.orderType === 'EQUIPMENT' ? equipmentOnlyTabs : []),
     { key: 'history', label: 'Historial' },
   ];
 
   return (
     <div className="p-4 md:p-6 max-w-7xl mx-auto space-y-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div><Link href="/manufacturing" className="text-sm text-gray-600 hover:underline">← Manufactura</Link><h1 className="text-2xl font-semibold mt-1">{data.number} · {data.projectName}</h1><p className="text-sm text-gray-600">{[data.productCode, data.productName, data.model].filter(Boolean).join(' · ')}</p></div>
+        <div><Link href="/manufacturing" className="text-sm text-gray-600 hover:underline">← Manufactura</Link><h1 className="text-2xl font-semibold mt-1">{data.number} · {data.projectName}</h1><p className="text-sm text-gray-600">{[data.productCode, data.productName, data.model].filter(Boolean).join(' · ')}</p>{data.orderType === 'SPARE_PART' ? <div className="mt-2 flex flex-wrap items-center gap-2 text-xs"><span className="rounded bg-violet-100 px-2 py-1 text-violet-800">OF de repuesto posventa</span>{data.fulfillingAfterSalesDemands?.map((demand) => <a key={demand.id} className="underline text-violet-700" href={`/service-orders/${demand.serviceOrderId}`}>OS · {demand.asset.code}</a>)}</div> : null}</div>
         <div className="flex flex-wrap items-center gap-2">
           <span className={`rounded-full px-3 py-1 text-sm ${manufacturingStatusClass[data.status]}`}>{manufacturingStatusLabel[data.status]}</span>
           {isAdmin && !['CANCELED', 'COMPLETED'].includes(data.status) ? data.status === 'ON_HOLD' ? <button disabled={busy} className="border rounded px-3 py-2 text-sm" onClick={() => orderAction('resume')}>Reanudar</button> : <button disabled={busy} className="border rounded px-3 py-2 text-sm" onClick={() => orderAction('hold')}>Pausar</button> : null}
@@ -93,11 +101,14 @@ export default function ManufacturingDetailPage() {
       {message ? <div className="border border-red-200 bg-red-50 text-red-700 rounded p-3 text-sm whitespace-pre-wrap">{message}</div> : null}
       {data.status === 'ON_HOLD' ? <div className="border border-amber-200 bg-amber-50 text-amber-900 rounded p-3 text-sm"><strong>Orden en pausa:</strong> {data.holdReason}</div> : null}
       {data.status === 'CANCELED' ? <div className="border border-red-200 bg-red-50 text-red-800 rounded p-3 text-sm"><strong>Orden cancelada:</strong> {data.canceledReason}</div> : null}
-      {data.status === 'COMPLETED' ? <div className="border border-violet-200 bg-violet-50 text-violet-900 rounded p-3 text-sm"><strong>Orden completada:</strong> todas las unidades fueron entregadas y transferidas a mantenimiento.</div> : null}
+      {data.status === 'COMPLETED' ? <div className="border border-violet-200 bg-violet-50 text-violet-900 rounded p-3 text-sm"><strong>Orden completada:</strong> {data.orderType === 'SPARE_PART' ? 'el lote de repuesto fue terminado y liberado.' : 'todas las unidades fueron entregadas y transferidas a mantenimiento.'}</div> : null}
 
       <div className="border-b overflow-x-auto"><div className="flex min-w-max">{tabs.map((item) => <button key={item.key} className={`px-4 py-2 text-sm border-b-2 ${tab === item.key ? 'border-black font-medium' : 'border-transparent text-gray-600'}`} onClick={() => setTab(item.key)}>{item.label}</button>)}</div></div>
 
-      {tab === 'summary' ? <Summary order={data} isAdmin={isAdmin} users={users || []} auth={auth} onSaved={(next) => mutate(next, { revalidate: false })} /> : null}
+      {tab === 'summary' ? <><ManufacturingControl auth={auth} orderId={id} /><Summary order={data} isAdmin={isAdmin} users={users || []} auth={auth} onSaved={(next) => mutate(next, { revalidate: false })} /></> : null}
+      {tab === 'summary' && isAdmin && data.orderType === 'SPARE_PART' && data.executionMode !== 'EXPEDITED' && data.status === 'DRAFT' ? <EnableQuickFlow order={data} auth={auth} onChanged={() => mutate()} /> : null}
+      {data.executionMode === 'EXPEDITED' && tab === 'summary' ? <button className="bg-violet-700 text-white px-4 py-2 rounded" onClick={() => setTab('quick')}>Abrir ejecución rápida: materiales, fabricación y calidad</button> : null}
+      {tab === 'quick' ? <ManufacturingQuickTab order={data} role={role} auth={auth} onChanged={() => mutate()} /> : null}
       {tab === 'units' ? <Units order={data} isAdmin={isAdmin} auth={auth} onSaved={(next) => mutate(next, { revalidate: false })} /> : null}
       {tab === 'members' ? <Members order={data} users={users || []} isAdmin={isAdmin} auth={auth} onSaved={(next) => mutate(next, { revalidate: false })} /> : null}
       {tab === 'engineering' ? <EngineeringDocumentsTab order={data} role={role} currentUserId={currentUserId} auth={auth} onChanged={() => mutate()} /> : null}
@@ -119,6 +130,8 @@ function Summary({ order, isAdmin, users, auth, onSaved }: { order: Manufacturin
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [warehouse, setWarehouse] = useState('Producto terminado');
+  const [binLocation, setBinLocation] = useState('');
   const [form, setForm] = useState(() => summaryForm(order));
   useEffect(() => setForm(summaryForm(order)), [order]);
   const field = (name: keyof ReturnType<typeof summaryForm>, value: string) => setForm((current) => ({ ...current, [name]: value }));
@@ -133,6 +146,20 @@ function Summary({ order, isAdmin, users, auth, onSaved }: { order: Manufacturin
       });
       await onSaved(next); setEditing(false);
     } catch (err: any) { setError(err?.message || 'No se pudieron guardar los cambios'); }
+    finally { setBusy(false); }
+  }
+
+  async function receiveSpareOutput() {
+    if (!auth.token || !auth.tenantSlug || !warehouse.trim()) return;
+    if (!window.confirm('¿Confirmar la entrada del saldo producido al inventario? Se validará ensamble y Calidad para todas las unidades.')) return;
+    setBusy(true); setError('');
+    try {
+      const next = await apiFetch<ManufacturingOrder>(`/manufacturing/orders/${order.id}/receive-spare-output`, {
+        method: 'POST', token: auth.token, tenantSlug: auth.tenantSlug,
+        body: { warehouse: warehouse.trim(), binLocation: binLocation.trim() || null },
+      });
+      await onSaved(next);
+    } catch (err: any) { setError(err?.message || 'No se pudo recibir el producto terminado'); }
     finally { setBusy(false); }
   }
 
@@ -156,7 +183,7 @@ function Summary({ order, isAdmin, users, auth, onSaved }: { order: Manufacturin
   return <div className="space-y-4"><div className="flex justify-between"><h2 className="text-lg font-semibold">Resumen de la orden</h2>{isAdmin && !['CANCELED', 'COMPLETED'].includes(order.status) ? <button className="border rounded px-3 py-2 text-sm" onClick={() => setEditing(true)}>Editar</button> : null}</div><div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
     <Info label="Cliente" value={order.customerName} sub={order.customerReference} /><Info label="Responsable" value={order.responsibleUser?.name} sub={order.responsibleUser?.email} /><Info label="Cantidad" value={String(order.quantity)} sub="unidades planificadas" /><Info label="Entrega solicitada" value={dateLabel(order.requestedDeliveryAt)} />
     <Info label="Inicio planificado" value={dateLabel(order.plannedStartAt)} /><Info label="Fin planificado" value={dateLabel(order.plannedEndAt)} /><Info label="Destino" value={order.destination} /><Info label="Referencia comercial" value={order.commercialReference} />
-  </div>{order.description ? <div className="border rounded-lg p-4"><div className="text-xs text-gray-500 mb-1">Descripción y alcance</div><p className="text-sm whitespace-pre-wrap">{order.description}</p></div> : null}</div>;
+  </div>{order.description ? <div className="border rounded-lg p-4"><div className="text-xs text-gray-500 mb-1">Descripción y alcance</div><p className="text-sm whitespace-pre-wrap">{order.description}</p></div> : null}{order.orderType === 'SPARE_PART' && order.executionMode !== 'EXPEDITED' ? <div className="rounded-lg border border-violet-200 bg-violet-50 p-4 space-y-3"><div><div className="font-semibold text-violet-950">Producto terminado</div><div className="text-sm text-violet-800">{order.outputInventoryItem ? `${order.outputInventoryItem.sku} — ${order.outputInventoryItem.name}` : 'Artículo no definido'} · Recibido {(order.outputReceipts || []).reduce((sum, receipt) => sum + Number(receipt.quantity), 0)}/{order.quantity}</div></div>{(order.outputReceipts || []).length ? <div className="space-y-1 text-xs text-violet-800">{order.outputReceipts?.map((receipt) => <div key={receipt.id}>{receipt.quantity} UND · {receipt.warehouseSnapshot}{receipt.binLocationSnapshot ? ` / ${receipt.binLocationSnapshot}` : ''} · {dateLabel(receipt.createdAt, true)}</div>)}</div> : null}{isAdmin && order.status !== 'COMPLETED' && order.status !== 'CANCELED' ? <div className="flex flex-wrap gap-2"><input className="rounded border bg-white px-3 py-2 text-sm" placeholder="Bodega" value={warehouse} onChange={(event) => setWarehouse(event.target.value)} /><input className="rounded border bg-white px-3 py-2 text-sm" placeholder="Ubicación (opcional)" value={binLocation} onChange={(event) => setBinLocation(event.target.value)} /><button type="button" className="rounded bg-violet-700 px-3 py-2 text-sm text-white disabled:opacity-50" disabled={busy || !warehouse.trim()} onClick={receiveSpareOutput}>{busy ? 'Validando…' : 'Recibir lote terminado'}</button></div> : null}<div className="text-xs text-violet-700">La entrada exige todas las unidades ensambladas y aprobadas en Calidad.</div></div> : null}</div>;
 }
 
 function Units({ order, isAdmin, auth, onSaved }: { order: ManufacturingOrder; isAdmin: boolean; auth: { token?: string; tenantSlug?: string }; onSaved: (order: ManufacturingOrder) => Promise<any> | any }) {

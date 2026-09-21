@@ -33,4 +33,4 @@ export class UpdateManufacturingFatDeviationDto {
   correctiveAction?: string | null;
   resolutionNotes?: string | null;
 }
-export class DecideManufacturingFatDto { lockVersion!: number; decision!: 'APPROVED' | 'REJECTED'; comments?: string | null; }
+export class DecideManufacturingFatDto { lockVersion!: number; decision!: 'APPROVED' | 'REJECTED'; comments?: string | null; approvalExceptionReason?: string; }

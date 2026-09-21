@@ -21,14 +21,16 @@ export default function ManufacturingPage() {
   const role = String((session as any)?.user?.role || '');
   const [q, setQ] = useState('');
   const [status, setStatus] = useState('');
+  const [orderType, setOrderType] = useState('');
   const [page, setPage] = useState(1);
 
   const path = useMemo(() => {
     const params = new URLSearchParams({ page: String(page), size: String(PAGE_SIZE) });
     if (q.trim()) params.set('q', q.trim());
     if (status) params.set('status', status);
+    if (orderType) params.set('orderType', orderType);
     return `/manufacturing/orders?${params.toString()}`;
-  }, [q, status, page]);
+  }, [q, status, orderType, page]);
   const { data, error, isLoading, mutate } = useApiSWR<Paginated<ManufacturingOrder>>(
     auth.token && auth.tenantSlug ? path : null,
     auth.token,
@@ -36,6 +38,7 @@ export default function ManufacturingPage() {
   );
 
   const items = data?.items || [];
+  const { data: quickMetrics, error: quickMetricsError } = useApiSWR<any>(role === 'ADMIN' ? '/manufacturing/quick-metrics' : null, auth.token, auth.tenantSlug);
   const counts = useMemo(() => ({
     visible: items.length,
     draft: items.filter((item) => item.status === 'DRAFT').length,
@@ -57,6 +60,8 @@ export default function ManufacturingPage() {
         {role === 'ADMIN' ? <Link href="/manufacturing/new" className="rounded px-4 py-2 bg-black text-white text-sm">Nueva orden</Link> : null}
       </div>
 
+      {quickMetricsError ? <p className="text-sm text-amber-800">No se pudieron cargar los indicadores de fabricación abreviada.</p> : null}
+      {quickMetrics?.orders > 0 ? <div className="border border-violet-200 bg-violet-50 rounded-lg p-3 text-sm"><strong>Fabricación abreviada:</strong> {quickMetrics.orders} OF · {quickMetrics.completed} completadas · Ciclo promedio: {quickMetrics.averageCycleHours == null ? 'pendiente' : `${quickMetrics.averageCycleHours.toFixed(1)} h`}{quickMetrics.currencies.map((c: any) => <p key={c.currency}>Costo registrado: {c.total.toLocaleString('es-CO', { maximumFractionDigits: 2 })} {c.currency} · Garantías aprobadas: {c.warranty.toLocaleString('es-CO', { maximumFractionDigits: 2 })} {c.currency}{c.incompleteOrders ? ` · ${c.incompleteOrders} OF con costos incompletos` : ''}</p>)}</div> : null}
       <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
         <Stat label="En página" value={counts.visible} />
         <Stat label="Borrador" value={counts.draft} />
@@ -67,6 +72,7 @@ export default function ManufacturingPage() {
       </div>
 
       <div className="border rounded-lg p-3 flex flex-wrap gap-3">
+        <Link href="/manufacturing/control" className="rounded border px-3 py-2 text-sm font-medium">Abrir control operativo</Link>
         <input
           className="border rounded px-3 py-2 text-sm flex-1 min-w-64"
           placeholder="Buscar OF, proyecto, producto, modelo o cliente…"
@@ -81,6 +87,9 @@ export default function ManufacturingPage() {
           <option value="COMPLETED">Completada</option>
           <option value="ON_HOLD">En pausa</option>
           <option value="CANCELED">Cancelada</option>
+        </select>
+        <select className="border rounded px-3 py-2 text-sm" value={orderType} onChange={(event) => { setOrderType(event.target.value); setPage(1); }}>
+          <option value="">Todos los tipos</option><option value="EQUIPMENT">Equipos</option><option value="SPARE_PART">Repuestos posventa</option><option value="REWORK">Reprocesos</option><option value="PROTOTYPE">Prototipos</option>
         </select>
         <button type="button" className="border rounded px-3 py-2 text-sm" onClick={() => mutate()}>Actualizar</button>
       </div>
@@ -107,11 +116,11 @@ export default function ManufacturingPage() {
             <tbody>
               {items.map((item) => (
                 <tr key={item.id} className="border-t hover:bg-gray-50">
-                  <td className="px-3 py-3"><Link href={`/manufacturing/${item.id}`} className="font-semibold hover:underline">{item.number}</Link></td>
+                  <td className="px-3 py-3"><Link href={`/manufacturing/${item.id}`} className="font-semibold hover:underline">{item.number}</Link>{item.orderType === 'SPARE_PART' ? <div className="mt-1"><span className="rounded bg-violet-100 px-2 py-0.5 text-xs text-violet-800">Repuesto posventa</span></div> : null}</td>
                   <td className="px-3 py-3"><div className="font-medium">{item.projectName}</div><div className="text-xs text-gray-500">{[item.productCode, item.productName, item.model].filter(Boolean).join(' · ')}</div></td>
                   <td className="px-3 py-3"><div>{item.customerName || '—'}</div><div className="text-xs text-gray-500">{item.customerReference || ''}</div></td>
                   <td className="px-3 py-3">{item.metrics.unitCount}</td>
-                  <td className="px-3 py-3"><div>{item.metrics.engineeringApprovedCount}/{item.metrics.engineeringDocumentCount} aprobados</div>{item.metrics.currentEngineeringReleaseCode ? <div className="text-xs text-emerald-700">{item.metrics.currentEngineeringReleaseCode} vigente</div> : item.metrics.pendingEngineeringChanges ? <div className="text-xs text-amber-700">Cambios pendientes</div> : <div className="text-xs text-gray-500">Sin liberar</div>}</td>
+                  <td className="px-3 py-3">{item.executionMode === 'EXPEDITED' ? <span className="text-violet-700">Receta aprobada · flujo abreviado</span> : <><div>{item.metrics.engineeringApprovedCount}/{item.metrics.engineeringDocumentCount} aprobados</div>{item.metrics.currentEngineeringReleaseCode ? <div className="text-xs text-emerald-700">{item.metrics.currentEngineeringReleaseCode} vigente</div> : item.metrics.pendingEngineeringChanges ? <div className="text-xs text-amber-700">Cambios pendientes</div> : <div className="text-xs text-gray-500">Sin liberar</div>}</>}</td>
                   <td className="px-3 py-3">{dateLabel(item.requestedDeliveryAt)}</td>
                   <td className="px-3 py-3">{item.responsibleUser?.name || '—'}</td>
                   <td className="px-3 py-3"><span className={`rounded-full px-2 py-1 text-xs ${manufacturingStatusClass[item.status]}`}>{manufacturingStatusLabel[item.status]}</span></td>

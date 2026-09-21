@@ -82,6 +82,7 @@ export class ManufacturingHandoverService {
       const document = await tx.manufacturingHandoverDocument.findFirst({ where: { id: documentId, tenantId }, include: { handover: { include: { manufacturingOrder: { include: { members: { where: { userId: actor.id } } } } } } } });
       if (!document) throw new NotFoundException('Documento de entrega no encontrado'); orderId = document.handover.manufacturingOrderId; this.visible(document.handover.manufacturingOrder, actor);
       if (document.handover.status !== 'DRAFT') throw new ConflictException('El expediente ya no admite cambios documentales'); this.version(document, dto?.lockVersion);
+      if (['CANCELED', 'ON_HOLD', 'COMPLETED'].includes(document.handover.manufacturingOrder.status)) throw new ConflictException('La orden no admite cambios documentales');
       const status = String(dto?.status || '').toUpperCase(); if (!['PENDING', 'PROVIDED', 'WAIVED'].includes(status)) throw new BadRequestException('Estado documental inválido');
       if (status === 'WAIVED') this.requireAdmin(actor);
       const reference = this.text(dto?.reference); const url = this.text(dto?.url); const waiverReason = this.text(dto?.waiverReason);
@@ -123,6 +124,7 @@ export class ManufacturingHandoverService {
       if (handover.satExecution.status !== 'ACCEPTED' || handover.satExecution.deviations.some((item: any) => ['OPEN', 'IN_REWORK'].includes(item.status))) throw new ConflictException('El SAT tiene pendientes o dejó de estar aceptado');
       const pending = handover.documents.filter((item: any) => item.required && item.status === 'PENDING'); if (pending.length) throw new ConflictException(`Faltan ${pending.length} documentos obligatorios`);
       if (handover.trainingRequired && !handover.trainings.length) throw new ConflictException('Registra la capacitación al cliente');
+      if (!handover.spares.length && handover.documents.some((doc: any) => doc.documentType === 'SPARE_PARTS_LIST' && doc.status === 'PROVIDED' && !doc.url && doc.reference === 'Listado de repuestos registrado en CMMS')) throw new ConflictException('El listado de repuestos registrado está vacío');
       await tx.manufacturingHandover.update({ where: { id: handover.id }, data: { status: 'READY_FOR_DELIVERY', readyAt: new Date(), lockVersion: { increment: 1 } } });
       await this.audit(tx, handover.tenantId, handover.manufacturingOrderId, handover.id, 'MANUFACTURING_HANDOVER_READY', `${handover.handoverCode}: expediente listo para entrega`, actor, {});
     });
@@ -144,7 +146,33 @@ export class ManufacturingHandoverService {
 
   private async command(handoverId: string, handler: (tx: any, handover: any, actor: Actor) => Promise<void>) { const { tenantId, userId } = this.context(); let orderId = ''; await this.prisma.$transaction(async (tx: any) => { const actor = await this.actor(tx, tenantId, userId); await tx.$queryRaw`SELECT "id" FROM "ManufacturingHandover" WHERE "id" = ${handoverId} FOR UPDATE`; const handover = await tx.manufacturingHandover.findFirst({ where: { id: handoverId, tenantId }, include: { ...this.include(), manufacturingOrder: { include: { members: { where: { userId: actor.id } } } } } }); if (!handover) throw new NotFoundException('Expediente de entrega no encontrado'); orderId = handover.manufacturingOrderId; this.visible(handover.manufacturingOrder, actor); if (['CANCELED', 'ON_HOLD', 'COMPLETED'].includes(handover.manufacturingOrder.status)) throw new ConflictException('La orden no permite gestionar el expediente'); await handler(tx, handover, actor); await tx.manufacturingOrder.update({ where: { id: orderId }, data: { version: { increment: 1 } } }); }, { isolationLevel: 'Serializable' }); return this.list(orderId); }
   private visible(order: any, actor: Actor) { if (actor.role === 'TECH' && order.responsibleUserId !== actor.id && !order.members?.length) throw new NotFoundException('Expediente de entrega no encontrado'); }
-  private async removeChild(model: 'manufacturingHandoverTraining' | 'manufacturingHandoverSpare', id: string, label: string) { const { tenantId, userId } = this.context(); let orderId = ''; await this.prisma.$transaction(async (tx: any) => { const actor = await this.actor(tx, tenantId, userId); const row = await tx[model].findFirst({ where: { id, tenantId }, include: { handover: { include: { manufacturingOrder: { include: { members: { where: { userId: actor.id } } } } } } } }); if (!row) throw new NotFoundException(`${label} no encontrado`); orderId = row.handover.manufacturingOrderId; this.visible(row.handover.manufacturingOrder, actor); if (row.handover.status !== 'DRAFT') throw new ConflictException('El expediente ya no admite cambios'); await tx[model].delete({ where: { id } }); await this.audit(tx, tenantId, orderId, id, 'MANUFACTURING_HANDOVER_ITEM_REMOVED', `${row.handover.handoverCode}: ${label} eliminado`, actor, {}); await tx.manufacturingOrder.update({ where: { id: orderId }, data: { version: { increment: 1 } } }); }, { isolationLevel: 'Serializable' }); return this.list(orderId); }
+  private async removeChild(model: 'manufacturingHandoverTraining' | 'manufacturingHandoverSpare', id: string, label: string) {
+    const { tenantId } = this.context();
+    const row = await (this.prisma as any)[model].findFirst({ where: { id, tenantId }, select: { handoverId: true } });
+    if (!row) throw new NotFoundException(`${label} no encontrado`);
+    return this.command(row.handoverId, async (tx, handover, actor) => {
+      if (handover.status !== 'DRAFT') throw new ConflictException('El expediente ya no admite cambios');
+      const item = await tx[model].findFirst({ where: { id, tenantId, handoverId: handover.id } });
+      if (!item) throw new NotFoundException(`${label} no encontrado`);
+      await tx[model].delete({ where: { id } });
+      const training = model === 'manufacturingHandoverTraining';
+      const remaining = await tx[model].findMany({ where: { tenantId, handoverId: handover.id }, orderBy: { createdAt: 'desc' } });
+      const documentType = training ? 'TRAINING_RECORD' : 'SPARE_PARTS_LIST';
+      const automaticReference = training ? item.evidenceReference : 'Listado de repuestos registrado en CMMS';
+      // Preserve explicitly uploaded/external documents; only invalidate our generated reference.
+      const document = handover.documents.find((doc: any) => doc.documentType === documentType);
+      if (document?.status === 'PROVIDED' && !document.url && document.reference === automaticReference) {
+        const reference = remaining.length ? (training ? remaining[0].evidenceReference : automaticReference) : null;
+        await tx.manufacturingHandoverDocument.update({ where: { id: document.id }, data: {
+          status: reference ? 'PROVIDED' : 'PENDING', reference,
+          providedAt: reference ? document.providedAt : null,
+          providedByUserId: reference ? document.providedByUserId : null,
+          providedByName: reference ? document.providedByName : null, lockVersion: { increment: 1 },
+        } });
+      }
+      await this.audit(tx, tenantId, handover.manufacturingOrderId, id, 'MANUFACTURING_HANDOVER_ITEM_REMOVED', `${handover.handoverCode}: ${label} eliminado`, actor, { previous: item, remainingCount: remaining.length });
+    });
+  }
   private serialize(row: any) { const documents = row.documents || []; return { ...row, trainings: (row.trainings || []).map((item: any) => ({ ...item, durationHours: Number(item.durationHours) })), spares: (row.spares || []).map((item: any) => ({ ...item, quantity: Number(item.quantity), recommendedStock: item.recommendedStock === null ? null : Number(item.recommendedStock) })), summary: { documentCount: documents.length, providedCount: documents.filter((item: any) => item.status === 'PROVIDED').length, waivedCount: documents.filter((item: any) => item.status === 'WAIVED').length, pendingRequiredCount: documents.filter((item: any) => item.required && item.status === 'PENDING').length, trainingComplete: !row.trainingRequired || !!row.trainings?.length, spareCount: row.spares?.length || 0, progressPercent: documents.length ? Math.round(documents.filter((item: any) => item.status !== 'PENDING').length * 100 / documents.length) : 0, transferredToMaintenance: !!row.asset?.maintenanceTransferredAt } }; }
   private async audit(tx: any, tenantId: string, orderId: string, entityId: string, action: string, summary: string, actor: Actor, afterData: unknown) { await tx.manufacturingAuditEvent.create({ data: { tenantId, manufacturingOrderId: orderId, entityType: action.includes('DOCUMENT') ? 'ManufacturingHandoverDocument' : action.includes('TRAINING') ? 'ManufacturingHandoverTraining' : action.includes('SPARE') ? 'ManufacturingHandoverSpare' : action.includes('ACCEPTED') ? 'ManufacturingHandoverAcceptance' : 'ManufacturingHandover', entityId, action, summary, actorUserId: actor.id, actorName: actor.name, afterData: JSON.parse(JSON.stringify(afterData)) } }); }
 }

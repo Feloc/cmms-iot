@@ -17,6 +17,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: '/calendar', label: 'Calendario' },
   { href: '/service-orders', label: 'Órdenes de servicio' },
   { href: '/manufacturing', label: 'Manufactura' },
+  { href: '/engineering-requests', label: 'Ingeniería' },
   { href: '/assemblies', label: 'Montajes' },
   { href: '/assets', label: 'Activos' },
   { href: '/inventory', label: 'Inventario', adminOnly: true },

@@ -30,6 +30,7 @@ import * as XLSX from 'xlsx';
 import { InventoryLedgerService } from '../inventory/inventory-ledger.service';
 import { TelegramNotifierService } from '../notifications/telegram-notifier.service';
 import { ServiceOrderCarryoverService } from './service-order-carryover.service';
+import { directInstallationQuantity } from '../manufacturing/manufacturing-quick.domain';
 
 type Unit = 'DAY' | 'MONTH' | 'YEAR';
 type CommercialStatusNotification = {
@@ -4578,6 +4579,21 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
   }
 
 
+  private async syncAfterSalesDemandInstallation(tx: any, demand: any, installedQuantity: number, actorUserId: string) {
+    const installed = Math.min(Number(demand.requestedQuantity), Number(demand.installedQuantity) + installedQuantity);
+    const fulfilled = Math.max(Number(demand.fulfilledQuantity), installed);
+    await tx.afterSalesPartDemand.update({
+      where: { id: demand.id },
+      data: {
+        fulfilledQuantity: fulfilled,
+        installedQuantity: installed,
+        status: installed >= Number(demand.requestedQuantity) ? 'FULFILLED' : 'PARTIALLY_FULFILLED',
+        updatedByUserId: actorUserId,
+        lockVersion: { increment: 1 },
+      },
+    });
+  }
+
   /**
    * Marca un repuesto (línea ServiceOrderPart) como "cambiado" (REPLACED) con manejo pro de cantidades:
    * - Si qtyReplaced == qty => convierte la línea a REPLACED.
@@ -4604,6 +4620,7 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
       const isAssignedTech = role === 'TECH' ? await this.isActiveTechnicianAssignment(tx, tenantId, id, actorUserId) : false;
       if (!isAdmin && !isAssignedTech) throw new ForbiddenException('Not allowed');
 
+      await tx.$queryRaw`SELECT "id" FROM "ServiceOrderPart" WHERE "id" = ${partId} AND "tenantId" = ${tenantId} FOR UPDATE`;
       const part = await tx.serviceOrderPart.findFirst({
         where: { id: partId, tenantId, workOrderId: id },
       });
@@ -4617,6 +4634,28 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
       if (qtyReplaced > curQty) throw new BadRequestException('qtyReplaced cannot exceed current qty');
 
       const now = new Date();
+      let afterSalesDemand: any = null;
+      let demandSourcePart: string | null = partId;
+      const visitedDemandParts = new Set<string>();
+      while (demandSourcePart && !afterSalesDemand) {
+        if (visitedDemandParts.has(demandSourcePart)) throw new ConflictException('Relación circular entre repuestos');
+        visitedDemandParts.add(demandSourcePart);
+        await tx.$queryRaw`SELECT "id" FROM "AfterSalesPartDemand" WHERE "tenantId" = ${tenantId} AND "serviceOrderPartId" = ${demandSourcePart} FOR UPDATE`;
+        afterSalesDemand = await (tx as any).afterSalesPartDemand.findFirst({
+          where: { tenantId, serviceOrderPartId: demandSourcePart, status: { not: 'CANCELED' } },
+          include: { manufacturingOrder: { select: { executionMode: true } } },
+        });
+        if (!afterSalesDemand) {
+          const source: { sourceServiceOrderPartId: string | null } | null = await tx.serviceOrderPart.findFirst({ where: { id: demandSourcePart, tenantId }, select: { sourceServiceOrderPartId: true } });
+          demandSourcePart = source?.sourceServiceOrderPartId || null;
+        }
+      }
+      let directIssuedQuantity = 0;
+      if (afterSalesDemand?.manufacturingOrder?.executionMode === 'EXPEDITED') {
+        if (qtyReplaced > Number(afterSalesDemand.fulfilledQuantity) - Number(afterSalesDemand.installedQuantity)) throw new ConflictException('Recibe primero las piezas aprobadas desde la OF abreviada');
+        const directInstalled = await tx.serviceOrderPart.aggregate({ where: { tenantId, installedFromAfterSalesDemandId: afterSalesDemand.id, stage: 'REPLACED' }, _sum: { directIssuedQuantity: true } });
+        directIssuedQuantity = directInstallationQuantity(qtyReplaced, Number(afterSalesDemand.directDeliveredQuantity), Number(directInstalled._sum.directIssuedQuantity || 0));
+      }
 
       // Copiamos campos para la nueva línea (si aplica)
       const baseData: any = {
@@ -4627,6 +4666,8 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
         notes: (part as any).notes ?? undefined,
         sourceServiceOrderId: (part as any).sourceServiceOrderId ?? undefined,
         sourceServiceOrderPartId: (part as any).sourceServiceOrderPartId ?? undefined,
+        installedFromAfterSalesDemandId: afterSalesDemand?.id ?? undefined,
+        directIssuedQuantity,
       };
 
       if (qtyReplaced === curQty) {
@@ -4636,15 +4677,17 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
             stage: 'REPLACED' as any,
             replacedAt: now,
             replacedByUserId: actorUserId,
+            installedFromAfterSalesDemandId: afterSalesDemand?.id ?? undefined,
+            directIssuedQuantity,
           } as any,
           include: { inventoryItem: true },
         });
 
-        if (updated.inventoryItemId) {
+        if (updated.inventoryItemId && qtyReplaced > directIssuedQuantity) {
           await this.inventoryLedger.consumeInventory(tx, {
             tenantId,
             inventoryItemId: updated.inventoryItemId,
-            qty: qtyReplaced,
+            qty: qtyReplaced - directIssuedQuantity,
             source: 'SERVICE_ORDER',
             referenceType: 'SERVICE_ORDER_PART',
             referenceId: updated.id,
@@ -4653,6 +4696,8 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
             createdByUserId: actorUserId,
           });
         }
+
+        if (afterSalesDemand) await this.syncAfterSalesDemandInstallation(tx, afterSalesDemand, qtyReplaced, actorUserId);
 
         const linkedSourceSync = await this.syncSourcePartReplacement(tx, {
           tenantId,
@@ -4694,11 +4739,11 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
         include: { inventoryItem: true },
       });
 
-      if (created.inventoryItemId) {
+      if (created.inventoryItemId && qtyReplaced > directIssuedQuantity) {
         await this.inventoryLedger.consumeInventory(tx, {
           tenantId,
           inventoryItemId: created.inventoryItemId,
-          qty: qtyReplaced,
+          qty: qtyReplaced - directIssuedQuantity,
           source: 'SERVICE_ORDER',
           referenceType: 'SERVICE_ORDER_PART',
           referenceId: created.id,
@@ -4707,6 +4752,8 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
           createdByUserId: actorUserId,
         });
       }
+
+      if (afterSalesDemand) await this.syncAfterSalesDemandInstallation(tx, afterSalesDemand, qtyReplaced, actorUserId);
 
       const linkedSourceSync = await this.syncSourcePartReplacement(tx, {
         tenantId,
@@ -4736,6 +4783,7 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
     const actorUserId = this.getUserId();
 
     return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT "id" FROM "ServiceOrderPart" WHERE "id" = ${partId} AND "tenantId" = ${tenantId} FOR UPDATE`;
       const part = await tx.serviceOrderPart.findFirst({ where: { id: partId, tenantId, workOrderId: id } });
       if (!part) throw new NotFoundException('Part not found');
 
@@ -4752,6 +4800,11 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
       });
       if (delegatedChild) {
         throw new ConflictException(`El repuesto está delegado a la OS ${delegatedChild.workOrderId} y no se puede eliminar desde su origen`);
+      }
+
+      const sourceDemand = await (tx as any).afterSalesPartDemand.findFirst({ where: { tenantId, serviceOrderPartId: partId }, select: { id: true } });
+      if (sourceDemand) {
+        throw new ConflictException('El repuesto conserva trazabilidad en una demanda posventa y no se puede eliminar');
       }
 
       if (part.inventoryItemId && String((part as any).stage || 'REQUIRED') === 'REPLACED') {
@@ -4773,6 +4826,25 @@ async setTimestamps(id: string, dto: ServiceOrderTimestampsDto) {
           replacementServiceOrderId: id,
           replacementServiceOrderPartId: partId,
         });
+      }
+
+
+      if ((part as any).installedFromAfterSalesDemandId) {
+        await tx.$queryRaw`SELECT "id" FROM "AfterSalesPartDemand" WHERE "id" = ${(part as any).installedFromAfterSalesDemandId} AND "tenantId" = ${tenantId} FOR UPDATE`;
+        const demand = await (tx as any).afterSalesPartDemand.findFirst({ where: { id: (part as any).installedFromAfterSalesDemandId, tenantId } });
+        if (demand) {
+          if (!part.sourceServiceOrderPartId && demand.serviceOrderPartId !== part.id) {
+            const source = await tx.serviceOrderPart.findFirst({ where: { id: demand.serviceOrderPartId, tenantId } });
+            if (!source || source.stage !== 'REQUIRED') throw new ConflictException('La línea origen ya fue completada; la corrección requiere revisar la demanda completa');
+            await tx.serviceOrderPart.update({ where: { id: source.id }, data: { qty: { increment: part.qty } } });
+          }
+          const installed = Math.max(0, Number(demand.installedQuantity) - Number((part as any).qty));
+          const fulfilled = Number(demand.fulfilledQuantity);
+          await (tx as any).afterSalesPartDemand.update({
+            where: { id: demand.id },
+            data: { installedQuantity: installed, status: installed > 0 ? 'PARTIALLY_FULFILLED' : fulfilled >= Number(demand.requestedQuantity) ? 'READY' : fulfilled > 0 ? 'PARTIALLY_FULFILLED' : 'SOURCING', updatedByUserId: actorUserId, lockVersion: { increment: 1 } },
+          });
+        }
       }
 
       const photoPath = await this.findPartPhotoPath(tenantId, id, partId);

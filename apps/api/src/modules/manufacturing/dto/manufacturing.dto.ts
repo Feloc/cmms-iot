@@ -54,3 +54,11 @@ export class UpdateManufacturedUnitDto {
   internalCode?: string | null;
   status?: 'PLANNED' | 'CANCELED';
 }
+
+export class ReceiveSparePartOutputDto {
+  quantity?: number;
+  warehouse!: string;
+  binLocation?: string | null;
+  reference?: string | null;
+  notes?: string | null;
+}

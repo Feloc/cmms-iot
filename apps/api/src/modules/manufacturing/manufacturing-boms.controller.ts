@@ -1,3 +1,6 @@
+import { UseGuards, UsePipes } from '@nestjs/common';
+import { ManufacturingAccessGuard } from './manufacturing-access.guard';
+import { ManufacturingValidationPipe } from './manufacturing-validation.pipe';
 import { BadRequestException, Body, Controller, Get, Param, Post, Put, UploadedFile, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
@@ -12,6 +15,8 @@ import { CommitManufacturingBomImportDto, CreateManufacturingBomDto, CreateManuf
 const TMP_DIR = process.env.MANUFACTURING_IMPORT_TMP || path.resolve('./storage/tmp/manufacturing-bom-imports');
 fs.mkdirSync(TMP_DIR, { recursive: true });
 
+@UseGuards(ManufacturingAccessGuard)
+@UsePipes(ManufacturingValidationPipe)
 @Controller('manufacturing')
 export class ManufacturingBomsController {
   constructor(private readonly service: ManufacturingBomsService, private readonly imports: ManufacturingBomImportService) {}

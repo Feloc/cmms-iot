@@ -1,4 +1,5 @@
 export type ManufacturingOrderStatus = 'DRAFT' | 'ENGINEERING' | 'RELEASED' | 'COMPLETED' | 'ON_HOLD' | 'CANCELED';
+export type ManufacturingOrderType = 'EQUIPMENT' | 'SPARE_PART' | 'REWORK' | 'PROTOTYPE';
 export type ManufacturingMemberFunction = 'RESPONSIBLE' | 'ENGINEERING' | 'REVIEWER' | 'OBSERVER';
 export type EngineeringDiscipline = 'MECHANICAL' | 'ELECTRICAL' | 'PNEUMATIC' | 'HYDRAULIC' | 'AUTOMATION' | 'SOFTWARE' | 'QUALITY' | 'GENERAL';
 export type EngineeringDocumentType = 'DRAWING' | 'SCHEMATIC' | 'SPECIFICATION' | 'DATASHEET' | 'PROGRAM' | 'MANUAL' | 'CALCULATION' | 'PROCEDURE' | 'OTHER';
@@ -75,6 +76,8 @@ export type ManufacturingMetrics = {
 export type ManufacturingOrder = {
   id: string;
   number: string;
+  orderType: ManufacturingOrderType;
+  executionMode?: 'STANDARD' | 'EXPEDITED';
   status: ManufacturingOrderStatus;
   statusBeforeHold?: ManufacturingOrderStatus | null;
   version: number;
@@ -99,6 +102,10 @@ export type ManufacturingOrder = {
   canceledReason?: string | null;
   releasedAt?: string | null;
   completedAt?: string | null;
+  outputInventoryItemId?: string | null;
+  outputInventoryItem?: { id: string; sku: string; name: string; uom: string } | null;
+  fulfillingAfterSalesDemands?: Array<{ id: string; serviceOrderId: string; serviceOrderPartId: string; asset: { id: string; code: string; name: string } }>;
+  outputReceipts?: Array<{ id: string; quantity: number; warehouseSnapshot: string; binLocationSnapshot?: string | null; reference?: string | null; createdByName: string; createdAt: string }>;
   createdAt: string;
   updatedAt: string;
   units?: ManufacturedUnit[];

@@ -1,7 +1,12 @@
+import { UseGuards, UsePipes } from '@nestjs/common';
+import { ManufacturingAccessGuard } from './manufacturing-access.guard';
+import { ManufacturingValidationPipe } from './manufacturing-validation.pipe';
 import { Body, Controller, Get, Param, Post, Patch, Query } from '@nestjs/common';
 import { ManufacturingFatService } from './manufacturing-fat.service';
 import { CreateManufacturingFatEvidenceDto, CreateManufacturingFatExecutionDto, CreateManufacturingFatTemplateDto, DecideManufacturingFatDto, ManufacturingFatVersionDto, RecordManufacturingFatCaseDto, UpdateManufacturingFatDeviationDto } from './dto/manufacturing-fat.dto';
 
+@UseGuards(ManufacturingAccessGuard)
+@UsePipes(ManufacturingValidationPipe)
 @Controller('manufacturing')
 export class ManufacturingFatController {
   constructor(private readonly service: ManufacturingFatService) {}

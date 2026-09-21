@@ -63,7 +63,8 @@ export default function NoticeDetailPage() {
     <div className="p-6 space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">{notice.title}</h1>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
+          {['ADMIN','TECH'].includes((session as any)?.user?.role || '') && <Link href={'/engineering-requests?new=1&noticeId=' + notice.id} className="px-3 py-2 border rounded">Solicitar reforma o mejora</Link>}
           <Link href={`/notices/${notice.id}/edit`} className="px-3 py-2 border rounded">
             Editar
           </Link>

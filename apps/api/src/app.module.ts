@@ -22,6 +22,7 @@ import { GoalsModule } from './modules/goals/goals.module';
 import { AppController } from './app.controller';
 import { AssembliesModule } from './modules/assemblies/assemblies.module';
 import { ManufacturingModule } from './modules/manufacturing/manufacturing.module';
+import { EngineeringModule } from './modules/engineering/engineering.module';
 
 
 @Module({
@@ -49,6 +50,7 @@ import { ManufacturingModule } from './modules/manufacturing/manufacturing.modul
     GoalsModule,
     AssembliesModule,
     ManufacturingModule,
+    EngineeringModule,
   ],
 })
 export class AppModule {}

@@ -5,6 +5,9 @@ import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { useSession } from 'next-auth/react';
 import { apiBase, apiFetch } from '@/lib/api';
 import { getAuthFromSession } from '@/lib/auth';
+import { PackagePlus } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import StockReceiptDialog from './StockReceiptDialog';
 
 type PartType = 'PART' | 'ASSEMBLY' | 'KIT' | 'CONSUMABLE';
 type PartStatus = 'ACTIVE' | 'OBSOLETE' | 'DISCONTINUED';
@@ -70,7 +73,7 @@ type InventoryStock = {
 type InventoryMovement = {
   id: string;
   movementType: 'ENTRY' | 'EXIT' | 'ADJUSTMENT' | 'RESERVATION' | 'RELEASE' | 'CONSUMPTION' | 'RETURN' | 'TRANSFER_IN' | 'TRANSFER_OUT';
-  source: 'MANUAL' | 'IMPORT' | 'WORK_ORDER' | 'SERVICE_ORDER' | 'ADJUSTMENT' | 'SYSTEM';
+  source: 'MANUAL' | 'IMPORT' | 'WORK_ORDER' | 'SERVICE_ORDER' | 'MANUFACTURING' | 'ADJUSTMENT' | 'SYSTEM';
   qty: number;
   stockDelta: number;
   balanceAfter?: number | null;
@@ -414,6 +417,7 @@ function movementTypeClass(value: InventoryMovement['movementType']) {
 }
 
 function movementSourceLabel(value: InventoryMovement['source']) {
+  if (value === 'MANUFACTURING') return 'Manufactura';
   switch (value) {
     case 'WORK_ORDER':
       return 'OT';
@@ -443,6 +447,8 @@ export default function InventoryPage() {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string>('');
   const [query, setQuery] = useState('');
+  const [receiptItem, setReceiptItem] = useState<InventoryItem | null>(null);
+  const [receiptMessage, setReceiptMessage] = useState('');
 
   const [form, setForm] = useState<InventoryFormState>(() => createEmptyForm());
   const [applicabilityDraft, setApplicabilityDraft] = useState<InventoryApplicability>(() => createEmptyApplicability());
@@ -724,6 +730,10 @@ export default function InventoryPage() {
 
   return (
     <div className="p-6 space-y-4">
+      {receiptMessage && <p role="status" className="text-sm text-emerald-700">{receiptMessage}</p>}
+      {receiptItem && <StockReceiptDialog key={receiptItem.id} item={receiptItem} auth={auth}
+        onClose={() => setReceiptItem(null)}
+        onReceived={async () => { setReceiptMessage('Ingreso de stock registrado correctamente.'); await loadItems(query); }} />}
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>
           <h1 className="text-xl font-semibold">Catalogo de repuestos</h1>
@@ -1479,6 +1489,8 @@ export default function InventoryPage() {
                   </td>
                   <td className="p-2 border-b">
                     <div>{fmtDate(item.updatedAt)}</div>
+                    <Button type="button" variant="outline" size="sm" className="my-2" onClick={() => { setReceiptMessage(''); setReceiptItem(item); }}><PackagePlus />Ingresar stock</Button>
+                    <Link className="text-violet-700 underline text-sm" href={`/inventory/${item.id}/manufacturing`}>Perfil de fabricación</Link>
                     {item.notes ? <div className="text-xs text-gray-500 mt-1 whitespace-pre-wrap">{item.notes}</div> : null}
                   </td>
                 </tr>
@@ -1492,7 +1504,7 @@ export default function InventoryPage() {
         <div className="p-4 border-b bg-gray-50">
           <h2 className="font-semibold">Ultimos movimientos de inventario</h2>
           <p className="text-sm text-gray-600">
-            Kardex base de consumos y devoluciones registrados automaticamente desde OT y OS.
+            Ingresos de stock, consumos y devoluciones.
           </p>
         </div>
         <table className="min-w-[1120px] w-full text-sm">

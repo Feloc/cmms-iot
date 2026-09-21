@@ -58,6 +58,7 @@ export class ManufacturingBomsService {
   }
 
   private mutableOrder(order: any) {
+    if (order.executionMode === 'EXPEDITED') throw new ConflictException('La OF abreviada utiliza la receta aprobada; gestiona el lote en Ejecución rápida');
     if (['CANCELED', 'COMPLETED'].includes(order.status)) throw new ConflictException('La orden está cerrada');
     if (order.status === 'ON_HOLD') throw new ConflictException('La orden está en pausa');
   }

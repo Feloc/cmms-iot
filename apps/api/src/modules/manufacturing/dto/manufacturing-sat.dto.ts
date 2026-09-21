@@ -38,6 +38,7 @@ export class UpdateManufacturingSatDeviationDto {
   dueAt?: string | Date | null;
 }
 export class DecideManufacturingSatDto {
+  approvalExceptionReason?: string;
   lockVersion!: number;
   decision!: 'ACCEPTED' | 'ACCEPTED_WITH_PENDING_ITEMS' | 'REJECTED';
   comments?: string | null;

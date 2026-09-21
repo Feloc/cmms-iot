@@ -1,3 +1,6 @@
+import { UseGuards, UsePipes } from '@nestjs/common';
+import { ManufacturingAccessGuard } from './manufacturing-access.guard';
+import { ManufacturingValidationPipe } from './manufacturing-validation.pipe';
 import {
   BadRequestException,
   Body,
@@ -26,6 +29,8 @@ import { ManufacturingDocumentsService } from './manufacturing-documents.service
 const STORAGE_DIR = process.env.ATTACHMENTS_DIR || path.resolve('./storage/attachments');
 fs.mkdirSync(STORAGE_DIR, { recursive: true });
 
+@UseGuards(ManufacturingAccessGuard)
+@UsePipes(ManufacturingValidationPipe)
 @Controller('manufacturing')
 export class ManufacturingDocumentsController {
   constructor(private readonly service: ManufacturingDocumentsService) {}

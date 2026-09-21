@@ -1,3 +1,6 @@
+import { UseGuards, UsePipes } from '@nestjs/common';
+import { ManufacturingAccessGuard } from './manufacturing-access.guard';
+import { ManufacturingValidationPipe } from './manufacturing-validation.pipe';
 import { Body, Controller, Delete, Get, Param, Patch, Post } from '@nestjs/common';
 import { ManufacturingHandoverService } from './manufacturing-handover.service';
 import {
@@ -9,6 +12,8 @@ import {
   UpdateManufacturingHandoverDocumentDto,
 } from './dto/manufacturing-handover.dto';
 
+@UseGuards(ManufacturingAccessGuard)
+@UsePipes(ManufacturingValidationPipe)
 @Controller('manufacturing')
 export class ManufacturingHandoverController {
   constructor(private readonly service: ManufacturingHandoverService) {}

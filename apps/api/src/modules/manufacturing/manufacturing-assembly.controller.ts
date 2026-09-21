@@ -1,7 +1,12 @@
+import { UseGuards, UsePipes } from '@nestjs/common';
+import { ManufacturingAccessGuard } from './manufacturing-access.guard';
+import { ManufacturingValidationPipe } from './manufacturing-validation.pipe';
 import { Body, Controller, Get, Param, Patch, Post } from '@nestjs/common';
 import { ManufacturingAssemblyService } from './manufacturing-assembly.service';
 import { CreateManufacturingAssemblyConsumptionDto, CreateManufacturingAssemblyEvidenceDto, CreateManufacturingAssemblyExecutionDto, ManufacturingAssemblyOperationActionDto, StartManufacturingAssemblyTimeDto, StopManufacturingAssemblyTimeDto, UpdateManufacturingAssemblyOperationDto } from './dto/manufacturing-assembly.dto';
 
+@UseGuards(ManufacturingAccessGuard)
+@UsePipes(ManufacturingValidationPipe)
 @Controller('manufacturing')
 export class ManufacturingAssemblyController {
   constructor(private readonly service: ManufacturingAssemblyService) {}

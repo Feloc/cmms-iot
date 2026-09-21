@@ -1,3 +1,6 @@
+import { UseGuards, UsePipes } from '@nestjs/common';
+import { ManufacturingAccessGuard } from './manufacturing-access.guard';
+import { ManufacturingValidationPipe } from './manufacturing-validation.pipe';
 import { Body, Controller, Get, Param, Patch, Post } from '@nestjs/common';
 import { ManufacturingSiteDeploymentService } from './manufacturing-site-deployment.service';
 import {
@@ -6,6 +9,8 @@ import {
   UpdateManufacturingSiteReceiptCheckDto,
 } from './dto/manufacturing-site-deployment.dto';
 
+@UseGuards(ManufacturingAccessGuard)
+@UsePipes(ManufacturingValidationPipe)
 @Controller('manufacturing')
 export class ManufacturingSiteDeploymentController {
   constructor(private readonly service: ManufacturingSiteDeploymentService) {}

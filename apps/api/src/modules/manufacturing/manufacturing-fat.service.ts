@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma.service';
 import { tenantStorage } from '../../common/tenant-context';
+import { assertIndependentApproval } from './manufacturing-approval';
 import { CreateManufacturingFatEvidenceDto, CreateManufacturingFatExecutionDto, CreateManufacturingFatTemplateDto, DecideManufacturingFatDto, ManufacturingFatVersionDto, RecordManufacturingFatCaseDto, UpdateManufacturingFatDeviationDto } from './dto/manufacturing-fat.dto';
 
 type Actor = { id: string; name: string; role: string };
@@ -213,6 +214,11 @@ export class ManufacturingFatService {
       if (execution.status !== 'AWAITING_APPROVAL') throw new ConflictException('El FAT no está pendiente de aprobación');
       const decision = String(dto?.decision || '').toUpperCase(); if (!['APPROVED', 'REJECTED'].includes(decision)) throw new BadRequestException('Decisión inválida');
       const comments = this.text(dto?.comments); if (decision === 'REJECTED' && (!comments || comments.length < 5)) throw new BadRequestException('El rechazo requiere una observación');
+      if (decision === 'APPROVED') {
+        const cases = await tx.manufacturingFatCase.findMany({ where: { tenantId: execution.tenantId, executionId }, select: { testedByUserId: true } });
+        assertIndependentApproval(actor.id, cases.map((item: any) => item.testedByUserId), dto.approvalExceptionReason);
+        if (dto.approvalExceptionReason) await this.audit(tx, execution.tenantId, execution.manufacturingOrderId, execution.id, 'MANUFACTURING_APPROVAL_EXCEPTION', dto.approvalExceptionReason, actor, { reason: dto.approvalExceptionReason });
+      }
       await tx.manufacturingFatApproval.create({ data: { tenantId: execution.tenantId, executionId: execution.id, decision, comments, signedByUserId: actor.id, signedByName: actor.name, signedByRole: actor.role } });
       await tx.manufacturingFatExecution.update({ where: { id: execution.id }, data: { status: decision, decidedAt: new Date(), lockVersion: { increment: 1 } } });
       await this.audit(tx, execution.tenantId, execution.manufacturingOrderId, execution.id, decision === 'APPROVED' ? 'MANUFACTURING_FAT_APPROVED' : 'MANUFACTURING_FAT_REJECTED', `${execution.executionCode}: ${decision === 'APPROVED' ? 'aprobado y listo para despacho' : 'rechazado'}`, actor, { decision, comments, dispatchReady: decision === 'APPROVED' });

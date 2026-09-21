@@ -119,7 +119,7 @@ export class AttachmentsService {
     if (!userId) throw new ForbiddenException('Usuario no autenticado');
     const item = await this.prisma.attachment.findFirst({ where: { id, tenantId } });
     if (!item) throw new NotFoundException('Attachment not found');
-    if ((item as any).manufacturingOrderId) {
+    if ((item as any).manufacturingOrderId || (item as any).engineeringRequestId) {
       throw new ConflictException('Los archivos de Ingeniería se gestionan desde su revisión documental');
     }
 

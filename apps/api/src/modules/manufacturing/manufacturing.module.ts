@@ -1,7 +1,13 @@
+import { ManufacturingControlService } from './manufacturing-control.service';
+import { ManufacturingControlController } from './manufacturing-control.controller';
 import { Module } from '@nestjs/common';
 import { PrismaService } from '../../prisma.service';
 import { ManufacturingController } from './manufacturing.controller';
+import { ManufacturingAccessGuard } from './manufacturing-access.guard';
+import { ManufacturingValidationPipe } from './manufacturing-validation.pipe';
 import { ManufacturingService } from './manufacturing.service';
+import { ManufacturingQuickService } from './manufacturing-quick.service';
+import { ManufacturingQuickController } from './manufacturing-quick.controller';
 import { ManufacturingDocumentsController } from './manufacturing-documents.controller';
 import { ManufacturingDocumentsService } from './manufacturing-documents.service';
 import { ManufacturingBomsController } from './manufacturing-boms.controller';
@@ -31,7 +37,7 @@ import { ManufacturingHandoverService } from './manufacturing-handover.service';
 
 @Module({
   imports: [AssembliesModule],
-  controllers: [ManufacturingController, ManufacturingDocumentsController, ManufacturingBomsController, ManufacturingReleasesController, ManufacturingSupplyController, ManufacturingAssemblyController, ManufacturingFatController, ManufacturingDispatchController, ManufacturingSiteDeploymentController, ManufacturingSatController, ManufacturingHandoverController],
-  providers: [ManufacturingService, ManufacturingDocumentsService, ManufacturingBomsService, ManufacturingBomImportService, ManufacturingReleasesService, ManufacturingSupplyService, ManufacturingStockReservationsService, ManufacturingSupplyRequestsService, ManufacturingSupplyInspectionsService, ManufacturingKitsService, ManufacturingAssemblyService, ManufacturingFatService, ManufacturingDispatchService, ManufacturingSiteDeploymentService, ManufacturingSatService, ManufacturingHandoverService, PrismaService],
+  controllers: [ManufacturingControlController, ManufacturingQuickController, ManufacturingController, ManufacturingDocumentsController, ManufacturingBomsController, ManufacturingReleasesController, ManufacturingSupplyController, ManufacturingAssemblyController, ManufacturingFatController, ManufacturingDispatchController, ManufacturingSiteDeploymentController, ManufacturingSatController, ManufacturingHandoverController],
+  providers: [ManufacturingControlService, ManufacturingAccessGuard, ManufacturingValidationPipe, ManufacturingQuickService, ManufacturingService, ManufacturingDocumentsService, ManufacturingBomsService, ManufacturingBomImportService, ManufacturingReleasesService, ManufacturingSupplyService, ManufacturingStockReservationsService, ManufacturingSupplyRequestsService, ManufacturingSupplyInspectionsService, ManufacturingKitsService, ManufacturingAssemblyService, ManufacturingFatService, ManufacturingDispatchService, ManufacturingSiteDeploymentService, ManufacturingSatService, ManufacturingHandoverService, PrismaService],
 })
 export class ManufacturingModule {}

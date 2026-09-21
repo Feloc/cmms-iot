@@ -17,6 +17,10 @@ import { ListServiceOrdersQuery } from './dto/list-service-orders.query';
 import { ListServiceOrderIssuesQuery } from './dto/list-issues.query';
 import { UpsertServiceOrderIssueDto, CreateCorrectiveFromIssueDto } from './dto/issue.dto';
 import { ServiceOrdersCalendarQuery } from './dto/calendar.query';
+import { CreateAfterSalesPartDemandDto, CreateSparePartManufacturingOrderDto, UpdateAfterSalesPartDemandDto } from './dto/after-sales-part-demand.dto';
+import { AfterSalesPartDemandsService } from './after-sales-part-demands.service';
+import { UsePipes } from '@nestjs/common';
+import { ManufacturingValidationPipe } from '../manufacturing/manufacturing-validation.pipe';
 import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { memoryStorage, diskStorage } from 'multer';
 import * as path from 'path';
@@ -28,7 +32,7 @@ import type { Response } from 'express';
 
 @Controller('service-orders')
 export class ServiceOrdersController {
-  constructor(private svc: ServiceOrdersService) {}
+  constructor(private svc: ServiceOrdersService, private readonly partDemands: AfterSalesPartDemandsService) {}
 
   @Get('calendar')
   calendar(@Query() q: ServiceOrdersCalendarQuery) {
@@ -253,6 +257,29 @@ export class ServiceOrdersController {
   @Post(':id/parts')
   addPart(@Param('id') id: string, @Body() dto: AddServiceOrderPartDto) {
     return this.svc.addPart(id, dto);
+  }
+
+  @Get(':id/part-demands')
+  listPartDemands(@Param('id') id: string) {
+    return this.partDemands.list(id);
+  }
+
+  @Post(':id/parts/:partId/demand')
+  @UsePipes(ManufacturingValidationPipe)
+  createPartDemand(@Param('id') id: string, @Param('partId') partId: string, @Body() dto: CreateAfterSalesPartDemandDto) {
+    return this.partDemands.create(id, partId, dto ?? ({} as CreateAfterSalesPartDemandDto));
+  }
+
+  @Patch(':id/part-demands/:demandId')
+  @UsePipes(ManufacturingValidationPipe)
+  updatePartDemand(@Param('id') id: string, @Param('demandId') demandId: string, @Body() dto: UpdateAfterSalesPartDemandDto) {
+    return this.partDemands.update(id, demandId, dto ?? ({} as UpdateAfterSalesPartDemandDto));
+  }
+
+  @Post(':id/part-demands/:demandId/manufacturing-order')
+  @UsePipes(ManufacturingValidationPipe)
+  createPartDemandManufacturingOrder(@Param('id') id: string, @Param('demandId') demandId: string, @Body() dto: CreateSparePartManufacturingOrderDto) {
+    return this.partDemands.createManufacturingOrder(id, demandId, dto ?? {});
   }
 
   @Patch(':id/parts/:partId')

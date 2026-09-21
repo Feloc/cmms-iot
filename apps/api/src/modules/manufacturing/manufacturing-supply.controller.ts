@@ -1,3 +1,6 @@
+import { UseGuards, UsePipes } from '@nestjs/common';
+import { ManufacturingAccessGuard } from './manufacturing-access.guard';
+import { ManufacturingValidationPipe } from './manufacturing-validation.pipe';
 import { Body, Controller, Get, Param, Patch, Post } from '@nestjs/common';
 import { ManufacturingSupplyService } from './manufacturing-supply.service';
 import { ActOnManufacturingStockReservationDto, AdjustManufacturingKitLineDto, CancelManufacturingKitDto, CancelManufacturingSupplyRequestDto, CreateManufacturingStockReservationDto, CreateManufacturingSupplyRequestDto, DeliverManufacturingSupplyRequestDto, GenerateManufacturingSupplyPlanDto, InspectManufacturingSupplyDeliveryDto, ReleaseManufacturingKitDto, ResolveManufacturingQuarantineDto, UpdateManufacturingSupplyRequestDto, UpdateManufacturingSupplyRequirementDto, WaiveManufacturingKitLineDto } from './dto/manufacturing-supply.dto';
@@ -6,6 +9,8 @@ import { ManufacturingSupplyRequestsService } from './manufacturing-supply-reque
 import { ManufacturingSupplyInspectionsService } from './manufacturing-supply-inspections.service';
 import { ManufacturingKitsService } from './manufacturing-kits.service';
 
+@UseGuards(ManufacturingAccessGuard)
+@UsePipes(ManufacturingValidationPipe)
 @Controller('manufacturing')
 export class ManufacturingSupplyController {
   constructor(private readonly service: ManufacturingSupplyService, private readonly reservations: ManufacturingStockReservationsService, private readonly requests: ManufacturingSupplyRequestsService, private readonly inspections: ManufacturingSupplyInspectionsService, private readonly kits: ManufacturingKitsService) {}

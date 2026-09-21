@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma.service';
 import { tenantStorage } from '../../common/tenant-context';
+import { assertIndependentApproval } from './manufacturing-approval';
 import {
   CreateManufacturingSatEvidenceDto,
   CreateManufacturingSatExecutionDto,
@@ -182,6 +183,11 @@ export class ManufacturingSatService {
       const comments = this.text(dto?.comments); if (decision === 'REJECTED' && (!comments || comments.length < 5)) throw new BadRequestException('El rechazo requiere una observación');
       const clientName = this.text(dto?.clientName); const clientRole = this.text(dto?.clientRole); const clientSignature = this.text(dto?.clientSignature);
       if (!clientName || !clientRole || !clientSignature) throw new BadRequestException('Nombre, cargo y firma del cliente son obligatorios');
+      if (decision !== 'REJECTED') {
+        const cases = await tx.manufacturingSatCase.findMany({ where: { tenantId: execution.tenantId, executionId }, select: { testedByUserId: true } });
+        assertIndependentApproval(actor.id, cases.map((item: any) => item.testedByUserId), dto.approvalExceptionReason);
+        if (dto.approvalExceptionReason) await this.audit(tx, execution.tenantId, execution.manufacturingOrderId, execution.id, 'MANUFACTURING_APPROVAL_EXCEPTION', dto.approvalExceptionReason, actor, { reason: dto.approvalExceptionReason });
+      }
       const open = await tx.manufacturingSatDeviation.findMany({ where: { tenantId: execution.tenantId, executionId: execution.id, status: { in: ['OPEN', 'IN_REWORK'] } } });
       if (decision === 'ACCEPTED' && open.length) throw new ConflictException('La aceptación total requiere cerrar todos los pendientes');
       if (decision === 'ACCEPTED_WITH_PENDING_ITEMS' && !open.length) throw new ConflictException('No existen pendientes para una aceptación condicionada');

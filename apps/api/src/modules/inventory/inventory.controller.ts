@@ -1,6 +1,7 @@
-import { BadRequestException, Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, Param, Patch, Post, Query, ValidationPipe } from '@nestjs/common';
 import { InventoryService } from './inventory.service';
-import { getTenant } from '../../common/tenant-context';
+import { getTenant, tenantStorage } from '../../common/tenant-context';
+import { ReceiveStockDto } from './dto/receive-stock.dto';
 import { CreateInventoryItemDto } from './dto/create-inventory-item.dto';
 import { InventoryLedgerService } from './inventory-ledger.service';
 import { InventoryManualsService } from './inventory-manuals.service';
@@ -80,6 +81,17 @@ export class InventoryController {
     const tenantId = getTenant();
     if (!tenantId) throw new BadRequestException('No tenant in context');
     return this.manuals.createManual(tenantId, (dto ?? {}) as any);
+  }
+
+  @Post(':id/receipts')
+  async receiveStock(
+    @Param('id') id: string,
+    @Body(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true })) dto: ReceiveStockDto,
+  ) {
+    const tenantId = getTenant();
+    if (!tenantId) throw new BadRequestException('No tenant in context');
+    await this.svc.assertAdmin(tenantId);
+    return this.ledger.receiveStock(tenantId, id, dto, tenantStorage.getStore()?.userId);
   }
 
   @Patch('manuals/:id')

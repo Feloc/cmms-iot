@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
+import { verifySiteLifecycle } from './manufacturing-site-lifecycle.integration';
 import { PrismaService } from '../src/prisma.service';
 import { tenantStorage } from '../src/common/tenant-context';
 import { ManufacturingSupplyService } from '../src/modules/manufacturing/manufacturing-supply.service';
@@ -11,20 +13,26 @@ import { ManufacturingFatService } from '../src/modules/manufacturing/manufactur
 import { ManufacturingDispatchService } from '../src/modules/manufacturing/manufacturing-dispatch.service';
 
 async function main() {
-  const prisma = new PrismaService();
-  const stamp = `supply-${Date.now()}`;
-  let orderId: string | undefined;
-  let orderNumber: string | undefined;
-  let itemId: string | undefined;
-  let templateId: string | undefined;
-  let fatTemplateId: string | undefined;
-
+  const root = new PrismaService();
+  const rollback = new Error('ROLLBACK_LIFECYCLE_TEST');
   try {
-    const admin = await prisma.user.findFirst({
-      where: { role: 'ADMIN' },
-      select: { id: true, tenantId: true },
-    });
-    assert(admin, 'Se requiere un usuario administrador para la prueba');
+    await root.$transaction(async (tx: any) => {
+    let sequence = 0;
+    const prisma = new Proxy(tx, { get(target, key) {
+      if (key === '$transaction') return async (fn: any) => {
+        const savepoint = `lifecycle_test_${++sequence}`;
+        await tx.$executeRawUnsafe(`SAVEPOINT ${savepoint}`);
+        try { const result = Array.isArray(fn) ? await Promise.all(fn) : await fn(tx); await tx.$executeRawUnsafe(`RELEASE SAVEPOINT ${savepoint}`); return result; }
+        catch (error) { await tx.$executeRawUnsafe(`ROLLBACK TO SAVEPOINT ${savepoint}`); throw error; }
+      };
+      return target[key];
+    } });
+    const stamp = `supply-${Date.now()}`;
+    let orderId: string | undefined; let orderNumber: string | undefined;
+    let itemId: string | undefined; let templateId: string | undefined; let fatTemplateId: string | undefined;
+    const tenant = await tx.tenant.create({ data: { slug: `lifecycle-${randomUUID()}`, name: 'Rollback lifecycle test' } });
+    const admin = await tx.user.create({ data: { tenantId: tenant.id, email: 'admin@test.invalid', name: 'Test admin', role: 'ADMIN', password: 'not-a-login' } });
+    const reviewer = await tx.user.create({ data: { tenantId: tenant.id, email: 'reviewer@test.invalid', name: 'Independent reviewer', role: 'ADMIN', password: 'not-a-login' } });
 
     const template = await prisma.assemblyTemplate.create({
       data: {
@@ -389,7 +397,7 @@ async function main() {
     fat = fatExecutions.find((item: any) => item.sequence === 2);
     fatExecutions = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => fatService.submit(fat.id, { lockVersion: fat.lockVersion }));
     fat = fatExecutions.find((item: any) => item.sequence === 2);
-    fatExecutions = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => fatService.decide(fat.id, { lockVersion: fat.lockVersion, decision: 'APPROVED', comments: 'Protocolo conforme' }));
+    fatExecutions = await tenantStorage.run({ tenantId: admin.tenantId, userId: reviewer.id }, () => fatService.decide(fat.id, { lockVersion: fat.lockVersion, decision: 'APPROVED', comments: 'Protocolo conforme' }));
     fat = fatExecutions.find((item: any) => item.sequence === 2);
     assert.equal(fat.status, 'APPROVED');
     assert.equal(fat.summary.dispatchReady, true);
@@ -439,7 +447,7 @@ async function main() {
     dispatch = dispatches[0];
     assert.equal(dispatch.status, 'READY');
     assert.equal(dispatch.serialNumberSnapshot, `SER-${stamp}`);
-    dispatches = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => dispatchService.authorize(dispatch.id, { lockVersion: dispatch.lockVersion }));
+    dispatches = await tenantStorage.run({ tenantId: admin.tenantId, userId: reviewer.id }, () => dispatchService.authorize(dispatch.id, { lockVersion: dispatch.lockVersion }));
     dispatch = dispatches[0];
     assert.equal(dispatch.status, 'AUTHORIZED');
     await assert.rejects(
@@ -455,50 +463,12 @@ async function main() {
     dispatch = dispatches[0];
     assert.equal(dispatch.status, 'DELIVERED');
     assert.equal(dispatch.deliveryProofReference, 'POD-001');
-    console.log('OK: abastecimiento, kits, ensamble, FAT, despacho y entrega integral verificados');
-  } finally {
-    if (orderId) {
-      if (orderNumber) await prisma.inventoryMovement.deleteMany({ where: { referenceType: 'MANUFACTURING_STOCK_RESERVATION', referenceLabel: { startsWith: orderNumber } } });
-      await prisma.manufacturingStockReservation.deleteMany({ where: { supplyRequirement: { supplyPlan: { manufacturingOrderId: orderId } } } });
-      await prisma.manufacturingDispatchDocument.deleteMany({ where: { dispatch: { manufacturingOrderId: orderId } } });
-      await prisma.manufacturingDispatchPackage.deleteMany({ where: { dispatch: { manufacturingOrderId: orderId } } });
-      await prisma.manufacturingDispatchChecklistItem.deleteMany({ where: { dispatch: { manufacturingOrderId: orderId } } });
-      await prisma.manufacturingDispatch.deleteMany({ where: { manufacturingOrderId: orderId } });
-      await prisma.manufacturingFatApproval.deleteMany({ where: { execution: { manufacturingOrderId: orderId } } });
-      await prisma.manufacturingFatDeviation.deleteMany({ where: { execution: { manufacturingOrderId: orderId } } });
-      await prisma.manufacturingFatEvidence.deleteMany({ where: { fatCase: { execution: { manufacturingOrderId: orderId } } } });
-      await prisma.manufacturingFatCase.deleteMany({ where: { execution: { manufacturingOrderId: orderId } } });
-      await prisma.manufacturingFatExecution.deleteMany({ where: { manufacturingOrderId: orderId } });
-      await prisma.manufacturingAssemblyConsumption.deleteMany({ where: { operation: { execution: { manufacturingOrderId: orderId } } } });
-      await prisma.manufacturingAssemblyEvidence.deleteMany({ where: { operation: { execution: { manufacturingOrderId: orderId } } } });
-      await prisma.manufacturingAssemblyTimeLog.deleteMany({ where: { operation: { execution: { manufacturingOrderId: orderId } } } });
-      await prisma.manufacturingAssemblyOperation.deleteMany({ where: { execution: { manufacturingOrderId: orderId } } });
-      await prisma.manufacturingAssemblyExecution.deleteMany({ where: { manufacturingOrderId: orderId } });
-      await prisma.manufacturingKitLine.deleteMany({ where: { kit: { manufacturingOrderId: orderId } } });
-      await prisma.manufacturingKit.deleteMany({ where: { manufacturingOrderId: orderId } });
-      await prisma.manufacturingInspectionDecision.deleteMany({ where: { supplyDelivery: { supplyRequest: { supplyRequirement: { supplyPlan: { manufacturingOrderId: orderId } } } } } });
-      await prisma.manufacturingSupplyDelivery.deleteMany({ where: { supplyRequest: { supplyRequirement: { supplyPlan: { manufacturingOrderId: orderId } } } } });
-      await prisma.manufacturingSupplyRequest.deleteMany({ where: { supplyRequirement: { supplyPlan: { manufacturingOrderId: orderId } } } });
-      await prisma.manufacturingSupplyRequirement.deleteMany({ where: { supplyPlan: { manufacturingOrderId: orderId } } });
-      await prisma.manufacturingSupplyPlan.deleteMany({ where: { manufacturingOrderId: orderId } });
-      await prisma.engineeringReleaseDocument.deleteMany({ where: { release: { manufacturingOrderId: orderId } } });
-      await prisma.engineeringRelease.deleteMany({ where: { manufacturingOrderId: orderId } });
-      await prisma.manufacturingBomLine.deleteMany({ where: { bomRevision: { bom: { manufacturingOrderId: orderId } } } });
-      await prisma.manufacturingBomRevision.deleteMany({ where: { bom: { manufacturingOrderId: orderId } } });
-      await prisma.manufacturingBom.deleteMany({ where: { manufacturingOrderId: orderId } });
-      await prisma.manufacturingOrder.deleteMany({ where: { id: orderId } });
-    }
-    if (itemId) await prisma.inventoryItem.deleteMany({ where: { id: itemId } });
-    if (templateId) {
-      await prisma.assemblyTemplateStep.deleteMany({ where: { templateId } });
-      await prisma.assemblyTemplate.deleteMany({ where: { id: templateId } });
-    }
-    if (fatTemplateId) {
-      await prisma.manufacturingFatTemplateCase.deleteMany({ where: { templateId: fatTemplateId } });
-      await prisma.manufacturingFatTemplate.deleteMany({ where: { id: fatTemplateId } });
-    }
-    await prisma.$disconnect();
-  }
+    await verifySiteLifecycle(prisma, admin, reviewer, dispatch, kits[0].manufacturedUnitId, order.id);
+    console.log('PASS: abastecimiento, kits, ensamble, FAT, despacho, montaje, SAT y entrega final (rollback)');
+    throw rollback;
+    }, { timeout: 120000, isolationLevel: 'Serializable' });
+  } catch (error) { if (error !== rollback) throw error; }
+  finally { await root.$disconnect(); }
 }
 
 main().catch((error) => {

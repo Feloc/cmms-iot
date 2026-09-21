@@ -7,6 +7,7 @@ import { useParams } from 'next/navigation';
 import { useSession } from 'next-auth/react';
 import { useAssetsDetail, AssetsDetailProvider } from './assets-detail.context';
 import AssetPhotoCard from './AssetPhotoCard';
+import EngineeringList from '@/components/engineering/EngineeringList';
 
 const OverviewTab = dynamic(() => import('./tabs/OverviewTab'), { ssr: false, loading: () => <div className="p-4 text-sm text-gray-500">Cargando resumen…</div> });
 const AttachmentsTab = dynamic(() => import('./tabs/AttachmentsTab'), { ssr: false, loading: () => <div className="p-4 text-sm text-gray-500">Cargando adjuntos…</div> });
@@ -36,7 +37,7 @@ function DetailInner() {
   const [asset, setAsset] = React.useState<any>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [loading, setLoading] = React.useState(false);
-  const allTabs = ['Resumen', 'Plan PM', 'Analítica Horómetro', 'Adjuntos', 'Inventario', 'Parámetros', 'Telemetría', 'Repuestos cambiados'] as const;
+  const allTabs = ['Resumen', 'Ingeniería', 'Plan PM', 'Analítica Horómetro', 'Adjuntos', 'Inventario', 'Parámetros', 'Telemetría', 'Repuestos cambiados'] as const;
   type TabKey = typeof allTabs[number];
   const tabs = React.useMemo<TabKey[]>(
     () => (isAdmin ? [...allTabs] : allTabs.filter((t) => t !== 'Inventario')),
@@ -72,14 +73,15 @@ function DetailInner() {
 
   return (
     <div className="max-w-7xl mx-auto p-6 space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="space-y-1">
           <h1 className="text-2xl font-semibold">Detalle de Activo</h1>
           <div className="text-sm text-gray-500">
             {asset ? (<><span className="font-mono">{asset.code}</span> · {asset.name}</>) : '—'}
           </div>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
+          {asset && ['ADMIN','TECH'].includes(role || '') && <Link href={'/engineering-requests?new=1&assetId=' + asset.id} className="px-3 py-2 rounded border hover:bg-gray-100">Solicitar reforma o mejora</Link>}
           <Link href="/assets" className="px-3 py-2 rounded border hover:bg-gray-100">← Volver</Link>
           {asset && <Link href={`/assets/${asset.id}/edit`} className="px-3 py-2 rounded border hover:bg-gray-100">Editar</Link>}
         </div>
@@ -94,7 +96,7 @@ function DetailInner() {
 
       {asset ? <AssetPhotoCard asset={asset} onUpdated={loadAsset} /> : null}
 
-      <div className="flex gap-2 border-b">
+      <div className="flex gap-2 border-b overflow-x-auto">
         {tabs.map((t) => (
           <button key={t} onClick={() => setActive(t)} className={`px-3 py-2 -mb-px border-b-2 ${active === t ? 'border-emerald-600 text-emerald-700' : 'border-transparent text-gray-600 hover:text-gray-800'}`}>{t}</button>
         ))}
@@ -105,6 +107,7 @@ function DetailInner() {
       ) : asset ? (
         <div>
           {active === 'Resumen' && <OverviewTab asset={asset} />}
+          {active === 'Ingeniería' && <EngineeringList assetId={asset.id} />}
           {active === 'Plan PM' && <MaintenancePlanTab asset={asset} onUpdated={loadAsset} />}
           {active === 'Analítica Horómetro' && <HourmeterAnalyticsTab asset={asset} />}
           {active === 'Adjuntos' && <AttachmentsTab />}

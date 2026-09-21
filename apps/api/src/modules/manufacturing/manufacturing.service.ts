@@ -11,13 +11,16 @@ import {
   CreateManufacturingOrderDto,
   ManufacturingReasonDto,
   ReplaceManufacturingMembersDto,
+  ReceiveSparePartOutputDto,
   UpdateManufacturedUnitDto,
   UpdateManufacturingOrderDto,
   type ManufacturingMemberInput,
 } from './dto/manufacturing.dto';
 import { formatManufacturingOrderNumber, resumableManufacturingStatus } from './manufacturing.domain';
+import { ManufacturingQuickService } from './manufacturing-quick.service';
 
 const ORDER_STATUSES = new Set(['DRAFT', 'ENGINEERING', 'RELEASED', 'COMPLETED', 'ON_HOLD', 'CANCELED']);
+const ORDER_TYPES = new Set(['EQUIPMENT', 'SPARE_PART', 'REWORK', 'PROTOTYPE']);
 const PRIORITIES = new Set(['LOW', 'MEDIUM', 'HIGH', 'URGENT']);
 const MEMBER_FUNCTIONS = new Set(['RESPONSIBLE', 'ENGINEERING', 'REVIEWER', 'OBSERVER']);
 const UNIT_STATUSES = new Set(['PLANNED', 'CANCELED']);
@@ -26,7 +29,7 @@ type Actor = { id: string; name: string; role: string };
 
 @Injectable()
 export class ManufacturingService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService, private readonly quick: ManufacturingQuickService) {}
 
   private context() {
     const store = tenantStorage.getStore();
@@ -63,7 +66,7 @@ export class ManufacturingService {
   }
 
   private quantity(value: unknown) {
-    const quantity = Math.round(Number(value ?? 1));
+    const quantity = Number(value ?? 1);
     if (!Number.isInteger(quantity) || quantity < 1 || quantity > 1000) {
       throw new BadRequestException('quantity debe ser un entero entre 1 y 1000');
     }
@@ -205,6 +208,11 @@ export class ManufacturingService {
         select: { revisions: { select: { sequence: true, status: true, _count: { select: { lines: true } } } } },
       },
       engineeringReleases: { select: { releaseCode: true, sequence: true, status: true, releasedAt: true } },
+      outputInventoryItem: { select: { id: true, sku: true, name: true, uom: true } },
+      fulfillingAfterSalesDemands: {
+        select: { id: true, serviceOrderId: true, serviceOrderPartId: true, asset: { select: { id: true, code: true, name: true } } },
+      },
+      outputReceipts: { orderBy: { createdAt: 'desc' }, take: 25 },
       _count: { select: { auditEvents: true } },
     };
   }
@@ -276,6 +284,11 @@ export class ManufacturingService {
       if (!ORDER_STATUSES.has(status)) throw new BadRequestException('Estado inválido');
       where.status = status;
     }
+    if (query.orderType) {
+      const orderType = query.orderType.toUpperCase();
+      if (!ORDER_TYPES.has(orderType)) throw new BadRequestException('Tipo de orden inválido');
+      where.orderType = orderType;
+    }
     if (query.priority) {
       const priority = query.priority.toUpperCase();
       if (!PRIORITIES.has(priority)) throw new BadRequestException('Prioridad inválida');
@@ -312,6 +325,10 @@ export class ManufacturingService {
             select: { revisions: { select: { sequence: true, status: true, _count: { select: { lines: true } } } } },
           },
           engineeringReleases: { select: { releaseCode: true, sequence: true, status: true, releasedAt: true } },
+          outputInventoryItem: { select: { id: true, sku: true, name: true, uom: true } },
+          fulfillingAfterSalesDemands: {
+            select: { id: true, serviceOrderId: true, serviceOrderPartId: true, asset: { select: { id: true, code: true, name: true } } },
+          },
           _count: { select: { units: true, members: true } },
         },
       }),
@@ -383,6 +400,72 @@ export class ManufacturingService {
     return this.serialize(order);
   }
 
+  async receiveSparePartOutput(id: string, dto: ReceiveSparePartOutputDto) {
+    const { tenantId, userId } = this.context();
+    await this.prisma.$transaction(async (tx: any) => {
+      const actor = await this.requireAdmin(tx, tenantId, userId);
+      await tx.$queryRaw`SELECT "id" FROM "ManufacturingOrder" WHERE "id" = ${id} FOR UPDATE`;
+      const order = await tx.manufacturingOrder.findFirst({
+        where: { id, tenantId },
+        include: { units: true, outputReceipts: true, fulfillingAfterSalesDemands: true },
+      });
+      if (!order) throw new NotFoundException('Orden de manufactura no encontrada');
+      if (order.orderType !== 'SPARE_PART' || !order.outputInventoryItemId) throw new ConflictException('La orden no corresponde a un repuesto terminado');
+      if (order.executionMode === 'EXPEDITED') throw new ConflictException('Recibe las piezas desde Ejecución rápida');
+      if (['CANCELED', 'ON_HOLD'].includes(order.status)) throw new ConflictException('La orden no admite recepciones en su estado actual');
+      const activeUnitIds = order.units.filter((unit: any) => unit.status !== 'CANCELED').map((unit: any) => unit.id);
+      if (!activeUnitIds.length) throw new ConflictException('La orden no tiene unidades activas');
+      const completedAssemblies = await tx.manufacturingAssemblyExecution.count({
+        where: { tenantId, manufacturingOrderId: id, status: 'COMPLETED' },
+      });
+      if (completedAssemblies < activeUnitIds.length) throw new ConflictException('Todas las unidades deben terminar su ejecución de ensamble');
+      const approvedFats = await tx.manufacturingFatExecution.findMany({
+        where: { tenantId, manufacturingOrderId: id, manufacturedUnitId: { in: activeUnitIds }, status: 'APPROVED' },
+        select: { manufacturedUnitId: true }, distinct: ['manufacturedUnitId'],
+      });
+      if (approvedFats.length < activeUnitIds.length) throw new ConflictException('Todas las unidades deben estar aprobadas por Calidad');
+      const received = order.outputReceipts.reduce((sum: number, receipt: any) => sum + Number(receipt.quantity), 0);
+      const remaining = Number(order.quantity) - received;
+      if (remaining <= 1e-9) throw new ConflictException('La producción terminada ya fue recibida completamente');
+      const quantity = dto?.quantity === undefined ? remaining : Number(dto.quantity);
+      if (!Number.isFinite(quantity) || quantity <= 0 || quantity > remaining + 1e-9) throw new BadRequestException(`La cantidad debe estar entre 0 y ${remaining}`);
+      const warehouse = this.text(dto?.warehouse, 'warehouse', true)!;
+      const binLocation = this.text(dto?.binLocation, 'binLocation');
+      await tx.$queryRaw`SELECT "id" FROM "InventoryItem" WHERE "id" = ${order.outputInventoryItemId} AND "tenantId" = ${tenantId} FOR UPDATE`;
+      let stock = await tx.inventoryStock.findFirst({ where: { tenantId, inventoryItemId: order.outputInventoryItemId, warehouse, binLocation } });
+      if (!stock) stock = await tx.inventoryStock.create({ data: { tenantId, inventoryItemId: order.outputInventoryItemId, warehouse, binLocation, stockOnHand: 0, stockReserved: 0 } });
+      await tx.inventoryStock.update({ where: { id: stock.id }, data: { stockOnHand: { increment: quantity } } });
+      const receipt = await tx.manufacturingOutputReceipt.create({ data: {
+        tenantId, manufacturingOrderId: id, inventoryItemId: order.outputInventoryItemId, inventoryStockId: stock.id,
+        quantity, warehouseSnapshot: warehouse, binLocationSnapshot: binLocation, reference: this.text(dto?.reference, 'reference'),
+        notes: this.text(dto?.notes, 'notes'), createdByUserId: actor.id, createdByName: actor.name,
+      } });
+      const totalStock = await tx.inventoryStock.aggregate({ where: { tenantId, inventoryItemId: order.outputInventoryItemId }, _sum: { stockOnHand: true } });
+      const balanceAfter = Number(totalStock._sum.stockOnHand || 0);
+      await tx.inventoryItem.update({ where: { id: order.outputInventoryItemId }, data: { qty: Math.round(balanceAfter) } });
+      await tx.inventoryMovement.create({ data: {
+        tenantId, inventoryItemId: order.outputInventoryItemId, inventoryStockId: stock.id, movementType: 'ENTRY', source: 'MANUFACTURING',
+        qty: quantity, stockDelta: quantity, balanceAfter, warehouse, binLocation, referenceType: 'MANUFACTURING_OUTPUT_RECEIPT',
+        referenceId: receipt.id, referenceLabel: order.number, note: this.text(dto?.notes, 'notes') || 'Entrada de producto terminado', createdByUserId: actor.id,
+      } });
+      let available = quantity;
+      for (const demand of order.fulfillingAfterSalesDemands) {
+        if (available <= 1e-9) break;
+        const pending = Math.max(0, Number(demand.requestedQuantity) - Number(demand.fulfilledQuantity));
+        const allocated = Math.min(pending, available);
+        if (allocated <= 0) continue;
+        const fulfilled = Number(demand.fulfilledQuantity) + allocated;
+        const status = Number(demand.installedQuantity) >= Number(demand.requestedQuantity) ? 'FULFILLED' : fulfilled >= Number(demand.requestedQuantity) ? 'READY' : 'PARTIALLY_FULFILLED';
+        await tx.afterSalesPartDemand.update({ where: { id: demand.id }, data: { fulfilledQuantity: fulfilled, status, updatedByUserId: actor.id, lockVersion: { increment: 1 } } });
+        available -= allocated;
+      }
+      const complete = received + quantity >= Number(order.quantity) - 1e-9;
+      await tx.manufacturingOrder.update({ where: { id }, data: { status: complete ? 'COMPLETED' : order.status, completedAt: complete ? new Date() : order.completedAt, version: { increment: 1 } } });
+      await this.audit(tx, { tenantId, orderId: id, entityType: 'ManufacturingOutputReceipt', entityId: receipt.id, action: 'SPARE_PART_OUTPUT_RECEIVED', summary: `${order.number}: ${quantity} recibidas en ${warehouse}`, actor, afterData: { quantity, warehouse, binLocation, balanceAfter, complete } });
+    }, { isolationLevel: 'Serializable' });
+    return this.getOrder(id);
+  }
+
   async updateOrder(id: string, dto: UpdateManufacturingOrderDto) {
     const { tenantId, userId } = this.context();
     const version = Number(dto?.version);
@@ -415,6 +498,7 @@ export class ManufacturingService {
       }
 
       const nextQuantity = dto.quantity === undefined ? current.quantity : this.quantity(dto.quantity);
+      if (current.executionMode === 'EXPEDITED' && nextQuantity !== current.quantity) throw new ConflictException('La cantidad de una OF abreviada está fijada por su demanda y receta');
       if (nextQuantity < current.quantity) {
         const removable = current.units.filter((unit: any) => unit.unitNumber > nextQuantity);
         if (removable.some((unit: any) => unit.serialNumber || unit.internalCode || unit.assetId)) {
@@ -468,6 +552,7 @@ export class ManufacturingService {
     if (action !== 'resume' && !reason) throw new BadRequestException('Debes indicar el motivo');
     await this.prisma.$transaction(async (tx: any) => {
       const actor = await this.requireAdmin(tx, tenantId, userId);
+      await tx.$queryRaw`SELECT "id" FROM "ManufacturingOrder" WHERE "id" = ${id} AND "tenantId" = ${tenantId} FOR UPDATE`;
       const current = await tx.manufacturingOrder.findFirst({ where: { id, tenantId } });
       if (!current) throw new NotFoundException('Orden de manufactura no encontrada');
       if (['CANCELED', 'COMPLETED'].includes(current.status)) throw new ConflictException('La orden está cerrada');
@@ -477,6 +562,7 @@ export class ManufacturingService {
       let summary: string;
       if (action === 'hold') {
         if (current.status === 'ON_HOLD') throw new ConflictException('La orden ya está en pausa');
+        if (current.executionMode === 'EXPEDITED') await this.quick.pauseInTransaction(tx, current);
         data = { status: 'ON_HOLD', statusBeforeHold: current.status, holdReason: reason, version: { increment: 1 } };
         auditAction = 'ORDER_HELD';
         summary = `Orden ${current.number} pausada`;
@@ -486,6 +572,7 @@ export class ManufacturingService {
         auditAction = 'ORDER_RESUMED';
         summary = `Orden ${current.number} reanudada`;
       } else {
+        if (current.executionMode === 'EXPEDITED') await this.quick.cancelInTransaction(tx, current, actor);
         const openReservations = await tx.manufacturingStockReservation.count({
           where: { tenantId, supplyRequirement: { supplyPlan: { manufacturingOrderId: id } }, status: { in: ['ACTIVE', 'PARTIAL'] } },
         });
@@ -537,6 +624,7 @@ export class ManufacturingService {
       if (dto.internalCode !== undefined) data.internalCode = this.text(dto.internalCode, 'internalCode');
       if (dto.status !== undefined) {
         const status = String(dto.status).toUpperCase();
+        if (order.executionMode === 'EXPEDITED') throw new ConflictException('Las cantidades y unidades del lote abreviado se controlan en Ejecución rápida');
         if (!UNIT_STATUSES.has(status)) throw new BadRequestException('Estado de unidad inválido');
         if (status === 'CANCELED') {
           const assemblyExecution = await tx.manufacturingAssemblyExecution.count({ where: { tenantId, kit: { manufacturedUnitId: unitId } } });

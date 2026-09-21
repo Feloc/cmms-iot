@@ -7,11 +7,13 @@ import { PrismaService } from '../../prisma.service';
 import { InventoryModule } from '../inventory/inventory.module';
 import { TelegramNotifierService } from '../notifications/telegram-notifier.service';
 import { ServiceOrderCarryoverService } from './service-order-carryover.service';
+import { AfterSalesPartDemandsService } from './after-sales-part-demands.service';
+import { ManufacturingQuickService } from '../manufacturing/manufacturing-quick.service';
 
 @Module({
   imports: [InventoryModule],
   controllers: [ServiceOrdersController],
-  providers: [ServiceOrdersService, ServiceOrderCarryoverService, PrismaService, TelegramNotifierService],
+  providers: [ServiceOrdersService, ServiceOrderCarryoverService, AfterSalesPartDemandsService, ManufacturingQuickService, PrismaService, TelegramNotifierService],
   exports: [ServiceOrderCarryoverService],
 })
 export class ServiceOrdersModule implements OnModuleInit {

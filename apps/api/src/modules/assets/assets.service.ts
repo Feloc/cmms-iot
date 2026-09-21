@@ -902,7 +902,7 @@ if (q.customer) where.customer = { contains: q.customer.trim(), mode: 'insensiti
       nominalPowerUnit: dto.nominalPowerUnit,
       status: dto.status as any,
       criticality: dto.criticality as any,
-      acquiredOn: dto.acquiredOn ? new Date(dto.acquiredOn as any) : undefined,
+      acquiredOn: dto.acquiredOn === undefined ? undefined : (dto.acquiredOn ? new Date(dto.acquiredOn) : null),
       guarantee: dto.guarantee === undefined ? undefined : (dto.guarantee ? new Date(dto.guarantee as any) : null),
       ingestKey: dto.ingestKey,
       assetTopicPrefix: dto.assetTopicPrefix,

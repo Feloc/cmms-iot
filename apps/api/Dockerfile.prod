@@ -34,14 +34,15 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends chromium fonts-liberation ca-certificates postgresql-client \
   && rm -rf /var/lib/apt/lists/*
 
-# Dependencias (incluye prisma cli porque hoy está en devDependencies)
-COPY --from=deps /app/node_modules /app/node_modules
+# Incluye el cliente Prisma generado para este esquema durante el build.
+COPY --from=build /app/node_modules /app/node_modules
 
 # App compilada + prisma schema/migrations
 COPY --from=build /app/apps/api/dist /app/apps/api/dist
 COPY --from=build /app/apps/api/prisma /app/apps/api/prisma
 COPY --from=build /app/apps/api/package.json /app/apps/api/package.json
 COPY --from=build /app/apps/api/scripts/entrypoint.prod.sh /app/apps/api/scripts/entrypoint.prod.sh
+COPY --from=build /app/apps/api/scripts/run-sql-migrations.sh /app/apps/api/scripts/run-sql-migrations.sh
 COPY --from=build /app/db/migrations /app/db/migrations
 
 RUN chmod +x /app/apps/api/scripts/entrypoint.prod.sh

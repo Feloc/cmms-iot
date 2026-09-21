@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma.service';
+import { ReceiveStockDto } from './dto/receive-stock.dto';
 
 type InventoryMovementSourceValue =
   | 'MANUAL'
@@ -63,6 +64,37 @@ type ApplyInventoryDeltaInput = {
 @Injectable()
 export class InventoryLedgerService {
   constructor(private readonly prisma: PrismaService) {}
+
+  async receiveStock(tenantId: string, inventoryItemId: string, dto: ReceiveStockDto, userId?: string) {
+    if (!Number.isFinite(dto.qty) || dto.qty <= 0) throw new BadRequestException('La cantidad debe ser mayor que cero');
+    const stockId = dto.inventoryStockId?.trim();
+    const warehouse = dto.warehouse?.trim() || null;
+    const binLocation = dto.binLocation?.trim() || null;
+    if (stockId && (warehouse || binLocation)) throw new BadRequestException('Selecciona una ubicación existente o una nueva');
+    if (!stockId && !warehouse) throw new BadRequestException('La bodega es obligatoria');
+
+    // Retry serialization conflicts so simultaneous receipts cannot overwrite balances.
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await this.prisma.$transaction(async (tx) => {
+          const item = await this.getItemWithStocks(tx, tenantId, inventoryItemId);
+          if (stockId && !item.stocks.some((stock) => stock.id === stockId)) {
+            throw new BadRequestException('La ubicación no pertenece al repuesto');
+          }
+          return this.applyInventoryDelta(tx, {
+            tenantId, inventoryItemId, qty: dto.qty, deltaSign: 1,
+            movementType: 'ENTRY', source: 'MANUAL', referenceType: 'STOCK_RECEIPT',
+            referenceLabel: dto.referenceLabel?.trim() || undefined,
+            note: dto.note?.trim() || undefined, createdByUserId: userId,
+            preferredStockBreakdown: [{ inventoryStockId: stockId, warehouse, binLocation, qty: dto.qty }],
+          });
+        }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+      } catch (error) {
+        if (attempt < 2 && (error as { code?: string })?.code === 'P2034') continue;
+        throw error;
+      }
+    }
+  }
 
   async listMovements(
     tenantId: string,

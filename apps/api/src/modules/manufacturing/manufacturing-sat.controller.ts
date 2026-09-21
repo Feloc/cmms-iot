@@ -1,3 +1,6 @@
+import { UseGuards, UsePipes } from '@nestjs/common';
+import { ManufacturingAccessGuard } from './manufacturing-access.guard';
+import { ManufacturingValidationPipe } from './manufacturing-validation.pipe';
 import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import { ManufacturingSatService } from './manufacturing-sat.service';
 import {
@@ -10,6 +13,8 @@ import {
   UpdateManufacturingSatDeviationDto,
 } from './dto/manufacturing-sat.dto';
 
+@UseGuards(ManufacturingAccessGuard)
+@UsePipes(ManufacturingValidationPipe)
 @Controller('manufacturing')
 export class ManufacturingSatController {
   constructor(private readonly service: ManufacturingSatService) {}
