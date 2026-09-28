@@ -29,6 +29,7 @@ import { pathToFileURL } from 'url';
 import * as XLSX from 'xlsx';
 import { InventoryLedgerService } from '../inventory/inventory-ledger.service';
 import { TelegramNotifierService } from '../notifications/telegram-notifier.service';
+import { TelegramService } from '../notifications/telegram.service';
 import { ServiceOrderCarryoverService } from './service-order-carryover.service';
 import { directInstallationQuantity } from '../manufacturing/manufacturing-quick.domain';
 
@@ -58,6 +59,7 @@ export class ServiceOrdersService {
     private inventoryLedger: InventoryLedgerService,
     private telegramNotifier: TelegramNotifierService,
     private carryoverService: ServiceOrderCarryoverService,
+    private telegram: TelegramService,
   ) {}
 
   private getTenantId(): string {
@@ -1705,6 +1707,10 @@ private async assertTechCanMutateServiceOrder(
             state: 'ACTIVE' as any,
           } as any,
         });
+      }
+
+      if (technicianId) {
+        await this.telegram.queueSchedule(tx, tenantId, technicianId, { ...corrective, assetCode: source.assetCode }, actorUserId);
       }
 
       const copiedParts: Array<{ sourcePartId: string; correctivePartId: string }> = [];
@@ -3624,6 +3630,8 @@ async schedule(id: string, dto: ScheduleServiceOrderDto) {
   const actorUserId = this.getUserId();
 
   return this.prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT "id" FROM "WorkOrder" WHERE "id" = ${id} AND "tenantId" = ${tenantId} FOR UPDATE`;
+
     const wo = await tx.workOrder.findFirst({ where: { id, tenantId, kind: 'SERVICE_ORDER' } });
     if (!wo) throw new NotFoundException('Service order not found');
 
@@ -3768,6 +3776,16 @@ if (dto.dueDate === null) {
 
     if (auditEntries.length) {
       await this.appendAuditMany(tx, tenantId, id, auditEntries);
+    }
+
+    if (auditEntries.some(entry => ['dueDate', 'durationMin', 'technicianId'].includes(entry.field))) {
+      const recipients = await tx.wOAssignment.findMany({
+        where: { tenantId, workOrderId: id, role: 'TECHNICIAN', state: 'ACTIVE' },
+        select: { userId: true },
+      });
+      for (const recipientId of new Set(recipients.map(row => row.userId))) {
+        await this.telegram.queueSchedule(tx, tenantId, recipientId, updated, actorUserId);
+      }
     }
 
     return updated;

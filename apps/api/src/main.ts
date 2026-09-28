@@ -10,6 +10,7 @@ import type { Request, Response, NextFunction } from 'express';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, { cors: false });
+  app.enableShutdownHooks();
   const prisma = app.get(PrismaService);
   await prisma.$connect();
   app.use(express.json({ limit: '10mb' }));

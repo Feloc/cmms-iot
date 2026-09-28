@@ -560,6 +560,8 @@ model User {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
+  telegramConnection             TelegramConnection?
+  telegramDeliveries             TelegramDelivery[]
   assignments                    WOAssignment[]
   serviceOrderParts              ServiceOrderPart[]
   assetMeterReadings             AssetMeterReading[]
@@ -3683,4 +3685,163 @@ model ManufacturingHandoverAcceptance {
   createdAt DateTime @default(now())
 
   @@index([tenantId, signedAt(sort: Desc)])
+}
+
+model TelegramConnection {
+  id               String   @id @default(cuid())
+  tenantId         String
+  userId           String   @unique
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  chatId           String?
+  telegramUserId   String?
+  username         String?
+  enabled          Boolean  @default(false)
+  automatic        Boolean  @default(true)
+  linkTokenHash    String?  @unique
+  linkExpiresAt    DateTime?
+  linkedAt         DateTime?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@unique([tenantId, telegramUserId])
+  @@index([chatId])
+}
+
+model TelegramDelivery {
+  id              String   @id @default(cuid())
+  tenantId        String
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  chatId          String
+  linkedAt        DateTime
+  eventKey        String
+  kind            String
+  workOrderId     String?
+  actorUserId     String?
+  text            String
+  status          String   @default("PENDING")
+  attempts        Int      @default(0)
+  availableAt     DateTime @default(now())
+  leaseId         String?
+  leaseUntil      DateTime?
+  error           String?
+  messageId       String?
+  createdAt       DateTime @default(now())
+  sentAt          DateTime?
+
+  @@unique([tenantId, eventKey, userId])
+  @@index([status, availableAt])
+  @@index([tenantId, createdAt])
+}
+
+// Shared across tenants: one receiver and cursor per bot.
+model TelegramPollingState {
+  botId       String   @id
+  nextOffset  BigInt   @default(0)
+  leaseOwner  String?
+  leaseUntil  DateTime?
+  lastPollAt  DateTime?
+  lastError   String?
+}
+
+// General tasks: all access is tenant-scoped and checked against task visibility.
+model Task {
+  id String @id @default(cuid())
+  tenantId String
+  title String
+  description String @default("")
+  expectedResult String @default("")
+  visibility String @default("PRIVATE")
+  priority String @default("NORMAL")
+  status String @default("PENDING")
+  progressPercent Int @default(0)
+  createdByUserId String
+  responsibleUserId String?
+  plannedStart DateTime?
+  dueAt DateTime?
+  startedAt DateTime?
+  completedAt DateTime?
+  archivedAt DateTime?
+  lastProgressAt DateTime?
+  tags String[] @default([])
+  assetId String?
+  workOrderId String?
+  manufacturingOrderId String?
+  version Int @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  participants TaskParticipant[]
+  dependencies TaskDependency[] @relation("TaskDependencies")
+  successors TaskDependency[] @relation("TaskSuccessors")
+  updates TaskUpdate[]
+  events TaskEvent[]
+  attachments TaskAttachment[]
+  @@unique([tenantId, id])
+  @@index([tenantId, archivedAt, status, dueAt])
+  @@index([tenantId, createdByUserId])
+  @@index([tenantId, responsibleUserId])
+}
+model TaskParticipant {
+  id String @id @default(cuid())
+  tenantId String
+  taskId String
+  userId String
+  role String
+  task Task @relation(fields: [tenantId, taskId], references: [tenantId, id], onDelete: Cascade)
+  @@unique([taskId, userId])
+  @@index([tenantId, userId])
+}
+model TaskDependency {
+  id String @id @default(cuid())
+  tenantId String
+  taskId String
+  predecessorId String
+  task Task @relation("TaskDependencies", fields: [tenantId, taskId], references: [tenantId, id], onDelete: Restrict)
+  predecessor Task @relation("TaskSuccessors", fields: [tenantId, predecessorId], references: [tenantId, id], onDelete: Restrict)
+  @@unique([taskId, predecessorId])
+  @@index([tenantId, predecessorId])
+}
+model TaskUpdate {
+  id String @id @default(cuid())
+  tenantId String
+  taskId String
+  task Task @relation(fields: [tenantId, taskId], references: [tenantId, id], onDelete: Restrict)
+  kind String
+  note String
+  progressPercent Int?
+  minutesSpent Int @default(0)
+  actorId String
+  actorName String
+  createdAt DateTime @default(now())
+  attachments TaskAttachment[]
+  @@unique([tenantId, taskId, id])
+  @@index([tenantId, taskId, createdAt])
+}
+model TaskEvent {
+  id String @id @default(cuid())
+  tenantId String
+  taskId String
+  task Task @relation(fields: [tenantId, taskId], references: [tenantId, id], onDelete: Restrict)
+  action String
+  actorId String
+  actorName String
+  note String?
+  details Json?
+  createdAt DateTime @default(now())
+  @@index([tenantId, taskId, createdAt])
+}
+model TaskAttachment {
+  id String @id @default(cuid())
+  tenantId String
+  taskId String
+  task Task @relation(fields: [tenantId, taskId], references: [tenantId, id], onDelete: Restrict)
+  updateId String?
+  update TaskUpdate? @relation(fields: [tenantId, taskId, updateId], references: [tenantId, taskId, id], onDelete: Restrict)
+  filename String
+  storageKey String @unique
+  mimeType String
+  size Int
+  createdByUserId String
+  createdAt DateTime @default(now())
+  @@index([tenantId, taskId, createdAt])
 }

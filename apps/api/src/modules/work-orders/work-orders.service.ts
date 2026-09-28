@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma.service';
 import { tenantStorage } from '../../common/tenant-context';
 import { CreateWorkOrderDto } from './dto/create-work-order.dto';
@@ -11,6 +11,7 @@ import { CreatePartDto, UpdatePartDto } from './dto/part.dto';
 import { CreateMeasurementDto, UpdateMeasurementDto } from './dto/measurement.dto';
 import { CreateNoteDto } from './dto/note.dto';
 import { InventoryLedgerService } from '../inventory/inventory-ledger.service';
+import { TelegramService } from '../notifications/telegram.service';
 
 
 @Injectable()
@@ -18,6 +19,7 @@ export class WorkOrdersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly inventoryLedger: InventoryLedgerService,
+    private readonly telegram: TelegramService,
   ) {}
 
   private getTenantId(): string {
@@ -142,31 +144,40 @@ export class WorkOrdersService {
 
   async addAssignment(woId: string, dto: AddAssignmentDto) {
     const tenantId = this.getTenantId();
-    await this.ensureWO(woId, tenantId);
-
-    const existing = await this.prisma.wOAssignment.findFirst({
-      where: { tenantId, workOrderId: woId, userId: dto.userId, state: 'ACTIVE' },
-    });
-    if (existing) return existing; // idempotente
-
-    return this.prisma.wOAssignment.create({
-      data: {
-        tenantId,
-        workOrderId: woId,
-        userId: dto.userId,
-        role: dto.role,
-        state: 'ACTIVE',
-      },
+    const actorUserId = this.getUserId();
+    return this.prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT "id" FROM "WorkOrder" WHERE "id" = ${woId} AND "tenantId" = ${tenantId} FOR UPDATE`;
+      const wo = await tx.workOrder.findFirst({ where: { id: woId, tenantId } });
+      if (!wo) throw new NotFoundException('WO not found');
+      const user = await tx.user.findFirst({ where: { id: dto.userId, tenantId }, select: { id: true } });
+      if (!user) throw new BadRequestException('User not found in this tenant');
+      const existing = await tx.wOAssignment.findFirst({
+        where: { tenantId, workOrderId: woId, userId: dto.userId, state: 'ACTIVE' },
+      });
+      if (existing) return existing;
+      const created = await tx.wOAssignment.create({ data: {
+        tenantId, workOrderId: woId, userId: dto.userId, role: dto.role, state: 'ACTIVE',
+      } });
+      if (wo.kind === 'SERVICE_ORDER' && created.role === 'TECHNICIAN') {
+        await this.telegram.queueSchedule(tx, tenantId, created.userId, wo, actorUserId);
+      }
+      return created;
     });
   }
 
   async updateAssignment(woId: string, assignmentId: string, dto: UpdateAssignmentDto) {
     const tenantId = this.getTenantId();
-    await this.ensureWO(woId, tenantId);
-    // opcional: validar que el assignment pertenece al mismo tenant
-    return this.prisma.wOAssignment.update({
-      where: { id: assignmentId },
-      data: { state: dto.state, note: dto.note },
+    const actorUserId = this.getUserId();
+    return this.prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT "id" FROM "WorkOrder" WHERE "id" = ${woId} AND "tenantId" = ${tenantId} FOR UPDATE`;
+      const wo = await tx.workOrder.findFirst({ where: { id: woId, tenantId } });
+      const current = await tx.wOAssignment.findFirst({ where: { id: assignmentId, tenantId, workOrderId: woId } });
+      if (!wo || !current) throw new NotFoundException('Assignment not found');
+      const updated = await tx.wOAssignment.update({ where: { id: assignmentId }, data: { state: dto.state, note: dto.note } });
+      if (wo.kind === 'SERVICE_ORDER' && updated.role === 'TECHNICIAN' && current.state !== 'ACTIVE' && updated.state === 'ACTIVE') {
+        await this.telegram.queueSchedule(tx, tenantId, updated.userId, wo, actorUserId);
+      }
+      return updated;
     });
   }
 

@@ -6,6 +6,7 @@ import { ManufacturingQuickService } from '../src/modules/manufacturing/manufact
 import { ManufacturingService } from '../src/modules/manufacturing/manufacturing.service';
 import { AfterSalesPartDemandsService } from '../src/modules/service-orders/after-sales-part-demands.service';
 import { ServiceOrdersService } from '../src/modules/service-orders/service-orders.service';
+import { TelegramService } from '../src/modules/notifications/telegram.service';
 import { InventoryLedgerService } from '../src/modules/inventory/inventory-ledger.service';
 
 // Everything, including test tenants, is rolled back. No existing user data is used.
@@ -36,7 +37,7 @@ async function main() {
       const so = await tx.workOrder.create({ data: { tenantId: tenant.id, kind: 'SERVICE_ORDER', assetCode: asset.code, title: 'Test OS' } });
       const part = await tx.serviceOrderPart.create({ data: { tenantId: tenant.id, workOrderId: so.id, inventoryItemId: output.id, qty: 3, stage: 'REQUIRED' } });
       const quick = new ManufacturingQuickService(db); const demands = new AfterSalesPartDemandsService(db, quick); const manufacturing = new ManufacturingService(db, quick);
-      const serviceOrders = new ServiceOrdersService(db, new InventoryLedgerService(db), {} as any, {} as any);
+      const serviceOrders = new ServiceOrdersService(db, new InventoryLedgerService(db), {} as any, {} as any, new TelegramService(db));
       await tenantStorage.run({ tenantId: tenant.id, userId: admin.id }, async () => {
         const recipe = { name: 'Buje', specification: 'PL-TEST', drawingRevision: 'A', critical: false, stableDesign: true, requiresSerial: false, inspectionMode: 'LOT', currency: 'COP', hourlyRate: 60000, materials: [{ inventoryItemId: material.id, quantity: 2 }], operations: [{ name: 'Tornear', instructions: 'Según plano', estimatedMinutes: 10, evidenceRequired: true }], checks: [{ name: 'Diámetro', criteria: '10 ± 0.1', type: 'NUMERIC', min: 9.9, max: 10.1, evidenceRequired: true }] };
         const profile = await quick.createProfile(output.id, { recipe });

@@ -15,6 +15,7 @@ type NavItem = {
 const NAV_ITEMS: NavItem[] = [
   { href: '/dashboard', label: 'Dashboard', adminOnly: true },
   { href: '/calendar', label: 'Calendario' },
+  { href: '/tasks', label: 'Tareas' },
   { href: '/service-orders', label: 'Órdenes de servicio' },
   { href: '/manufacturing', label: 'Manufactura' },
   { href: '/engineering-requests', label: 'Ingeniería' },
@@ -24,6 +25,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: '/tenant-branding', label: 'Branding', adminOnly: true },
   { href: '/pm-plans', label: 'PM Plans' },
   { href: '/users', label: 'Usuarios', adminOnly: true },
+  { href: '/telegram', label: 'Telegram' },
   { href: '/tenants', label: 'Tenants', adminOnly: true },
 ];
 
@@ -176,6 +178,8 @@ function iconFor(href: string) {
   switch (href) {
     case '/dashboard':
       return '📊';
+    case '/tasks':
+      return '☑️';
     case '/calendar':
       return '🗓️';
     case '/service-orders':

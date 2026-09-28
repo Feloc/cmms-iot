@@ -1,0 +1,16 @@
+export const taskStatuses: Record<string, string> = { PENDING: 'Pendiente', IN_PROGRESS: 'En ejecución', PAUSED: 'En pausa', COMPLETED: 'Completada', CANCELED: 'Cancelada' };
+export const taskVisibility: Record<string, string> = { PRIVATE: 'Privada', SELECTIVE: 'Selectiva', PUBLIC: 'Pública' };
+export const taskPriorities: Record<string, string> = { LOW: 'Baja', NORMAL: 'Normal', HIGH: 'Alta', URGENT: 'Urgente' };
+export const taskActions: Record<string, string> = { created: 'Tarea creada', edited: 'Datos actualizados', start: 'Iniciar / retomar', pause: 'Pausar', complete: 'Completar', cancel: 'Cancelar tarea', reopen: 'Reabrir', archive: 'Archivar', restore: 'Restaurar', 'dependency-added': 'Dependencia agregada', 'dependency-removed': 'Dependencia retirada', 'file-added': 'Evidencia adjunta' };
+export type TaskUser = { id: string; name: string; role: string };
+export type TaskFields = { title: string; description: string; expectedResult: string; priority: string; visibility: string; responsibleUserId: string | null; plannedStart: string | null; dueAt: string | null; tags: string[]; participants: { userId: string; role: string }[]; assetId?: string | null; workOrderId?: string | null; manufacturingOrderId?: string | null };
+export type Task = TaskFields & { related: { id: string; type: string; label: string; href: string }[]; id: string; tenantId: string; createdByUserId: string; version: number; status: string; progressPercent: number; blocked: boolean; overdue: boolean; archivedAt: string | null; startedAt: string | null; completedAt: string | null; createdAt: string; updatedAt: string; permissions: { manage: boolean; execute: boolean; contribute: boolean }; dependencies: { id: string; predecessorId?: string; title?: string; status?: string; restricted: boolean; completed: boolean }[]; updates: { id: string; kind: string; note: string; progressPercent: number | null; minutesSpent: number; actorName: string; createdAt: string }[]; events: { id: string; action: string; actorName: string; note?: string; details?: { before?: Record<string, unknown>; after?: Record<string, unknown> }; createdAt: string }[]; attachments: { id: string; filename: string; size: number; updateId?: string; createdAt: string }[] };
+export type TaskList = { items: Task[]; total: number; page: number; pages: number; stats: { pending: number; overdue: number; blocked: number; stale: number } };
+export const taskInput = 'w-full min-w-0 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-emerald-600';
+export function taskError(error: unknown) {
+  const message = error instanceof Error ? error.message : '';
+  try { const body = JSON.parse(message.slice(message.indexOf('{'))); if (body.message) return Array.isArray(body.message) ? body.message.join('. ') : String(body.message); } catch {}
+  return 'No se pudo completar la operación. Actualiza la página para comprobar el estado.';
+}
+export function taskDate(date?: string | null) { return date ? new Date(date).toLocaleString('es-CO') : '—'; }
+export function localDateValue(date?: string | null) { if (!date) return ''; const d = new Date(date); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16); }

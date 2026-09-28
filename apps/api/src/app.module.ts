@@ -1,3 +1,4 @@
+import { TasksModule } from './modules/tasks/tasks.module';
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { AuthModule } from './modules/auth/auth.module';
@@ -51,6 +52,7 @@ import { EngineeringModule } from './modules/engineering/engineering.module';
     AssembliesModule,
     ManufacturingModule,
     EngineeringModule,
+    TasksModule,
   ],
 })
 export class AppModule {}

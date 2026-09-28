@@ -49,6 +49,7 @@ COPY --from=build /app/apps/api/prisma /app/apps/api/prisma
 COPY --from=build /app/apps/api/package.json /app/apps/api/package.json
 COPY --from=build /app/apps/api/scripts/entrypoint.prod.sh /app/apps/api/scripts/entrypoint.prod.sh
 COPY --from=build /app/apps/api/scripts/run-sql-migrations.sh /app/apps/api/scripts/run-sql-migrations.sh
+COPY --from=build /app/apps/api/scripts/configure-telegram-webhook.cjs /app/apps/api/scripts/configure-telegram-webhook.cjs
 COPY --from=build /app/db/migrations /app/db/migrations
 
 RUN chmod +x /app/apps/api/scripts/entrypoint.prod.sh

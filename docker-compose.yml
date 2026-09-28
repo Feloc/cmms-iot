@@ -18,6 +18,21 @@ services:
       timeout: 5s
       retries: 20
 
+  # Explicit SQL migration tool; see README-telegram.md for scoped legacy upgrades.
+  migrate:
+    image: timescale/timescaledb:2.17.2-pg15
+    profiles: [tools]
+    env_file: .env
+    environment:
+      SQL_MIGRATIONS_DIR: /migrations/sql
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./db/migrations:/migrations/sql:ro
+      - ./apps/api/scripts/run-sql-migrations.sh:/migrations/run.sh:ro
+    entrypoint: [sh, /migrations/run.sh]
+
   mosquitto:
     image: eclipse-mosquitto:2
     container_name: cmms_mosquitto

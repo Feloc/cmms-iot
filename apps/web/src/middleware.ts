@@ -22,6 +22,7 @@ export const config = {
     "/calendar/:path*",
     "/service-orders/:path*",
     "/pm-plans/:path*",
+    "/telegram/:path*",
     "/users/:path*",
     "/tenants/:path*",
     "/devices/:path*",
