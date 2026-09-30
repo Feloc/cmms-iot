@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { ApprovalException } from '../ApprovalException';
+import { ManufacturingFatImport } from './ManufacturingFatImport';
 import { apiFetch } from '@/lib/api';
 import { useApiSWR } from '@/lib/swr';
 import { dateLabel, type ManufacturingAssemblyExecution, type ManufacturingFatCase, type ManufacturingFatDeviation, type ManufacturingFatExecution, type ManufacturingFatResultType, type ManufacturingFatTemplate, type ManufacturingOrder } from '@/lib/manufacturing';
@@ -27,6 +28,7 @@ export function ManufacturingFatTab({ order, role, auth, onChanged }: { order: M
     {message ? <div className="whitespace-pre-wrap rounded border border-red-200 bg-red-50 p-3 text-sm text-red-700">{message}</div> : null}
     {error ? <div className="rounded border border-red-200 bg-red-50 p-3 text-sm text-red-700">No se pudieron cargar las pruebas FAT.</div> : null}
     {role === 'ADMIN' ? <ProtocolBuilder auth={auth} onCreated={() => mutateTemplates()} onError={setMessage} /> : null}
+    {role === 'ADMIN' ? <ManufacturingFatImport auth={auth} onCreated={() => mutateTemplates()} /> : null}
     {role === 'ADMIN' && eligibleUnits.length ? <ExecutionCreator units={eligibleUnits} templates={templates || []} auth={auth} onChanged={accept} onError={setMessage} /> : null}
     {isLoading ? <div className="py-8 text-center text-sm text-gray-500">Cargando FAT…</div> : null}
     {!isLoading && !executions.length ? <div className="rounded-lg border border-dashed p-10 text-center"><div className="font-medium">Aún no hay ejecuciones FAT</div><p className="mt-1 text-sm text-gray-600">Completa el ensamble de una unidad y crea su ejecución desde un protocolo activo.</p></div> : null}

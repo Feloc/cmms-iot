@@ -1,7 +1,10 @@
 import { UseGuards, UsePipes } from '@nestjs/common';
 import { ManufacturingAccessGuard } from './manufacturing-access.guard';
 import { ManufacturingValidationPipe } from './manufacturing-validation.pipe';
-import { Body, Controller, Get, Param, Post, Patch, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Patch, Query, StreamableFile, UploadedFile, UseInterceptors } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
+import { FAT_IMPORT_MAX_BYTES, fatProtocolExample, previewFatProtocol } from './manufacturing-fat-import';
 import { ManufacturingFatService } from './manufacturing-fat.service';
 import { CreateManufacturingFatEvidenceDto, CreateManufacturingFatExecutionDto, CreateManufacturingFatTemplateDto, DecideManufacturingFatDto, ManufacturingFatVersionDto, RecordManufacturingFatCaseDto, UpdateManufacturingFatDeviationDto } from './dto/manufacturing-fat.dto';
 
@@ -12,6 +15,13 @@ export class ManufacturingFatController {
   constructor(private readonly service: ManufacturingFatService) {}
   @Get('fat-templates') templates(@Query('active') active?: string) { return this.service.listTemplates(active); }
   @Post('fat-templates') createTemplate(@Body() dto: CreateManufacturingFatTemplateDto) { return this.service.createTemplate(dto); }
+  @Post('fat-templates/import/preview')
+  @UseInterceptors(FileInterceptor('file', { storage: memoryStorage(), limits: { fileSize: FAT_IMPORT_MAX_BYTES, files: 1, fields: 0 } }))
+  previewTemplate(@UploadedFile() file?: { originalname: string; buffer: Buffer }) { return previewFatProtocol(file); }
+  @Get('fat-templates/import/example')
+  templateExample(@Query('format') format = 'xlsx') {
+    return new StreamableFile(fatProtocolExample(format), { type: format === 'csv' ? 'text/csv; charset=utf-8' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', disposition: `attachment; filename="protocolo-fat.${format}"` });
+  }
   @Get('orders/:orderId/fat-executions') list(@Param('orderId') orderId: string) { return this.service.list(orderId); }
   @Get('units/:unitId/dispatch-readiness') readiness(@Param('unitId') unitId: string) { return this.service.dispatchReadiness(unitId); }
   @Post('units/:unitId/fat-executions') create(@Param('unitId') unitId: string, @Body() dto: CreateManufacturingFatExecutionDto) { return this.service.createExecution(unitId, dto); }
