@@ -11,7 +11,7 @@
     "test:carryover": "node --test -r ts-node/register/transpile-only test/service-order-carryover.spec.ts",
     "test:engineering": "node --test -r ts-node/register/transpile-only test/engineering-requests.spec.ts",
     "test:engineering:integration": "node -r ts-node/register/transpile-only test/engineering-requests.integration.ts",
-    "test:manufacturing": "node --test -r ts-node/register/transpile-only test/manufacturing-foundation.spec.ts test/manufacturing-quick.spec.ts test/manufacturing-stabilization.spec.ts test/manufacturing-fat-import.spec.ts",
+    "test:manufacturing": "node --test -r ts-node/register/transpile-only test/manufacturing-foundation.spec.ts test/manufacturing-quick.spec.ts test/manufacturing-stabilization.spec.ts test/manufacturing-fat-import.spec.ts test/manufacturing-fat-findings.spec.ts",
     "test:manufacturing:fat-import:integration": "ts-node --transpile-only test/manufacturing-fat-import.integration.ts",
     "test:manufacturing:integration": "ts-node --transpile-only test/manufacturing-supply.integration.ts && ts-node --transpile-only test/manufacturing-quick.integration.ts",
     "parts-manual:import": "ts-node prisma/import-parts-manual.ts",

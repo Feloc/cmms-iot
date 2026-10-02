@@ -6,6 +6,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { FAT_IMPORT_MAX_BYTES, fatProtocolExample, previewFatProtocol } from './manufacturing-fat-import';
 import { ManufacturingFatService } from './manufacturing-fat.service';
+import { CreateManufacturingFatDeviationDto } from './dto/manufacturing-fat.dto';
 import { CreateManufacturingFatEvidenceDto, CreateManufacturingFatExecutionDto, CreateManufacturingFatTemplateDto, DecideManufacturingFatDto, ManufacturingFatVersionDto, RecordManufacturingFatCaseDto, UpdateManufacturingFatDeviationDto } from './dto/manufacturing-fat.dto';
 
 @UseGuards(ManufacturingAccessGuard)
@@ -23,6 +24,9 @@ export class ManufacturingFatController {
     return new StreamableFile(fatProtocolExample(format), { type: format === 'csv' ? 'text/csv; charset=utf-8' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', disposition: `attachment; filename="protocolo-fat.${format}"` });
   }
   @Get('orders/:orderId/fat-executions') list(@Param('orderId') orderId: string) { return this.service.list(orderId); }
+  @Get('orders/:orderId/fat-assignees') assignees(@Param('orderId') orderId: string) { return this.service.findingAssignees(orderId); }
+  @Post('fat-cases/:caseId/deviations') createDeviation(@Param('caseId') caseId: string, @Body() dto: CreateManufacturingFatDeviationDto) { return this.service.createDeviation(caseId, dto); }
+  @Post('fat-deviations/:deviationId/evidence') deviationEvidence(@Param('deviationId') deviationId: string, @Body() dto: CreateManufacturingFatEvidenceDto) { return this.service.addDeviationEvidence(deviationId, dto); }
   @Get('units/:unitId/dispatch-readiness') readiness(@Param('unitId') unitId: string) { return this.service.dispatchReadiness(unitId); }
   @Post('units/:unitId/fat-executions') create(@Param('unitId') unitId: string, @Body() dto: CreateManufacturingFatExecutionDto) { return this.service.createExecution(unitId, dto); }
   @Post('fat-executions/:executionId/start') start(@Param('executionId') executionId: string, @Body() dto: ManufacturingFatVersionDto) { return this.service.start(executionId, dto); }

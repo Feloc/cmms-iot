@@ -16,7 +16,7 @@ export type ManufacturingAssemblyOperationStatus = 'PENDING' | 'IN_PROGRESS' | '
 export type ManufacturingFatExecutionStatus = 'DRAFT' | 'IN_PROGRESS' | 'AWAITING_APPROVAL' | 'APPROVED' | 'REJECTED' | 'CANCELED';
 export type ManufacturingFatCaseResult = 'PENDING' | 'PASS' | 'FAIL' | 'NOT_APPLICABLE';
 export type ManufacturingFatResultType = 'BOOLEAN' | 'NUMERIC' | 'TEXT';
-export type ManufacturingFatDeviationStatus = 'OPEN' | 'IN_REWORK' | 'RESOLVED' | 'ACCEPTED_AS_IS';
+export type ManufacturingFatDeviationStatus = 'OPEN' | 'IN_REWORK' | 'PENDING_VERIFICATION' | 'RESOLVED' | 'ACCEPTED_AS_IS';
 export type ManufacturingDispatchStatus = 'DRAFT' | 'PREPARING' | 'READY' | 'AUTHORIZED' | 'DISPATCHED' | 'DELIVERED' | 'CANCELED';
 export type ManufacturingDispatchChecklistStatus = 'PENDING' | 'COMPLETED' | 'NOT_APPLICABLE';
 export type ManufacturingDispatchPackageType = 'CRATE' | 'PALLET' | 'BOX' | 'LOOSE' | 'OTHER';
@@ -518,6 +518,17 @@ export type ManufacturingFatDeviation = {
   deviationCode: string;
   title: string;
   description: string;
+  kind: 'NON_CONFORMITY' | 'OBSERVATION';
+  severity: 'MINOR' | 'MAJOR' | 'CRITICAL';
+  location?: string | null;
+  responsibleUserId?: string | null;
+  responsibleName?: string | null;
+  dueAt?: string | null;
+  correctedByName?: string | null;
+  correctedAt?: string | null;
+  verificationNotes?: string | null;
+  evidence: ManufacturingFatEvidence[];
+  history: Array<{ id: string; createdAt: string; actorName: string; summary: string; afterData: Record<string, unknown> }>;
   status: ManufacturingFatDeviationStatus;
   correctiveAction?: string | null;
   resolutionNotes?: string | null;
@@ -563,6 +574,7 @@ export type ManufacturingFatApproval = {
 };
 
 export type ManufacturingFatExecution = {
+  permissions: { canOperate: boolean; canVerify: boolean };
   id: string;
   manufacturingOrderId: string;
   manufacturedUnitId: string;
@@ -581,7 +593,7 @@ export type ManufacturingFatExecution = {
   assemblyExecution: { id: string; executionCode: string; status: ManufacturingAssemblyExecutionStatus; completedAt?: string | null };
   cases: ManufacturingFatCase[];
   approvals: ManufacturingFatApproval[];
-  summary: { caseCount: number; passedCount: number; failedCount: number; pendingCount: number; openDeviationCount: number; progressPercent: number; dispatchReady: boolean };
+  summary: { caseCount: number; passedCount: number; failedCount: number; pendingCount: number; openDeviationCount: number; blockingDeviationCount: number; observationCount: number; closedDeviationCount: number; progressPercent: number; dispatchReady: boolean };
 };
 
 export type ManufacturingDispatchChecklistItem = {

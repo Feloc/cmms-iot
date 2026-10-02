@@ -11,7 +11,7 @@ type Control = {
   blockers: string[]; warnings: string[]; risk: 'HIGH' | 'MEDIUM' | 'LOW' | 'CLOSED';
   units: Array<{ id: string; unitNumber: number; stage: string; progress: number }>;
 };
-const riskLabels = { HIGH: 'Requiere atención', MEDIUM: 'Entrega próxima', LOW: 'Sin alertas', CLOSED: 'Cerrada' };
+const riskLabels = { HIGH: 'Requiere atención', MEDIUM: 'Seguimiento preventivo', LOW: 'Sin alertas', CLOSED: 'Cerrada' };
 
 export function ManufacturingControl({ auth, orderId }: { auth: { token?: string; tenantSlug?: string }; orderId?: string }) {
   const [page, setPage] = useState(1);
@@ -29,7 +29,7 @@ export function ManufacturingControl({ auth, orderId }: { auth: { token?: string
       <input aria-label="Buscar en control operativo" className="border rounded px-3 py-2 text-sm" placeholder="Buscar orden o proyecto" value={query} onChange={e => setQuery(e.target.value)} />
       <button className="border rounded px-3 py-2 text-sm">Buscar</button>
       <label className="text-sm"><input type="checkbox" checked={closed} onChange={e => { setClosed(e.target.checked); setPage(1); }} /> Incluir cerradas</label>
-      <span className="text-xs text-gray-600">En esta página: {rows.filter(r => r.risk === 'HIGH').length} requieren atención · {rows.filter(r => r.risk === 'MEDIUM').length} próximas a entrega</span>
+      <span className="text-xs text-gray-600">En esta página: {rows.filter(r => r.risk === 'HIGH').length} requieren atención · {rows.filter(r => r.risk === 'MEDIUM').length} en seguimiento preventivo</span>
     </form> : null}
     {error ? <p role="alert" className="text-red-700">No se pudo cargar el control operativo.</p> : isLoading ? <p>Cargando avance…</p> : !rows.length ? <p className="text-gray-600">No hay órdenes para estos filtros.</p> : <div className="space-y-3">{rows.map(row => <article key={row.id} className="rounded border p-3 space-y-2">
       <div className="flex flex-wrap justify-between gap-2"><Link className="font-medium underline" href={`/manufacturing/${row.id}`}>{row.number} · {row.projectName}</Link><span className={`text-xs rounded px-2 py-1 ${row.risk === 'HIGH' ? 'bg-red-50 text-red-800' : row.risk === 'MEDIUM' ? 'bg-amber-50 text-amber-800' : 'bg-gray-100 text-gray-700'}`}>{riskLabels[row.risk]}</span></div>

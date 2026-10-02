@@ -1,13 +1,14 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma.service';
 import { tenantStorage } from '../../common/tenant-context';
+import { assertFatFindingTransition, assertFatReady, FAT_OPEN_FINDING_STATUSES, isBlockingFatFinding } from './manufacturing-fat-findings.domain';
 import { assertIndependentApproval } from './manufacturing-approval';
-import { CreateManufacturingFatEvidenceDto, CreateManufacturingFatExecutionDto, CreateManufacturingFatTemplateDto, DecideManufacturingFatDto, ManufacturingFatVersionDto, RecordManufacturingFatCaseDto, UpdateManufacturingFatDeviationDto } from './dto/manufacturing-fat.dto';
+import { CreateManufacturingFatDeviationDto, CreateManufacturingFatEvidenceDto, CreateManufacturingFatExecutionDto, CreateManufacturingFatTemplateDto, DecideManufacturingFatDto, ManufacturingFatVersionDto, RecordManufacturingFatCaseDto, UpdateManufacturingFatDeviationDto } from './dto/manufacturing-fat.dto';
 
 type Actor = { id: string; name: string; role: string };
 const RESULT_TYPES = new Set(['BOOLEAN', 'NUMERIC', 'TEXT']);
 const CASE_RESULTS = new Set(['PASS', 'FAIL', 'NOT_APPLICABLE']);
-const DEVIATION_STATUSES = new Set(['OPEN', 'IN_REWORK', 'RESOLVED', 'ACCEPTED_AS_IS']);
+
 
 @Injectable()
 export class ManufacturingFatService {
@@ -35,7 +36,7 @@ export class ManufacturingFatService {
     return {
       manufacturedUnit: true,
       assemblyExecution: { select: { id: true, executionCode: true, status: true, completedAt: true } },
-      cases: { include: { evidence: { orderBy: { createdAt: 'desc' } }, deviations: { orderBy: { sequence: 'asc' } } }, orderBy: { position: 'asc' } },
+      cases: { include: { evidence: { where: { deviationId: null }, orderBy: { createdAt: 'desc' } }, deviations: { include: { evidence: { orderBy: { createdAt: 'desc' } } }, orderBy: { sequence: 'asc' } } }, orderBy: { position: 'asc' } },
       approvals: { orderBy: { signedAt: 'desc' } },
     };
   }
@@ -80,9 +81,50 @@ export class ManufacturingFatService {
 
   async list(orderId: string) {
     const { tenantId, userId } = this.context(); const actor = await this.actor(this.prisma as any, tenantId, userId);
-    await this.visibleOrder(this.prisma as any, tenantId, orderId, actor);
+    const order = await this.visibleOrder(this.prisma as any, tenantId, orderId, actor);
     const rows = await (this.prisma as any).manufacturingFatExecution.findMany({ where: { tenantId, manufacturingOrderId: orderId }, include: this.include(), orderBy: [{ manufacturedUnit: { unitNumber: 'asc' } }, { sequence: 'desc' }] });
-    return rows.map((row: any) => this.serialize(row));
+    const ids = rows.flatMap((row: any) => row.cases.flatMap((c: any) => c.deviations.map((d: any) => d.id)));
+    const events = ids.length ? await this.prisma.manufacturingAuditEvent.findMany({ where: { tenantId, entityType: 'ManufacturingFatDeviation', entityId: { in: ids } }, select: { id: true, entityId: true, createdAt: true, actorName: true, summary: true, afterData: true }, orderBy: { createdAt: 'asc' } }) : [];
+    for (const row of rows) for (const c of row.cases) for (const d of c.deviations) d.history = events.filter(e => e.entityId === d.id);
+    return rows.map((row: any) => ({ ...this.serialize(row), permissions: this.permissions(order, actor) }));
+  }
+
+  private permissions(order: any, actor: Actor) {
+    const operational = order.responsibleUserId === actor.id || order.members.some((m: any) => m.userId === actor.id && m.function !== 'OBSERVER');
+    return {
+      canOperate: actor.role === 'ADMIN' || (actor.role === 'TECH' && operational),
+      canVerify: actor.role === 'ADMIN' || (actor.role === 'TECH' && (order.responsibleUserId === actor.id || order.members.some((m: any) => m.userId === actor.id && m.function === 'REVIEWER'))),
+    };
+  }
+  async findingAssignees(orderId: string) {
+    const { tenantId, userId } = this.context(); const actor = await this.actor(this.prisma, tenantId, userId);
+    await this.visibleOrder(this.prisma, tenantId, orderId, actor);
+    const order = await this.prisma.manufacturingOrder.findFirst({ where: { id: orderId, tenantId }, include: { members: true } });
+    const ids = [order!.responsibleUserId, ...order!.members.filter(m => m.function !== 'OBSERVER').map(m => m.userId)];
+    return this.prisma.user.findMany({ where: { tenantId, OR: [{ role: 'ADMIN' }, { role: 'TECH', id: { in: ids } }] }, select: { id: true, name: true }, orderBy: { name: 'asc' } });
+  }
+  private async assignment(tx: any, tenantId: string, orderId: string, dto: { responsibleUserId?: string | null; dueAt?: string | null }) {
+    const data: any = {};
+    if (dto.responsibleUserId !== undefined) {
+      const id = this.text(dto.responsibleUserId);
+      const user = id ? await tx.user.findFirst({ where: { id, tenantId }, select: { id: true, name: true, role: true } }) : null;
+      if (id && !user) throw new BadRequestException('Responsable no válido para este tenant');
+      if (user && user.role !== 'ADMIN') {
+        const order = await tx.manufacturingOrder.findFirst({ where: { id: orderId, tenantId }, include: { members: { where: { userId: id, function: { not: 'OBSERVER' } } } } });
+        if (user.role !== 'TECH' || (order.responsibleUserId !== id && !order.members.length)) throw new BadRequestException('El responsable debe tener acceso operativo a la orden');
+      }
+      data.responsibleUserId = user?.id || null; data.responsibleName = user?.name || null;
+    }
+    if (dto.dueAt !== undefined) {
+      const value = this.text(dto.dueAt); const date = value ? new Date(value) : null;
+      if (date && !Number.isFinite(date.getTime())) throw new BadRequestException('Fecha compromiso inválida');
+      data.dueAt = date;
+    }
+    return data;
+  }
+  private async bumpExecution(tx: any, fatCase: any) {
+    await tx.manufacturingFatExecution.update({ where: { id: fatCase.executionId }, data: { lockVersion: { increment: 1 } } });
+    await tx.manufacturingOrder.update({ where: { id: fatCase.execution.manufacturingOrderId }, data: { version: { increment: 1 } } });
   }
 
   async dispatchReadiness(unitId: string) {
@@ -144,65 +186,125 @@ export class ManufacturingFatService {
       }
       if (result === 'NOT_APPLICABLE' && fatCase.required) throw new ConflictException('Un caso obligatorio no puede marcarse como no aplicable');
       if (result === 'FAIL' && (!notes || notes.length < 5)) throw new BadRequestException('Un resultado no conforme requiere una observación de al menos 5 caracteres');
-      if (result === 'PASS') {
-        const open = await tx.manufacturingFatDeviation.count({ where: { tenantId, fatCaseId: fatCase.id, status: { in: ['OPEN', 'IN_REWORK'] } } });
+      if (result !== 'FAIL') {
+        const open = await tx.manufacturingFatDeviation.count({ where: { tenantId, fatCaseId: fatCase.id, kind: 'NON_CONFORMITY', status: { in: FAT_OPEN_FINDING_STATUSES } } });
         if (open) throw new ConflictException('Resuelve el retrabajo antes de registrar una nueva prueba conforme');
       }
       await tx.manufacturingFatCase.update({ where: { id: fatCase.id }, data: { result, measuredValue, observedValue, notes, testedAt: new Date(), testedByUserId: actor.id, testedByName: actor.name, lockVersion: { increment: 1 } } });
       if (result === 'FAIL') {
-        const open = await tx.manufacturingFatDeviation.findFirst({ where: { tenantId, fatCaseId: fatCase.id, status: { in: ['OPEN', 'IN_REWORK'] } } });
+        const open = await tx.manufacturingFatDeviation.findFirst({ where: { tenantId, fatCaseId: fatCase.id, kind: 'NON_CONFORMITY', status: { in: FAT_OPEN_FINDING_STATUSES } } });
         if (!open) {
           const latest = await tx.manufacturingFatDeviation.aggregate({ where: { tenantId, executionId: fatCase.executionId }, _max: { sequence: true } }); const sequence = Number(latest._max.sequence || 0) + 1;
           await tx.manufacturingFatDeviation.create({ data: { tenantId, executionId: fatCase.executionId, fatCaseId: fatCase.id, sequence, deviationCode: `${fatCase.execution.executionCode}-D${String(sequence).padStart(2, '0')}`, title: `No conformidad: ${fatCase.name}`, description: notes, openedByUserId: actor.id, openedByName: actor.name } });
         }
       }
+      await this.bumpExecution(tx, fatCase);
       await this.audit(tx, tenantId, orderId, fatCase.id, 'FAT_CASE_RECORDED', `${fatCase.name}: ${result}`, actor, { result, measuredValue, observedValue, notes });
     }, { isolationLevel: 'Serializable' });
     return this.list(orderId);
   }
 
-  async addEvidence(caseId: string, dto: CreateManufacturingFatEvidenceDto) {
+  async createDeviation(caseId: string, dto: CreateManufacturingFatDeviationDto) {
     const { tenantId, userId } = this.context(); let orderId = '';
     await this.prisma.$transaction(async (tx: any) => {
       const actor = await this.actor(tx, tenantId, userId); const fatCase = await this.lockedCase(tx, tenantId, caseId, actor); orderId = fatCase.execution.manufacturingOrderId;
-      if (fatCase.execution.status !== 'IN_PROGRESS') throw new ConflictException('La evidencia solo puede agregarse durante la ejecución');
+      this.version(fatCase, dto.lockVersion);
+      if (fatCase.execution.status !== 'IN_PROGRESS') throw new ConflictException('El FAT no está en ejecución');
+      const title = this.text(dto.title); const description = this.text(dto.description);
+      if (!title || !description || description.length < 5) throw new BadRequestException('Título y descripción de al menos 5 caracteres son obligatorios');
+      if (!['NON_CONFORMITY', 'OBSERVATION'].includes(dto.kind) || !['MINOR', 'MAJOR', 'CRITICAL'].includes(dto.severity)) throw new BadRequestException('Clasificación inválida');
+      if (dto.kind === 'OBSERVATION' && dto.severity !== 'MINOR') throw new BadRequestException('Una observación no bloqueante solo puede ser menor; registra los incumplimientos como no conformidad');
+      const assignment = await this.assignment(tx, tenantId, orderId, dto);
+      const latest = await tx.manufacturingFatDeviation.aggregate({ where: { tenantId, executionId: fatCase.executionId }, _max: { sequence: true } });
+      const sequence = Number(latest._max.sequence || 0) + 1;
+      const deviation = await tx.manufacturingFatDeviation.create({ data: { tenantId, executionId: fatCase.executionId, fatCaseId: caseId, sequence,
+        deviationCode: `${fatCase.execution.executionCode}-D${String(sequence).padStart(2, '0')}`, title, description,
+        kind: dto.kind, severity: dto.severity, location: this.text(dto.location), ...assignment, openedByUserId: actor.id, openedByName: actor.name,
+      } });
+      await tx.manufacturingFatCase.update({ where: { id: caseId }, data: { lockVersion: { increment: 1 }, ...(dto.kind === 'NON_CONFORMITY' ? { result: 'FAIL', testedAt: new Date(), testedByUserId: actor.id, testedByName: actor.name } : {}) } });
+      await this.bumpExecution(tx, fatCase);
+      await this.audit(tx, tenantId, orderId, deviation.id, 'FAT_DEVIATION_CREATED', `${deviation.deviationCode}: ${title}`, actor, { title, description, kind: dto.kind, severity: dto.severity, location: dto.location, ...assignment });
+    }, { isolationLevel: 'Serializable' });
+    return this.list(orderId);
+  }
+
+  async addDeviationEvidence(deviationId: string, dto: CreateManufacturingFatEvidenceDto) {
+    const { tenantId } = this.context();
+    const deviation = await this.prisma.manufacturingFatDeviation.findFirst({ where: { id: deviationId, tenantId }, select: { fatCaseId: true } });
+    if (!deviation) throw new NotFoundException('Novedad no encontrada');
+    return this.addEvidence(deviation.fatCaseId, dto, deviationId);
+  }
+  async addEvidence(caseId: string, dto: CreateManufacturingFatEvidenceDto, deviationId?: string) {
+    const { tenantId, userId } = this.context(); let orderId = '';
+    await this.prisma.$transaction(async (tx: any) => {
+      const actor = await this.actor(tx, tenantId, userId);
+      const deviation = deviationId ? await tx.manufacturingFatDeviation.findFirst({ where: { id: deviationId, tenantId, fatCaseId: caseId } }) : null;
+      if (deviationId && !deviation) throw new NotFoundException('Novedad no encontrada');
+      const fatCase = await this.lockedCase(tx, tenantId, caseId, actor, deviation?.kind === 'OBSERVATION'); orderId = fatCase.execution.manufacturingOrderId;
+      if (fatCase.execution.status !== 'IN_PROGRESS' && !(deviation?.kind === 'OBSERVATION' && fatCase.execution.status === 'APPROVED')) throw new ConflictException('La evidencia no puede agregarse en este estado del FAT');
       const title = this.text(dto?.title); if (!title) throw new BadRequestException('El título es obligatorio');
       if (!this.text(dto?.reference) && !this.text(dto?.url) && !this.text(dto?.notes)) throw new BadRequestException('Incluye una referencia, URL o nota');
-      const evidence = await tx.manufacturingFatEvidence.create({ data: { tenantId, fatCaseId: fatCase.id, title, reference: this.text(dto.reference), url: this.text(dto.url), notes: this.text(dto.notes), createdByUserId: actor.id, createdByName: actor.name } });
-      await this.audit(tx, tenantId, orderId, evidence.id, 'FAT_EVIDENCE_ADDED', `${fatCase.name}: evidencia agregada`, actor, { fatCaseId: fatCase.id, title });
-    });
+      const evidence = await tx.manufacturingFatEvidence.create({ data: { tenantId, fatCaseId: caseId, deviationId: deviationId || null, title, reference: this.text(dto.reference), url: this.text(dto.url), notes: this.text(dto.notes), createdByUserId: actor.id, createdByName: actor.name } });
+      await this.bumpExecution(tx, fatCase);
+      await this.audit(tx, tenantId, orderId, deviationId || evidence.id, deviationId ? 'FAT_DEVIATION_EVIDENCE_ADDED' : 'FAT_EVIDENCE_ADDED', `${deviation?.deviationCode || fatCase.name}: evidencia agregada`, actor, { evidenceId: evidence.id, title, reference: evidence.reference, url: evidence.url });
+    }, { isolationLevel: 'Serializable' });
     return this.list(orderId);
   }
 
   async updateDeviation(deviationId: string, dto: UpdateManufacturingFatDeviationDto) {
     const { tenantId, userId } = this.context(); let orderId = '';
     await this.prisma.$transaction(async (tx: any) => {
-      const actor = await this.actor(tx, tenantId, userId); await tx.$queryRaw`SELECT "id" FROM "ManufacturingFatDeviation" WHERE "id" = ${deviationId} FOR UPDATE`;
-      const deviation = await tx.manufacturingFatDeviation.findFirst({ where: { id: deviationId, tenantId }, include: { execution: { include: { manufacturingOrder: { include: { members: { where: { userId: actor.id } } } } } } } });
-      if (!deviation) throw new NotFoundException('Desviación no encontrada'); const order = deviation.execution.manufacturingOrder; orderId = order.id;
-      if (actor.role === 'TECH' && order.responsibleUserId !== actor.id && !order.members.length) throw new NotFoundException('Desviación no encontrada');
-      if (deviation.execution.status !== 'IN_PROGRESS') throw new ConflictException('El FAT no está en ejecución'); this.version(deviation, dto?.lockVersion);
-      const status = String(dto?.status || '').toUpperCase(); if (!DEVIATION_STATUSES.has(status)) throw new BadRequestException('Estado de desviación inválido');
-      if (status === 'ACCEPTED_AS_IS' && actor.role !== 'ADMIN') throw new ForbiddenException('Solo un administrador puede aceptar una desviación por concesión');
-      const correctiveAction = this.text(dto?.correctiveAction) || deviation.correctiveAction; const resolutionNotes = this.text(dto?.resolutionNotes) || deviation.resolutionNotes;
+      const actor = await this.actor(tx, tenantId, userId);
+      const lookup = await tx.manufacturingFatDeviation.findFirst({ where: { id: deviationId, tenantId }, select: { fatCaseId: true, kind: true } });
+      if (!lookup) throw new NotFoundException('Novedad no encontrada');
+      const fatCase = await this.lockedCase(tx, tenantId, lookup.fatCaseId, actor, lookup.kind === 'OBSERVATION');
+      orderId = fatCase.execution.manufacturingOrderId;
+      const deviation = await tx.manufacturingFatDeviation.findFirst({ where: { id: deviationId, tenantId } });
+      if (fatCase.execution.status !== 'IN_PROGRESS' && !(deviation.kind === 'OBSERVATION' && fatCase.execution.status === 'APPROVED')) throw new ConflictException('El FAT no permite modificar esta novedad');
+      this.version(deviation, dto.lockVersion);
+      const status = dto.status;
+      if (!['OPEN', 'IN_REWORK', 'PENDING_VERIFICATION', 'RESOLVED', 'ACCEPTED_AS_IS'].includes(status)) throw new BadRequestException('Estado de novedad inválido');
+      assertFatFindingTransition(deviation.status, status);
+      const changed = status !== deviation.status;
+      if (!changed && ['RESOLVED', 'ACCEPTED_AS_IS'].includes(status)) throw new ConflictException('Reabre la novedad antes de modificarla');
+      if (deviation.status === 'PENDING_VERIFICATION' && status !== 'IN_REWORK' && ((dto.correctiveAction !== undefined && this.text(dto.correctiveAction) !== deviation.correctiveAction) || (dto.resolutionNotes !== undefined && this.text(dto.resolutionNotes) !== deviation.resolutionNotes))) throw new ConflictException('Devuelve la novedad a corrección antes de modificar el trabajo presentado');
+      const correctiveAction = this.text(dto.correctiveAction) || deviation.correctiveAction;
+      const resolutionNotes = this.text(dto.resolutionNotes) || deviation.resolutionNotes;
+      const verificationNotes = this.text(dto.verificationNotes);
       if (status === 'IN_REWORK' && (!correctiveAction || correctiveAction.length < 5)) throw new BadRequestException('Describe la acción correctiva');
-      if (['RESOLVED', 'ACCEPTED_AS_IS'].includes(status) && (!resolutionNotes || resolutionNotes.length < 5)) throw new BadRequestException('Documenta la resolución');
+      if (status === 'PENDING_VERIFICATION' && (!resolutionNotes || resolutionNotes.length < 5)) throw new BadRequestException('Documenta la corrección realizada');
+      const verifying = changed && (status === 'RESOLVED' || (deviation.status === 'PENDING_VERIFICATION' && status === 'IN_REWORK'));
+      if (verifying) {
+        if (!this.permissions(fatCase.execution.manufacturingOrder, actor).canVerify) throw new ForbiddenException('Solo el responsable, un revisor de la orden o ADMIN puede verificar');
+        if (!verificationNotes || verificationNotes.length < 5) throw new BadRequestException('Documenta el resultado de la verificación');
+        if (status === 'RESOLVED') assertIndependentApproval(actor.id, [deviation.correctedByUserId], dto.approvalExceptionReason);
+      }
+      if (status === 'ACCEPTED_AS_IS') {
+        if (actor.role !== 'ADMIN') throw new ForbiddenException('Solo un administrador puede aceptar una desviación por concesión');
+        if (deviation.kind === 'OBSERVATION' || deviation.severity === 'CRITICAL') throw new ConflictException('La concesión solo aplica a no conformidades no críticas');
+        if (!resolutionNotes || resolutionNotes.length < 5) throw new BadRequestException('Documenta la concesión');
+      }
+      const assignment = await this.assignment(tx, tenantId, orderId, dto);
       const terminal = ['RESOLVED', 'ACCEPTED_AS_IS'].includes(status);
-      await tx.manufacturingFatDeviation.update({ where: { id: deviation.id }, data: { status, correctiveAction, resolutionNotes, resolvedAt: terminal ? new Date() : null, resolvedByUserId: terminal ? actor.id : null, resolvedByName: terminal ? actor.name : null, lockVersion: { increment: 1 } } });
-      await this.audit(tx, tenantId, orderId, deviation.id, 'FAT_DEVIATION_UPDATED', `${deviation.deviationCode}: ${status}`, actor, { status, correctiveAction, resolutionNotes });
-    });
+      await tx.manufacturingFatDeviation.update({ where: { id: deviationId }, data: {
+        status, correctiveAction, resolutionNotes, ...assignment, lockVersion: { increment: 1 },
+        ...(verifying ? { verificationNotes } : {}),
+        ...(changed && status === 'PENDING_VERIFICATION' ? { correctedByUserId: actor.id, correctedByName: actor.name, correctedAt: new Date(), verificationNotes: null } : {}),
+        ...(changed && status === 'OPEN' ? { correctiveAction: null, resolutionNotes: null, verificationNotes: null, correctedByUserId: null, correctedByName: null, correctedAt: null } : {}),
+        resolvedAt: terminal ? new Date() : null, resolvedByUserId: terminal ? actor.id : null, resolvedByName: terminal ? actor.name : null,
+      } });
+      await tx.manufacturingFatCase.update({ where: { id: fatCase.id }, data: { lockVersion: { increment: 1 }, ...(deviation.kind === 'NON_CONFORMITY' && changed && status === 'OPEN' ? { result: 'FAIL' } : {}) } });
+      await this.bumpExecution(tx, fatCase);
+      await this.audit(tx, tenantId, orderId, deviationId, 'FAT_DEVIATION_UPDATED', `${deviation.deviationCode}: ${status}`, actor, { previousStatus: deviation.status, status, correctiveAction, resolutionNotes, verificationNotes, ...assignment, approvalExceptionReason: dto.approvalExceptionReason });
+    }, { isolationLevel: 'Serializable' });
     return this.list(orderId);
   }
 
   async submit(executionId: string, dto: ManufacturingFatVersionDto) {
     return this.executionCommand(executionId, async (tx, execution, actor) => {
       this.version(execution, dto?.lockVersion); if (execution.status !== 'IN_PROGRESS') throw new ConflictException('El FAT no está en ejecución');
-      const cases = await tx.manufacturingFatCase.findMany({ where: { tenantId: execution.tenantId, executionId: execution.id }, include: { evidence: true, deviations: true } });
-      if (cases.some((item: any) => item.result === 'PENDING')) throw new ConflictException('Registra el resultado de todos los casos');
-      if (cases.some((item: any) => item.required && item.result === 'NOT_APPLICABLE')) throw new ConflictException('Todos los casos obligatorios deben ejecutarse');
-      if (cases.some((item: any) => item.evidenceRequired && !item.evidence.length)) throw new ConflictException('Falta evidencia en uno o más casos obligatorios');
-      if (cases.some((item: any) => item.deviations.some((deviation: any) => ['OPEN', 'IN_REWORK'].includes(deviation.status)))) throw new ConflictException('Resuelve las desviaciones abiertas antes de enviar a aprobación');
-      if (cases.some((item: any) => item.result === 'FAIL' && !item.deviations.some((deviation: any) => deviation.status === 'ACCEPTED_AS_IS'))) throw new ConflictException('Repite los casos no conformes o acepta formalmente la desviación');
+      const cases = await tx.manufacturingFatCase.findMany({ where: { tenantId: execution.tenantId, executionId: execution.id }, include: { evidence: { where: { deviationId: null } }, deviations: true } });
+      assertFatReady(cases);
       await tx.manufacturingFatExecution.update({ where: { id: execution.id }, data: { status: 'AWAITING_APPROVAL', submittedAt: new Date(), lockVersion: { increment: 1 } } });
       await this.audit(tx, execution.tenantId, execution.manufacturingOrderId, execution.id, 'MANUFACTURING_FAT_SUBMITTED', `${execution.executionCode}: enviado a aprobación`, actor, {});
     });
@@ -215,6 +317,8 @@ export class ManufacturingFatService {
       const decision = String(dto?.decision || '').toUpperCase(); if (!['APPROVED', 'REJECTED'].includes(decision)) throw new BadRequestException('Decisión inválida');
       const comments = this.text(dto?.comments); if (decision === 'REJECTED' && (!comments || comments.length < 5)) throw new BadRequestException('El rechazo requiere una observación');
       if (decision === 'APPROVED') {
+        const readiness = await tx.manufacturingFatCase.findMany({ where: { tenantId: execution.tenantId, executionId }, include: { evidence: { where: { deviationId: null } }, deviations: true } });
+        assertFatReady(readiness);
         const cases = await tx.manufacturingFatCase.findMany({ where: { tenantId: execution.tenantId, executionId }, select: { testedByUserId: true } });
         assertIndependentApproval(actor.id, cases.map((item: any) => item.testedByUserId), dto.approvalExceptionReason);
         if (dto.approvalExceptionReason) await this.audit(tx, execution.tenantId, execution.manufacturingOrderId, execution.id, 'MANUFACTURING_APPROVAL_EXCEPTION', dto.approvalExceptionReason, actor, { reason: dto.approvalExceptionReason });
@@ -231,23 +335,26 @@ export class ManufacturingFatService {
       const actor = await this.actor(tx, tenantId, userId); await tx.$queryRaw`SELECT "id" FROM "ManufacturingFatExecution" WHERE "id" = ${executionId} FOR UPDATE`;
       const execution = await tx.manufacturingFatExecution.findFirst({ where: { id: executionId, tenantId }, include: { manufacturingOrder: { include: { members: { where: { userId: actor.id } } } } } });
       if (!execution) throw new NotFoundException('Ejecución FAT no encontrada'); orderId = execution.manufacturingOrderId;
-      if (actor.role === 'TECH' && execution.manufacturingOrder.responsibleUserId !== actor.id && !execution.manufacturingOrder.members.length) throw new NotFoundException('Ejecución FAT no encontrada');
+      if (!this.permissions(execution.manufacturingOrder, actor).canOperate) throw new ForbiddenException('No tienes una función operativa en esta orden');
       if (['CANCELED', 'ON_HOLD', 'COMPLETED'].includes(execution.manufacturingOrder.status)) throw new ConflictException('La orden no permite ejecutar FAT');
       await command(tx, execution, actor); await tx.manufacturingOrder.update({ where: { id: orderId }, data: { version: { increment: 1 } } });
     }, { isolationLevel: 'Serializable' });
     return this.list(orderId);
   }
-  private async lockedCase(tx: any, tenantId: string, caseId: string, actor: Actor) {
+  private async lockedCase(tx: any, tenantId: string, caseId: string, actor: Actor, allowApprovedObservation = false) {
+    const lookup = await tx.manufacturingFatCase.findFirst({ where: { id: caseId, tenantId }, select: { executionId: true } });
+    if (!lookup) throw new NotFoundException('Caso FAT no encontrado');
+    await tx.$queryRaw`SELECT "id" FROM "ManufacturingFatExecution" WHERE "id" = ${lookup.executionId} AND "tenantId" = ${tenantId} FOR UPDATE`;
     await tx.$queryRaw`SELECT "id" FROM "ManufacturingFatCase" WHERE "id" = ${caseId} FOR UPDATE`;
     const fatCase = await tx.manufacturingFatCase.findFirst({ where: { id: caseId, tenantId }, include: { execution: { include: { manufacturingOrder: { include: { members: { where: { userId: actor.id } } } } } } } });
     if (!fatCase) throw new NotFoundException('Caso FAT no encontrado'); const order = fatCase.execution.manufacturingOrder;
-    if (actor.role === 'TECH' && order.responsibleUserId !== actor.id && !order.members.length) throw new NotFoundException('Caso FAT no encontrado');
-    if (['CANCELED', 'ON_HOLD', 'COMPLETED'].includes(order.status)) throw new ConflictException('La orden no permite ejecutar FAT'); return fatCase;
+    if (!this.permissions(order, actor).canOperate) throw new ForbiddenException('No tienes una función operativa en esta orden');
+    if (['CANCELED', 'ON_HOLD'].includes(order.status) || (order.status === 'COMPLETED' && !(allowApprovedObservation && fatCase.execution.status === 'APPROVED'))) throw new ConflictException('La orden no permite ejecutar FAT'); return fatCase;
   }
   private serialize(execution: any) {
     const cases = execution.cases.map((fatCase: any) => ({ ...fatCase, minimumValue: fatCase.minimumValue === null ? null : Number(fatCase.minimumValue), maximumValue: fatCase.maximumValue === null ? null : Number(fatCase.maximumValue), measuredValue: fatCase.measuredValue === null ? null : Number(fatCase.measuredValue) }));
     const deviations = cases.flatMap((fatCase: any) => fatCase.deviations);
-    return { ...execution, cases, summary: { caseCount: cases.length, passedCount: cases.filter((item: any) => item.result === 'PASS').length, failedCount: cases.filter((item: any) => item.result === 'FAIL').length, pendingCount: cases.filter((item: any) => item.result === 'PENDING').length, openDeviationCount: deviations.filter((item: any) => ['OPEN', 'IN_REWORK'].includes(item.status)).length, progressPercent: cases.length ? Math.round(cases.filter((item: any) => item.result !== 'PENDING').length * 100 / cases.length) : 0, dispatchReady: execution.status === 'APPROVED' } };
+    return { ...execution, cases, summary: { caseCount: cases.length, passedCount: cases.filter((item: any) => item.result === 'PASS').length, failedCount: cases.filter((item: any) => item.result === 'FAIL').length, pendingCount: cases.filter((item: any) => item.result === 'PENDING').length, openDeviationCount: deviations.filter((item: any) => FAT_OPEN_FINDING_STATUSES.includes(item.status)).length, blockingDeviationCount: deviations.filter(isBlockingFatFinding).length, observationCount: deviations.filter((d: any) => d.kind === 'OBSERVATION').length, closedDeviationCount: deviations.filter((d: any) => !FAT_OPEN_FINDING_STATUSES.includes(d.status)).length, progressPercent: cases.length ? Math.round(cases.filter((item: any) => item.result !== 'PENDING').length * 100 / cases.length) : 0, dispatchReady: execution.status === 'APPROVED' } };
   }
   private async audit(tx: any, tenantId: string, orderId: string, entityId: string, action: string, summary: string, actor: Actor, afterData: unknown) {
     await tx.manufacturingAuditEvent.create({ data: { tenantId, manufacturingOrderId: orderId, entityType: action.includes('CASE') ? 'ManufacturingFatCase' : action.includes('DEVIATION') ? 'ManufacturingFatDeviation' : action.includes('EVIDENCE') ? 'ManufacturingFatEvidence' : 'ManufacturingFatExecution', entityId, action, summary, actorUserId: actor.id, actorName: actor.name, afterData: JSON.parse(JSON.stringify(afterData)) } });

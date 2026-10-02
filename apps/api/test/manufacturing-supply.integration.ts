@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { verifySiteLifecycle } from './manufacturing-site-lifecycle.integration';
+import { verifyFatFindings, verifyApprovedObservation } from './manufacturing-fat-findings.integration';
 import { PrismaService } from '../src/prisma.service';
 import { tenantStorage } from '../src/common/tenant-context';
 import { ManufacturingSupplyService } from '../src/modules/manufacturing/manufacturing-supply.service';
@@ -359,7 +360,9 @@ async function main() {
     );
     fatExecutions = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => fatService.updateDeviation(safetyDeviation.id, { lockVersion: safetyDeviation.lockVersion, status: 'IN_REWORK', correctiveAction: 'Reemplazar el contacto auxiliar' }));
     fat = fatExecutions[0]; safetyCase = fat.cases[0]; safetyDeviation = safetyCase.deviations[0];
-    fatExecutions = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => fatService.updateDeviation(safetyDeviation.id, { lockVersion: safetyDeviation.lockVersion, status: 'RESOLVED', resolutionNotes: 'Contacto reemplazado y continuidad verificada' }));
+    fatExecutions = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => fatService.updateDeviation(safetyDeviation.id, { lockVersion: safetyDeviation.lockVersion, status: 'PENDING_VERIFICATION', resolutionNotes: 'Contacto reemplazado y continuidad verificada' }));
+    safetyDeviation = fatExecutions[0].cases[0].deviations[0];
+    fatExecutions = await tenantStorage.run({ tenantId: admin.tenantId, userId: reviewer.id }, () => fatService.updateDeviation(safetyDeviation.id, { lockVersion: safetyDeviation.lockVersion, status: 'RESOLVED', verificationNotes: 'Verificación independiente conforme' }));
     fat = fatExecutions[0]; safetyCase = fat.cases[0];
     fatExecutions = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => fatService.recordCase(safetyCase.id, { lockVersion: safetyCase.lockVersion, result: 'PASS', notes: 'Reprueba conforme' }));
     fat = fatExecutions[0]; safetyCase = fat.cases[0];
@@ -387,6 +390,9 @@ async function main() {
     assert(fat);
     fatExecutions = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => fatService.start(fat.id, { lockVersion: fat.lockVersion }));
     fat = fatExecutions.find((item: any) => item.sequence === 2); [safetyCase, numericCase, optionalCase] = fat.cases;
+    const observationId = await verifyFatFindings(prisma, fatService, admin, reviewer, fat);
+    fatExecutions = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => fatService.list(order.id));
+    fat = fatExecutions.find((item: any) => item.sequence === 2); [safetyCase, numericCase, optionalCase] = fat.cases;
     fatExecutions = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => fatService.recordCase(safetyCase.id, { lockVersion: safetyCase.lockVersion, result: 'PASS' }));
     fat = fatExecutions.find((item: any) => item.sequence === 2); safetyCase = fat.cases[0];
     fatExecutions = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => fatService.addEvidence(safetyCase.id, { title: 'Reprueba de paro', reference: 'FAT-EVID-002' }));
@@ -401,6 +407,7 @@ async function main() {
     fat = fatExecutions.find((item: any) => item.sequence === 2);
     assert.equal(fat.status, 'APPROVED');
     assert.equal(fat.summary.dispatchReady, true);
+    await verifyApprovedObservation(fatService, admin, reviewer, order.id, fat.id, observationId);
     readiness = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => fatService.dispatchReadiness(kits[0].manufacturedUnitId));
     assert.equal(readiness.ready, true);
     assert.deepEqual(readiness.reasons, []);

@@ -29,8 +29,22 @@ export class RecordManufacturingFatCaseDto {
 export class CreateManufacturingFatEvidenceDto { title!: string; reference?: string | null; url?: string | null; notes?: string | null; }
 export class UpdateManufacturingFatDeviationDto {
   lockVersion!: number;
-  status!: 'OPEN' | 'IN_REWORK' | 'RESOLVED' | 'ACCEPTED_AS_IS';
+  status!: 'OPEN' | 'IN_REWORK' | 'PENDING_VERIFICATION' | 'RESOLVED' | 'ACCEPTED_AS_IS';
   correctiveAction?: string | null;
   resolutionNotes?: string | null;
+  responsibleUserId?: string | null;
+  dueAt?: string | null;
+  verificationNotes?: string | null;
+  approvalExceptionReason?: string;
+}
+export class CreateManufacturingFatDeviationDto {
+  lockVersion!: number;
+  title!: string;
+  description!: string;
+  kind!: 'NON_CONFORMITY' | 'OBSERVATION';
+  severity!: 'MINOR' | 'MAJOR' | 'CRITICAL';
+  location?: string | null;
+  responsibleUserId?: string | null;
+  dueAt?: string | null;
 }
 export class DecideManufacturingFatDto { lockVersion!: number; decision!: 'APPROVED' | 'REJECTED'; comments?: string | null; approvalExceptionReason?: string; }

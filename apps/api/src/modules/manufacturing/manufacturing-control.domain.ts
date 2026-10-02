@@ -7,7 +7,7 @@ export type ControlRow = {
   supplyPlans: Array<{ requirements: Array<{ status: string; included: boolean; expectedAt?: Date | string | null }> }>;
   kits: Array<{ id: string; manufacturedUnitId: string; status: string }>;
   assemblyExecutions: Array<{ kitId: string; status: string; operations: Array<{ status: string; blockedReason?: string | null }> }>;
-  fatExecutions: Array<{ manufacturedUnitId: string; status: string; sequence: number; deviations: Array<{ status: string }> }>;
+  fatExecutions: Array<{ manufacturedUnitId: string; status: string; sequence: number; deviations: Array<{ status: string; kind?: string; dueAt?: Date | string | null }> }>;
   dispatches: Array<{ manufacturedUnitId: string; status: string }>;
   siteDeployments: Array<{ manufacturedUnitId: string; status: string; assemblyExecutionId?: string | null }>;
   satExecutions: Array<{ manufacturedUnitId: string; status: string; sequence: number; deviations: Array<{ status: string; dueAt?: Date | string | null }> }>;
@@ -59,7 +59,10 @@ export function manufacturingControl(row: ControlRow, now = new Date()) {
       const site = row.siteDeployments.find(d => d.manufacturedUnitId === unit.id && d.status !== 'CANCELED');
       const sat = row.satExecutions.filter(s => s.manufacturedUnitId === unit.id).sort((a, b) => b.sequence - a.sequence)[0];
       const handover = row.handovers.find(h => h.manufacturedUnitId === unit.id && h.status !== 'CANCELED');
-      if (fat?.deviations.some(d => open(d.status))) blockers.push(`Unidad ${unit.unitNumber}: desviaciones FAT abiertas`);
+      const fatOpen = fat?.deviations.filter(d => ['OPEN', 'IN_REWORK', 'PENDING_VERIFICATION'].includes(d.status)) || [];
+      if (fatOpen.some(d => d.kind !== 'OBSERVATION')) blockers.push(`Unidad ${unit.unitNumber}: no conformidades FAT pendientes de cierre/verificación`);
+      if (fatOpen.some(d => d.kind === 'OBSERVATION')) warnings.push(`Unidad ${unit.unitNumber}: observaciones FAT en seguimiento (no bloqueantes)`);
+      if (fatOpen.some(d => late(d.dueAt, now))) warnings.push(`Unidad ${unit.unitNumber}: compromiso FAT vencido`);
       if (site?.status === 'RECEPTION_BLOCKED') blockers.push(`Unidad ${unit.unitNumber}: recepción bloqueada`);
       if (sat?.deviations.some(d => open(d.status))) blockers.push(`Unidad ${unit.unitNumber}: pendientes SAT abiertos`);
       if (sat?.deviations.some(d => open(d.status) && late(d.dueAt, now))) warnings.push(`Unidad ${unit.unitNumber}: compromiso SAT vencido`);
@@ -86,7 +89,7 @@ export function manufacturingControl(row: ControlRow, now = new Date()) {
     responsible: row.responsibleUser?.name || 'Sin responsable', requestedDeliveryAt: row.requestedDeliveryAt,
     stage: row.status === 'CANCELED' ? 'Cancelada' : row.status === 'COMPLETED' ? 'Completada' : stages[stage], progress,
     nextAction: terminal ? 'Proceso cerrado' : row.status === 'ON_HOLD' ? 'Resolver motivo de pausa y reanudar' : nextAction,
-    blockers, warnings, risk: terminal ? 'CLOSED' : overdue || blockers.length ? 'HIGH' : dueSoon ? 'MEDIUM' : 'LOW',
+    blockers, warnings, risk: terminal ? 'CLOSED' : overdue || blockers.length ? 'HIGH' : dueSoon || warnings.length ? 'MEDIUM' : 'LOW',
     units: unitProgress, calculatedAt: now.toISOString(),
   };
 }

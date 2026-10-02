@@ -20,7 +20,7 @@ export class ManufacturingControlService {
       supplyPlans: { where: { status: { in: ['ACTIVE', 'COMPLETED'] } }, select: { requirements: { select: { included: true, status: true, expectedAt: true } } } },
       kits: { select: { id: true, manufacturedUnitId: true, status: true } },
       assemblyExecutions: { select: { kitId: true, status: true, operations: { select: { status: true, blockedReason: true } } } },
-      fatExecutions: { select: { manufacturedUnitId: true, status: true, sequence: true, deviations: { select: { status: true } } } },
+      fatExecutions: { select: { manufacturedUnitId: true, status: true, sequence: true, deviations: { select: { status: true, kind: true, dueAt: true } } } },
       dispatches: { select: { manufacturedUnitId: true, status: true } },
       siteDeployments: { select: { manufacturedUnitId: true, status: true, assemblyExecutionId: true } },
       satExecutions: { select: { manufacturedUnitId: true, status: true, sequence: true, deviations: { select: { status: true, dueAt: true } } } },

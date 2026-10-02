@@ -260,6 +260,7 @@ enum ManufacturingFatResultType {
 enum ManufacturingFatDeviationStatus {
   OPEN
   IN_REWORK
+  PENDING_VERIFICATION
   RESOLVED
   ACCEPTED_AS_IS
 }
@@ -3091,6 +3092,8 @@ model ManufacturingFatEvidence {
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   fatCaseId String
   fatCase   ManufacturingFatCase @relation(fields: [fatCaseId], references: [id], onDelete: Cascade)
+  deviationId String?
+  deviation ManufacturingFatDeviation? @relation(fields: [deviationId], references: [id], onDelete: Cascade)
   title     String
   reference String?
   url       String?
@@ -3100,6 +3103,7 @@ model ManufacturingFatEvidence {
   createdAt DateTime @default(now())
 
   @@index([tenantId, fatCaseId, createdAt(sort: Desc)])
+  @@index([tenantId, deviationId, createdAt(sort: Desc)])
 }
 
 model ManufacturingFatDeviation {
@@ -3115,6 +3119,17 @@ model ManufacturingFatDeviation {
   deviationCode    String
   title            String
   description      String
+  kind             String @default("NON_CONFORMITY")
+  severity         String @default("MAJOR")
+  location         String?
+  responsibleUserId String?
+  responsibleName  String?
+  dueAt            DateTime?
+  correctedByUserId String?
+  correctedByName  String?
+  correctedAt      DateTime?
+  verificationNotes String?
+  evidence         ManufacturingFatEvidence[]
   status           ManufacturingFatDeviationStatus @default(OPEN)
   correctiveAction String?
   resolutionNotes  String?
@@ -3132,6 +3147,8 @@ model ManufacturingFatDeviation {
   @@unique([tenantId, deviationCode])
   @@index([tenantId, executionId, status])
   @@index([tenantId, fatCaseId, status])
+  @@index([tenantId, responsibleUserId, status, dueAt], map: "ManufacturingFatDeviation_assignee_due_idx")
+  @@unique([tenantId, fatCaseId, id], map: "ManufacturingFatDeviation_tenant_case_id_key")
 }
 
 model ManufacturingFatApproval {
