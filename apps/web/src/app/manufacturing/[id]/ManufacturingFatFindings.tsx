@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { ApprovalException } from '../ApprovalException';
+import { FatEvidenceList, FatMediaUpload } from './ManufacturingFatMedia';
 import { dateLabel, type ManufacturingFatCase, type ManufacturingFatDeviation, type ManufacturingFatExecution } from '@/lib/manufacturing';
 
 export type FatFindingCall = (path: string, body: unknown, method?: string, action?: string) => Promise<boolean | void>;
@@ -75,7 +76,8 @@ function FindingCard({ finding, editable, canVerify, role, assignees, busy, call
           {role === 'ADMIN' && finding.kind === 'NON_CONFORMITY' && finding.severity !== 'CRITICAL' && !waiting ? <button type="button" className={buttonClass} disabled={resolution.trim().length < 5} onClick={() => update('ACCEPTED_AS_IS')}>Aceptar por concesión</button> : null}
         </div>
       </fieldset> : <div className="space-y-1 text-xs"><p>Acción: {finding.correctiveAction || '—'}</p><p>Corrección / concesión: {finding.resolutionNotes || '—'}</p><p>Verificación: {finding.verificationNotes || '—'}</p>{editable ? <button type="button" disabled={!!busy} className={buttonClass} onClick={() => { if (window.confirm('¿Reabrir esta novedad? Una no conformidad volverá a bloquear el punto.')) void update('OPEN'); }}>Reabrir novedad</button> : null}</div>}
-      <div><h5 className="font-medium">Evidencias de la novedad</h5>{finding.evidence.length ? finding.evidence.map(e => <div key={e.id} className="border-t py-1 text-xs"><strong>{e.title}</strong> · {e.reference}{e.url && /^https?:\/\//i.test(e.url) ? <a className="ml-2 underline" href={e.url} target="_blank" rel="noopener noreferrer">Abrir evidencia</a> : null}<p>{e.notes}</p><span className="text-gray-500">{e.createdByName} · {dateLabel(e.createdAt, true)}</span></div>) : <p className="text-xs text-gray-500">Sin evidencias registradas.</p>}</div>
+      <div><h5 className="font-medium">Evidencias de la novedad</h5><FatEvidenceList items={finding.evidence} /></div>
+      {editable ? <FatMediaUpload path={`fat-deviations/${finding.id}/evidence`} busy={busy} call={call} /> : null}
       {editable ? <form onSubmit={e => { e.preventDefault(); void evidence(); }}><fieldset disabled={!!busy} className="grid gap-2 md:grid-cols-3"><label className="text-xs">Título de evidencia<input required className={inputClass} value={evidenceTitle} onChange={e => setEvidenceTitle(e.target.value)} /></label><label className="text-xs">Referencia<input className={inputClass} value={reference} onChange={e => setReference(e.target.value)} /></label><label className="text-xs">Enlace HTTP/HTTPS<input type="url" className={inputClass} value={url} onChange={e => setUrl(e.target.value)} /></label><button className={buttonClass} disabled={!evidenceTitle.trim() || (!reference.trim() && !url.trim())}>Agregar evidencia</button></fieldset></form> : null}
       <details><summary className="cursor-pointer text-xs">Historial ({finding.history.length})</summary>{finding.history.map(event => <div key={event.id} className="border-t py-2 text-xs"><p>{dateLabel(event.createdAt, true)} · {event.actorName} · {event.summary}</p>{['correctiveAction', 'resolutionNotes', 'verificationNotes', 'approvalExceptionReason', 'reference'].map(key => typeof event.afterData?.[key] === 'string' && event.afterData[key] ? <p key={key} className="whitespace-pre-wrap text-gray-600">{String(event.afterData[key])}</p> : null)}</div>)}</details>
     </div>

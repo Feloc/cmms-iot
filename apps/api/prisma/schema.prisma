@@ -2066,6 +2066,7 @@ model ManufacturingOrder {
   attachments Attachment[]
   boms ManufacturingBom[]
   engineeringReleases EngineeringRelease[]
+  engineeringRequestLink EngineeringManufacturingOrder?
   supplyPlans ManufacturingSupplyPlan[]
   kits ManufacturingKit[]
   assemblyExecutions ManufacturingAssemblyExecution[]
@@ -2300,6 +2301,7 @@ model EngineeringRequest {
   revisions EngineeringRequestRevision[]
   events EngineeringRequestEvent[]
   orders EngineeringRequestOrder[]
+  manufacturingOrders EngineeringManufacturingOrder[]
   attachments Attachment[]
   @@unique([tenantId, number])
   @@index([tenantId, assetId, createdAt])
@@ -2313,6 +2315,7 @@ model EngineeringRequestRevision {
   request EngineeringRequest @relation(fields: [requestId], references: [id], onDelete: Restrict)
   revision Int
   snapshot Json
+  manufacturingOrders EngineeringManufacturingOrder[]
   createdByUserId String
   createdAt DateTime @default(now())
   @@unique([requestId, revision])
@@ -2332,6 +2335,20 @@ model EngineeringRequestEvent {
   details Json?
   createdAt DateTime @default(now())
   @@index([tenantId, requestId, createdAt])
+}
+
+model EngineeringManufacturingOrder {
+  id String @id @default(cuid())
+  tenantId String
+  requestId String
+  request EngineeringRequest @relation(fields: [requestId], references: [id], onDelete: Restrict)
+  revisionId String
+  revision EngineeringRequestRevision @relation(fields: [revisionId], references: [id], onDelete: Restrict)
+  manufacturingOrderId String @unique
+  manufacturingOrder ManufacturingOrder @relation(fields: [manufacturingOrderId], references: [id], onDelete: Restrict)
+  createdByUserId String
+  createdAt DateTime @default(now())
+  @@index([tenantId, requestId])
 }
 
 model EngineeringRequestOrder {
@@ -2983,6 +3000,7 @@ model ManufacturingFatTemplate {
 }
 
 model ManufacturingFatTemplateCase {
+  subpoints Json @default("[]")
   id       String @id @default(cuid())
   tenantId String
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -3049,6 +3067,17 @@ model ManufacturingFatExecution {
 }
 
 model ManufacturingFatCase {
+  parentCaseId String?
+  parentCase ManufacturingFatCase? @relation("FatSubpoints", fields: [tenantId, executionId, parentCaseId], references: [tenantId, executionId, id], onDelete: NoAction, onUpdate: NoAction, map: "ManufacturingFatCase_parent_scope_fkey")
+  subpoints ManufacturingFatCase[] @relation("FatSubpoints")
+  origin String @default("PROTOCOL")
+  addedByUserId String?
+  addedByName String?
+  additionReason String?
+  voidedAt DateTime?
+  voidedByUserId String?
+  voidedByName String?
+  voidReason String?
   id       String @id @default(cuid())
   tenantId String
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -3083,6 +3112,8 @@ model ManufacturingFatCase {
   deviations ManufacturingFatDeviation[]
 
   @@unique([executionId, position])
+  @@unique([tenantId, executionId, id], map: "ManufacturingFatCase_tenant_execution_id_key")
+  @@index([tenantId, parentCaseId, position], map: "ManufacturingFatCase_parent_idx")
   @@index([tenantId, executionId, result, position])
 }
 
@@ -3098,6 +3129,10 @@ model ManufacturingFatEvidence {
   reference String?
   url       String?
   notes     String?
+  storageKey String? @unique
+  filename   String?
+  mimeType   String?
+  size       Int?
   createdByUserId String
   createdByName   String
   createdAt DateTime @default(now())

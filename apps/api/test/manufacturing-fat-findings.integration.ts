@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { tenantStorage } from '../src/common/tenant-context';
 import { ManufacturingFatService } from '../src/modules/manufacturing/manufacturing-fat.service';
+import { fatTestImage, verifyFatMedia } from './manufacturing-fat-media.integration';
 
 // Runs in the rollback-only lifecycle test; no real orders/users are modified.
 export async function verifyFatFindings(db: any, service: ManufacturingFatService, admin: any, reviewer: any, execution: any) {
@@ -79,6 +80,7 @@ export async function verifyFatFindings(db: any, service: ManufacturingFatServic
     await tenantStorage.run({ tenantId: foreign.id, userId: foreignUser.id }, async () => {
       await assert.rejects(() => service.addDeviationEvidence(first, { title: 'No autorizado', reference: 'REF' }), /no encontrada/);
     });
+    await verifyFatMedia(db, service, admin, observer, foreignUser, execution, caseId, observation);
     return observation;
   });
 }
@@ -89,6 +91,8 @@ export async function verifyApprovedObservation(service: ManufacturingFatService
     let execution = await read(); let c = execution.cases[0];
     await assert.rejects(() => service.createDeviation(c.id, { lockVersion: c.lockVersion, title: 'Nueva falla', description: 'No crear después de firmar', kind: 'NON_CONFORMITY', severity: 'MAJOR' }), /ejecución/);
     const closed = c.deviations.find((d: any) => d.kind === 'NON_CONFORMITY');
+    await assert.rejects(() => service.uploadEvidence(c.id, { title: 'No alterar aprobado' }, fatTestImage), /no puede agregarse/);
+    await assert.rejects(() => service.uploadEvidence(closed.id, { title: 'No alterar aprobado' }, fatTestImage, true), /no puede agregarse/);
     await assert.rejects(() => service.updateDeviation(closed.id, { lockVersion: closed.lockVersion, status: 'OPEN' }), /no permite/);
     await service.addDeviationEvidence(observationId, { title: 'Seguimiento posterior', reference: 'OBS-FOTO' });
     for (const status of ['IN_REWORK', 'PENDING_VERIFICATION', 'RESOLVED'] as const) {

@@ -24,7 +24,7 @@ Una novedad cerrada puede reabrirse mientras el FAT siga en ejecución; una no c
 
 ## Evidencias y seguimiento posterior
 
-Las evidencias de cada novedad se registran con título y referencia o enlace HTTP/HTTPS. Se reutiliza el sistema de evidencias FAT; no se añade carga binaria de fotografías en este incremento. Las evidencias de novedades se muestran separadas y **no sustituyen** la evidencia obligatoria del punto de prueba.
+Las evidencias de cada novedad se registran con título y referencia o enlace HTTP/HTTPS. El incremento multimedia añade también imágenes y videos originales, con visualización y descarga autenticadas; ver [evidencias multimedia FAT](manufacturing-fat-media.md). Las evidencias de novedades se muestran separadas y **no sustituyen** la evidencia obligatoria del punto de prueba.
 
 Las observaciones pendientes siguen visibles después de aprobar el FAT y pueden completarse/verificarse sin modificar sus resultados ni firmas, incluso si la orden ya está completada. No se pueden agregar nuevas novedades ni reabrir no conformidades en un FAT aprobado. Las órdenes canceladas o pausadas no admiten cambios de seguimiento. Durante la aprobación pendiente se congela el seguimiento hasta que se decida el FAT.
 

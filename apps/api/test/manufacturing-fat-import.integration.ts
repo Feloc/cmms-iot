@@ -17,7 +17,7 @@ async function main() {
       const service = new ManufacturingFatService(db);
       await tenantStorage.run({ tenantId: tenant.id, userId: admin.id }, async () => {
         const imported = previewFatProtocol({ originalname: 'protocolo.xlsx', buffer: fatProtocolExample('xlsx') });
-        const payload = { code: 'FAT-IMPORT', name: 'Protocolo importado', cases: imported.rows.map(r => r.data) };
+        const payload = { code: 'FAT-IMPORT', name: 'Protocolo importado', cases: imported.cases };
         const first = await service.createTemplate(payload);
         assert.equal(first.cases.length, 3); assert.equal(first.version, 1);
         assert.equal(Number(first.cases[1].minimumValue), 210);
@@ -27,6 +27,20 @@ async function main() {
         assert.equal(second.version, 2);
         assert.equal(await tx.manufacturingFatTemplateCase.count({ where: { templateId: first.id } }), 3);
         assert.equal((await service.listTemplates('true')).length, 2);
+        for (const format of ['xlsx', 'csv']) {
+          const hierarchy = previewFatProtocol({ originalname: `jerarquia.${format}`, buffer: fatProtocolExample(format, 'hierarchical') });
+          const saved = await service.createTemplate({ code: 'FAT-JERARQUIA', name: 'Puntos y subpuntos', cases: hierarchy.cases });
+          assert.equal(saved.cases.length, 3); assert.equal(saved.cases[1].subpoints.length, 2);
+          assert.equal(saved.cases[1].subpoints[0].name, 'Continuidad de tierra');
+          assert.equal(saved.cases[1].subpoints[0].maximumValue, 1);
+          assert.equal(saved.cases[1].subpoints[0].evidenceRequired, true);
+          assert.equal(saved.cases[1].subpoints[1].resultType, 'BOOLEAN');
+        }
+        const beforeInvalid = await tx.manufacturingFatTemplate.count({ where: { tenantId: tenant.id } });
+        const invalid = previewFatProtocol({ originalname: 'invalid.csv', buffer: Buffer.from('posicion;punto_padre;nombre;criterio\n1;99;Huérfano;OK') });
+        assert.ok(invalid.errorRows); assert.deepEqual(invalid.cases, []);
+        await assert.rejects(() => service.createTemplate({ code: 'NO-PARCIAL', name: 'No guardar', cases: invalid.cases }), /requiere/);
+        assert.equal(await tx.manufacturingFatTemplate.count({ where: { tenantId: tenant.id } }), beforeInvalid);
         await tenantStorage.run({ tenantId: other.id, userId: foreignAdmin.id }, async () => {
           assert.equal((await service.listTemplates()).length, 0);
           const separate = await service.createTemplate(payload);

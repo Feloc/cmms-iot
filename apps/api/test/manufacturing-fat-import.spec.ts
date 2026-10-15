@@ -29,6 +29,56 @@ test('supports binary XLS and warns when only the first worksheet is imported', 
   const preview = previewFatProtocol({ originalname: 'fat.xls', buffer: XLSX.write(book, { type: 'buffer', bookType: 'biff8' }) });
   assert.equal(preview.totalRows, 3); assert.equal(preview.errorRows, 0); assert.equal(preview.warnings.length, 1);
 });
+test('hierarchical CSV, XLSX and XLS examples build the exact nested template payload', () => {
+  for (const format of ['csv', 'xlsx', 'xls']) {
+    const buffer = format === 'xls' ? XLSX.write(XLSX.read(fatProtocolExample('xlsx', 'hierarchical'), { type: 'buffer' }), { type: 'buffer', bookType: 'biff8' }) : fatProtocolExample(format, 'hierarchical');
+    const preview = previewFatProtocol({ originalname: `fat.${format}`, buffer });
+    assert.equal(preview.errorRows, 0); assert.equal(preview.rootCount, 3); assert.equal(preview.subpointCount, 2); assert.equal(preview.totalRows, 5);
+    assert.equal(preview.cases.length, 3); assert.equal(preview.cases[1].subpoints?.length, 2);
+    assert.equal(preview.cases[1].subpoints?.[0].maximumValue, 1);
+    assert.equal(preview.cases[1].subpoints?.[0].evidenceRequired, true);
+    assert.equal(preview.rows[3].parentPosition, 20); assert.equal(preview.rows[3].data.section, 'Eléctrica');
+    assert.equal((preview.cases[1].subpoints?.[0] as any).position, undefined);
+    assert.equal((preview.cases[1].subpoints?.[0] as any).parentPosition, undefined);
+  }
+});
+test('hierarchical references can point forward, sort siblings and preserve source rows', () => {
+  const preview = csv('posicion;punto_padre;nombre;criterio\n22;20;Segundo;OK\n\n20;;Principal;OK\n21;20;Primero;OK');
+  assert.equal(preview.errorRows, 0); assert.equal(preview.rows[1].row, 4);
+  assert.deepEqual(preview.cases[0].subpoints?.map(c => c.name), ['Primero', 'Segundo']);
+  assert.equal(csv('nombre;criterio;punto_padre\nPlano;OK;').errorRows, 0);
+  assert.equal(csv('position,parent_position,name,acceptanceCriteria\n1,,Parent,OK\n2,1,Child,OK').subpointCount, 1);
+});
+test('hierarchical errors reject orphan, self, cycle, deeper and ambiguous parents without partial payload', () => {
+  const header = 'posicion;punto_padre;nombre;criterio\n';
+  for (const body of ['1;99;Huérfano;OK', '1;1;Propio;OK', '1;2;A;OK\n2;1;B;OK', '1;;Raíz;OK\n2;1;Hijo;OK\n3;2;Nieto;OK', '1;;A;OK\n1;;B;OK\n2;1;Ambiguo;OK', '1;;Raíz;OK\n;1;Sin posición;OK', '1;;Raíz;OK\n2;1.5;Decimal;OK']) {
+    const preview = csv(header + body);
+    assert.ok(preview.errorRows > 0, body); assert.deepEqual(preview.cases, []);
+  }
+  assert.ok(csv(header + '1;;A;OK\n1;;B;OK\n2;1;Ambiguo;OK').rows[2].errors.some(e => e.includes('ambigua')));
+});
+test('subpoint limits and inherited section are validated before saving', () => {
+  const rows = (count: number) => 'posicion;punto_padre;nombre;criterio\n1;;Principal;OK\n' + Array.from({ length: count }, (_, i) => `${i + 2};1;Hijo ${i};OK`).join('\n');
+  assert.equal(csv(rows(50)).errorRows, 0); assert.equal(csv(rows(51)).cases.length, 0);
+  const differentSection = csv('posicion;punto_padre;seccion;nombre;criterio\n1;;Eléctrica;Raíz;OK\n2;1;Mecánica;Hijo;OK');
+  assert.ok(differentSection.rows[1].errors.some(e => e.includes('sección')));
+  assert.ok(csv('posicion;punto_padre;nombre;criterio\n2147483647;;Raíz;OK\n1;2147483647;Hijo;OK').errorRows > 0);
+});
+test('formulas in parent references cannot become hierarchy links', () => {
+  const book = XLSX.read(fatProtocolExample('xlsx', 'hierarchical'), { type: 'buffer' });
+  book.Sheets[book.SheetNames[0]].L4 = { t: 'n', v: 20, f: '10+10' };
+  const preview = previewFatProtocol({ originalname: 'fat.xlsx', buffer: XLSX.write(book, { type: 'buffer', bookType: 'xlsx' }) });
+  assert.equal(preview.errorRows, 1); assert.deepEqual(preview.cases, []);
+});
+test('merged hierarchy cells and formula headers are rejected explicitly', () => {
+  const book = XLSX.read(fatProtocolExample('xlsx', 'hierarchical'), { type: 'buffer' });
+  const sheet = book.Sheets[book.SheetNames[0]];
+  sheet['!merges'] = [{ s: { r: 3, c: 11 }, e: { r: 4, c: 11 } }];
+  const preview = () => previewFatProtocol({ originalname: 'fat.xlsx', buffer: XLSX.write(book, { type: 'buffer', bookType: 'xlsx' }) });
+  assert.throws(preview, /combinadas/);
+  delete sheet['!merges']; sheet.L1 = { t: 's', v: 'punto_padre', f: '"punto_padre"' };
+  assert.throws(preview, /encabezados/);
+});
 test('Spanish headers, decimal commas, UTF-8 and quoted multiline CSV remain intact', () => {
   const preview = csv('\ufeffNombre;Criterio de aceptación;Tipo;Mínimo;Máximo;Obligatorio;Evidencia\nPresión;"Sin fugas; estable\nen carga";numérico;-1,5;2,5;no;sí');
   assert.equal(preview.errorRows, 0); assert.equal(preview.rows[0].data.position, 1);
@@ -84,5 +134,12 @@ test('multipart HTTP preview, examples, validation and ADMIN permissions', async
     assert.equal((await fetch(`${base}/import/example?format=pdf`)).status, 400);
     const created = await fetch(base, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: 'FAT', name: 'Importado', cases: preview.rows.map((r: any) => r.data) }) });
     assert.equal(created.status, 201); assert.equal(writes, 1);
+    assert.equal((await fetch(`${base}/import/example?format=xlsx&layout=hierarchical`)).status, 200);
+    assert.equal((await fetch(`${base}/import/example?format=xlsx&layout=unknown`)).status, 400);
+    const hierarchyResponse = await post('ADMIN', fatProtocolExample('xlsx', 'hierarchical'));
+    const hierarchy = await hierarchyResponse.json() as any;
+    assert.equal(hierarchy.errorRows, 0); assert.equal(writes, 1, 'Preview must not write templates');
+    const savedHierarchy = await fetch(base, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: 'FAT-H', name: 'Jerárquico', cases: hierarchy.cases }) });
+    assert.equal(savedHierarchy.status, 201); assert.equal((await savedHierarchy.json() as any).cases[1].subpoints.length, 2); assert.equal(writes, 2);
   } finally { await app.close(); }
 });

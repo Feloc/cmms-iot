@@ -5,7 +5,7 @@ import { randomUUID } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { EngineeringService } from './engineering.service';
-import { CreateEngineeringRequestDto, EngineeringActionDto, EngineeringCommentDto, LinkEngineeringOrderDto, SaveProposalDto, UpdateEngineeringRequestDto, EngineeringListDto } from './engineering.dto';
+import { CreateEngineeringManufacturingDto, LinkEngineeringManufacturingDto, CreateEngineeringRequestDto, EngineeringActionDto, EngineeringCommentDto, LinkEngineeringOrderDto, SaveProposalDto, UpdateEngineeringRequestDto, EngineeringListDto } from './engineering.dto';
 import { MulterFile } from '../../common/multer-file';
 
 const storage = process.env.ATTACHMENTS_DIR || path.resolve('./storage/attachments');
@@ -40,6 +40,17 @@ export class EngineeringController {
   @Post(':id/orders')
   @UsePipes(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }))
   linkOrder(@Param('id') id: string, @Body() dto: LinkEngineeringOrderDto) { return this.service.linkOrder(id, dto.version, dto.workOrderId); }
+  @Get(':id/eligible-manufacturing-orders')
+  manufacturingOrders(@Param('id') id: string) { return this.service.eligibleManufacturingOrders(id); }
+  @Post(':id/manufacturing-orders/create')
+  @UsePipes(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }))
+  createManufacturing(@Param('id') id: string, @Body() dto: CreateEngineeringManufacturingDto) { return this.service.createManufacturingOrder(id, dto); }
+  @Post(':id/manufacturing-orders/link')
+  @UsePipes(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }))
+  linkManufacturing(@Param('id') id: string, @Body() dto: LinkEngineeringManufacturingDto) { return this.service.linkManufacturingOrder(id, dto.version, dto.manufacturingOrderId); }
+  @Post(':id/manufacturing-orders/:linkId/unlink')
+  @UsePipes(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }))
+  unlinkManufacturing(@Param('id') id: string, @Param('linkId') linkId: string, @Body() dto: EngineeringCommentDto) { return this.service.unlinkManufacturingOrder(id, dto.version, linkId, dto.note); }
   @Post(':id/comments')
   @UsePipes(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }))
   comment(@Param('id') id: string, @Body() dto: EngineeringCommentDto) { return this.service.comment(id, dto.version, dto.note); }

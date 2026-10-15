@@ -36,6 +36,7 @@ import { ManufacturingHandoverController } from './manufacturing-handover.contro
 import { ManufacturingHandoverService } from './manufacturing-handover.service';
 
 @Module({
+  exports: [ManufacturingService],
   imports: [AssembliesModule],
   controllers: [ManufacturingControlController, ManufacturingQuickController, ManufacturingController, ManufacturingDocumentsController, ManufacturingBomsController, ManufacturingReleasesController, ManufacturingSupplyController, ManufacturingAssemblyController, ManufacturingFatController, ManufacturingDispatchController, ManufacturingSiteDeploymentController, ManufacturingSatController, ManufacturingHandoverController],
   providers: [ManufacturingControlService, ManufacturingAccessGuard, ManufacturingValidationPipe, ManufacturingQuickService, ManufacturingService, ManufacturingDocumentsService, ManufacturingBomsService, ManufacturingBomImportService, ManufacturingReleasesService, ManufacturingSupplyService, ManufacturingStockReservationsService, ManufacturingSupplyRequestsService, ManufacturingSupplyInspectionsService, ManufacturingKitsService, ManufacturingAssemblyService, ManufacturingFatService, ManufacturingDispatchService, ManufacturingSiteDeploymentService, ManufacturingSatService, ManufacturingHandoverService, PrismaService],

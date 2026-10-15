@@ -3,6 +3,10 @@ import { PrismaService } from '../../prisma.service';
 import { tenantStorage } from '../../common/tenant-context';
 import { assertFatFindingTransition, assertFatReady, FAT_OPEN_FINDING_STATUSES, isBlockingFatFinding } from './manufacturing-fat-findings.domain';
 import { assertIndependentApproval } from './manufacturing-approval';
+import { normalizeFatSubpoint } from './manufacturing-fat-subpoints.domain';
+import { CreateManufacturingFatSubpointDto, VoidManufacturingFatSubpointDto } from './dto/manufacturing-fat.dto';
+import { promises as fs } from 'fs';
+import { fatMediaPath, FatMediaFile, FatMediaMetadata, storeFatMedia, validateFatMedia } from './manufacturing-fat-media';
 import { CreateManufacturingFatDeviationDto, CreateManufacturingFatEvidenceDto, CreateManufacturingFatExecutionDto, CreateManufacturingFatTemplateDto, DecideManufacturingFatDto, ManufacturingFatVersionDto, RecordManufacturingFatCaseDto, UpdateManufacturingFatDeviationDto } from './dto/manufacturing-fat.dto';
 
 type Actor = { id: string; name: string; role: string };
@@ -56,10 +60,12 @@ export class ManufacturingFatService {
     const name = this.text(dto?.name);
     if (!code || !name) throw new BadRequestException('Código y nombre son obligatorios');
     if (!Array.isArray(dto?.cases) || !dto.cases.length) throw new BadRequestException('El protocolo requiere al menos un caso de prueba');
+    const subpointCount = dto.cases.reduce((n, c) => n + (c.subpoints?.length || 0), 0);
+    if (dto.cases.length + subpointCount > 1000) throw new BadRequestException('El protocolo admite hasta 1000 puntos y subpuntos en total');
     const positions = new Set<number>();
     const cases = dto.cases.map((item, index) => {
       const position = Number(item.position ?? index + 1);
-      if (!Number.isInteger(position) || position < 1 || positions.has(position)) throw new BadRequestException('Las posiciones deben ser enteros positivos y únicos');
+      if (!Number.isInteger(position) || position < 1 || position > 2147483647 - subpointCount || positions.has(position)) throw new BadRequestException('Las posiciones deben ser enteros positivos únicos y dejar espacio para los subpuntos');
       positions.add(position);
       const caseName = this.text(item.name); const criteria = this.text(item.acceptanceCriteria);
       if (!caseName || !criteria) throw new BadRequestException(`El caso ${position} requiere nombre y criterio de aceptación`);
@@ -69,7 +75,9 @@ export class ManufacturingFatService {
       const maximumValue = item.maximumValue === undefined || item.maximumValue === null || item.maximumValue === '' ? null : this.number(item.maximumValue, 'Valor máximo');
       if (resultType === 'NUMERIC' && minimumValue === null && maximumValue === null) throw new BadRequestException(`El caso numérico ${position} requiere un límite`);
       if (minimumValue !== null && maximumValue !== null && minimumValue > maximumValue) throw new BadRequestException(`El rango del caso ${position} no es válido`);
-      return { tenantId, position, section: this.text(item.section), name: caseName, instructions: this.text(item.instructions), acceptanceCriteria: criteria, resultType, minimumValue, maximumValue, unit: this.text(item.unit), required: item.required !== false, evidenceRequired: item.evidenceRequired === true };
+      if (item.subpoints && (!Array.isArray(item.subpoints) || item.subpoints.length > 50)) throw new BadRequestException('Cada punto admite hasta 50 subpuntos');
+      const subpoints = (item.subpoints || []).map(normalizeFatSubpoint);
+      return { tenantId, position, section: this.text(item.section), name: caseName, instructions: this.text(item.instructions), acceptanceCriteria: criteria, resultType, minimumValue, maximumValue, unit: this.text(item.unit), required: item.required !== false, evidenceRequired: item.evidenceRequired === true, subpoints };
     });
     return this.prisma.$transaction(async (tx: any) => {
       const latest = await tx.manufacturingFatTemplate.aggregate({ where: { tenantId, code }, _max: { version: true } });
@@ -86,6 +94,9 @@ export class ManufacturingFatService {
     const ids = rows.flatMap((row: any) => row.cases.flatMap((c: any) => c.deviations.map((d: any) => d.id)));
     const events = ids.length ? await this.prisma.manufacturingAuditEvent.findMany({ where: { tenantId, entityType: 'ManufacturingFatDeviation', entityId: { in: ids } }, select: { id: true, entityId: true, createdAt: true, actorName: true, summary: true, afterData: true }, orderBy: { createdAt: 'asc' } }) : [];
     for (const row of rows) for (const c of row.cases) for (const d of c.deviations) d.history = events.filter(e => e.entityId === d.id);
+    const caseIds = rows.flatMap((r: any) => r.cases.map((c: any) => c.id));
+    const history = caseIds.length ? await this.prisma.manufacturingAuditEvent.findMany({ where: { tenantId, entityType: 'ManufacturingFatCase', entityId: { in: caseIds } }, select: { id: true, entityId: true, createdAt: true, actorName: true, summary: true, afterData: true }, orderBy: { createdAt: 'asc' } }) : [];
+    for (const row of rows) for (const c of row.cases) c.history = history.filter(e => e.entityId === c.id);
     return rows.map((row: any) => ({ ...this.serialize(row), permissions: this.permissions(order, actor) }));
   }
 
@@ -157,8 +168,66 @@ export class ManufacturingFatService {
       const executionCode = `${unit.manufacturingOrder.number}-U${String(unit.unitNumber).padStart(2, '0')}-FAT-${sequence}`;
       const execution = await tx.manufacturingFatExecution.create({ data: { tenantId, manufacturingOrderId: orderId, manufacturedUnitId: unit.id, assemblyExecutionId: assembly.id, templateId: template.id, sequence, executionCode, templateCode: template.code, templateName: template.name, templateVersion: template.version, createdByUserId: actor.id, createdByName: actor.name } });
       await tx.manufacturingFatCase.createMany({ data: template.cases.map((item: any) => ({ tenantId, executionId: execution.id, templateCaseId: item.id, position: item.position, section: item.section, name: item.name, instructions: item.instructions, acceptanceCriteria: item.acceptanceCriteria, resultType: item.resultType, minimumValue: item.minimumValue, maximumValue: item.maximumValue, unit: item.unit, required: item.required, evidenceRequired: item.evidenceRequired })) });
+      const parents = await tx.manufacturingFatCase.findMany({ where: { tenantId, executionId: execution.id } });
+      let childPosition = Math.max(...template.cases.map((c: any) => c.position));
+      const childRows: any[] = [];
+      for (const item of template.cases) {
+        const parent = parents.find((p: any) => p.templateCaseId === item.id);
+        for (const subpoint of item.subpoints || []) childRows.push({ ...normalizeFatSubpoint(subpoint), tenantId, executionId: execution.id, templateCaseId: item.id, parentCaseId: parent.id, position: ++childPosition, section: item.section });
+      }
+      if (childRows.length) await tx.manufacturingFatCase.createMany({ data: childRows });
       await this.audit(tx, tenantId, orderId, execution.id, 'MANUFACTURING_FAT_CREATED', `${executionCode}: FAT creado`, actor, { unitId, templateId: template.id, cases: template.cases.length });
       await tx.manufacturingOrder.update({ where: { id: orderId }, data: { version: { increment: 1 } } });
+    }, { isolationLevel: 'Serializable' });
+    return this.list(orderId);
+  }
+
+  private async invalidateParent(tx: any, child: any, actor: Actor, reason: string) {
+    const parent = await tx.manufacturingFatCase.findFirst({ where: { id: child.parentCaseId, tenantId: child.tenantId, executionId: child.executionId } });
+    if (!parent) throw new ConflictException('No se encontró el punto principal del subpunto');
+    await tx.manufacturingFatCase.update({ where: { id: parent.id }, data: { result: 'PENDING', measuredValue: null, observedValue: null, testedAt: null, testedByUserId: null, testedByName: null, lockVersion: { increment: 1 } } });
+    await this.audit(tx, parent.tenantId, child.execution.manufacturingOrderId, parent.id, 'FAT_CASE_REVIEW_REQUIRED', `${parent.name}: requiere evaluación final`, actor, { reason, subpointId: child.id, previousResult: parent.result, previousMeasuredValue: parent.measuredValue, previousObservedValue: parent.observedValue, previousNotes: parent.notes, previousTestedByName: parent.testedByName, previousTestedAt: parent.testedAt });
+  }
+
+  async createSubpoint(parentId: string, dto: CreateManufacturingFatSubpointDto) {
+    const { tenantId, userId } = this.context(); let orderId = '';
+    await this.prisma.$transaction(async (tx: any) => {
+      const actor = await this.actor(tx, tenantId, userId);
+      const parent = await this.lockedCase(tx, tenantId, parentId, actor); orderId = parent.execution.manufacturingOrderId;
+      this.version(parent, dto.lockVersion);
+      if (parent.parentCaseId) throw new ConflictException('Solo se permite un nivel de subpuntos');
+      if (parent.execution.status !== 'IN_PROGRESS') throw new ConflictException('Solo puedes agregar subpuntos durante la ejecución del FAT');
+      const reason = this.text(dto.reason);
+      if (!reason || reason.length < 5) throw new BadRequestException('Describe por qué se agrega el subpunto (mínimo 5 caracteres)');
+      if (await tx.manufacturingFatCase.count({ where: { tenantId, parentCaseId: parent.id } }) >= 50) throw new ConflictException('El punto ya tiene 50 subpuntos, incluyendo anulados');
+      if (await tx.manufacturingFatCase.count({ where: { tenantId, executionId: parent.executionId } }) >= 1000) throw new ConflictException('El FAT admite hasta 1000 puntos y subpuntos');
+      const latest = await tx.manufacturingFatCase.aggregate({ where: { tenantId, executionId: parent.executionId }, _max: { position: true } });
+      if (latest._max.position >= 2147483647) throw new ConflictException('No queda espacio de numeración para nuevos subpuntos');
+      const child = await tx.manufacturingFatCase.create({ data: { ...normalizeFatSubpoint(dto), tenantId, executionId: parent.executionId, parentCaseId: parent.id, position: latest._max.position + 1, section: parent.section, origin: 'EXECUTION', addedByUserId: actor.id, addedByName: actor.name, additionReason: reason } });
+      if (child.required) await this.invalidateParent(tx, { ...child, execution: parent.execution }, actor, 'Se agregó un subpunto obligatorio');
+      else await tx.manufacturingFatCase.update({ where: { id: parent.id }, data: { lockVersion: { increment: 1 } } });
+      await this.bumpExecution(tx, parent);
+      await this.audit(tx, tenantId, orderId, child.id, 'FAT_CASE_SUBPOINT_ADDED', `${parent.name}: agregado ${child.name}`, actor, { parentCaseId: parent.id, reason, ...normalizeFatSubpoint(dto) });
+    }, { isolationLevel: 'Serializable' });
+    return this.list(orderId);
+  }
+
+  async voidSubpoint(caseId: string, dto: VoidManufacturingFatSubpointDto) {
+    const { tenantId, userId } = this.context(); let orderId = '';
+    await this.prisma.$transaction(async (tx: any) => {
+      const actor = await this.actor(tx, tenantId, userId);
+      if (actor.role !== 'ADMIN') throw new ForbiddenException('Solo ADMIN puede autorizar la anulación de un subpunto');
+      const child = await this.lockedCase(tx, tenantId, caseId, actor); orderId = child.execution.manufacturingOrderId;
+      this.version(child, dto.lockVersion);
+      if (!child.parentCaseId) throw new ConflictException('Solo pueden anularse subpuntos');
+      if (child.execution.status !== 'IN_PROGRESS') throw new ConflictException('La estructura está bloqueada fuera de la ejecución del FAT');
+      const reason = this.text(dto.reason);
+      if (!reason || reason.length < 10) throw new BadRequestException('Justifica la anulación con al menos 10 caracteres');
+      if (await tx.manufacturingFatDeviation.count({ where: { tenantId, fatCaseId: caseId, status: { in: FAT_OPEN_FINDING_STATUSES } } })) throw new ConflictException('Cierra las novedades del subpunto antes de anularlo; no se pueden ocultar pendientes');
+      await tx.manufacturingFatCase.update({ where: { id: caseId }, data: { voidedAt: new Date(), voidedByUserId: actor.id, voidedByName: actor.name, voidReason: reason, lockVersion: { increment: 1 } } });
+      await this.invalidateParent(tx, child, actor, 'Se anuló un subpunto; revisa el alcance restante');
+      await this.bumpExecution(tx, child);
+      await this.audit(tx, tenantId, orderId, child.id, 'FAT_CASE_SUBPOINT_VOIDED', `${child.name}: subpunto anulado`, actor, { reason, previousResult: child.result });
     }, { isolationLevel: 'Serializable' });
     return this.list(orderId);
   }
@@ -177,7 +246,8 @@ export class ManufacturingFatService {
       const actor = await this.actor(tx, tenantId, userId); const fatCase = await this.lockedCase(tx, tenantId, caseId, actor); orderId = fatCase.execution.manufacturingOrderId;
       this.version(fatCase, dto?.lockVersion); if (fatCase.execution.status !== 'IN_PROGRESS') throw new ConflictException('El FAT no está en ejecución');
       let result = String(dto?.result || '').toUpperCase(); let measuredValue: number | null = null; const observedValue = this.text(dto?.observedValue); const notes = this.text(dto?.notes);
-      if (fatCase.resultType === 'NUMERIC') {
+      if (fatCase.resultType === 'NUMERIC' && result !== 'NOT_APPLICABLE') {
+        if (dto.measuredValue === undefined || dto.measuredValue === null || String(dto.measuredValue).trim() === '') throw new BadRequestException('Registra la medición');
         measuredValue = this.number(dto?.measuredValue, 'La medición');
         result = (fatCase.minimumValue === null || measuredValue >= Number(fatCase.minimumValue)) && (fatCase.maximumValue === null || measuredValue <= Number(fatCase.maximumValue)) ? 'PASS' : 'FAIL';
       } else {
@@ -187,6 +257,9 @@ export class ManufacturingFatService {
       if (result === 'NOT_APPLICABLE' && fatCase.required) throw new ConflictException('Un caso obligatorio no puede marcarse como no aplicable');
       if (result === 'FAIL' && (!notes || notes.length < 5)) throw new BadRequestException('Un resultado no conforme requiere una observación de al menos 5 caracteres');
       if (result !== 'FAIL') {
+        const children = await tx.manufacturingFatCase.findMany({ where: { tenantId, parentCaseId: fatCase.id }, include: { evidence: { where: { deviationId: null } }, deviations: true } });
+        if (result === 'NOT_APPLICABLE' && children.some((c: any) => !c.voidedAt && c.required)) throw new ConflictException('El punto tiene subpuntos obligatorios y no puede omitirse');
+        assertFatReady(children);
         const open = await tx.manufacturingFatDeviation.count({ where: { tenantId, fatCaseId: fatCase.id, kind: 'NON_CONFORMITY', status: { in: FAT_OPEN_FINDING_STATUSES } } });
         if (open) throw new ConflictException('Resuelve el retrabajo antes de registrar una nueva prueba conforme');
       }
@@ -200,6 +273,7 @@ export class ManufacturingFatService {
       }
       await this.bumpExecution(tx, fatCase);
       await this.audit(tx, tenantId, orderId, fatCase.id, 'FAT_CASE_RECORDED', `${fatCase.name}: ${result}`, actor, { result, measuredValue, observedValue, notes });
+      if (fatCase.parentCaseId) await this.invalidateParent(tx, fatCase, actor, 'Se registró o repitió un subpunto');
     }, { isolationLevel: 'Serializable' });
     return this.list(orderId);
   }
@@ -222,6 +296,7 @@ export class ManufacturingFatService {
         kind: dto.kind, severity: dto.severity, location: this.text(dto.location), ...assignment, openedByUserId: actor.id, openedByName: actor.name,
       } });
       await tx.manufacturingFatCase.update({ where: { id: caseId }, data: { lockVersion: { increment: 1 }, ...(dto.kind === 'NON_CONFORMITY' ? { result: 'FAIL', testedAt: new Date(), testedByUserId: actor.id, testedByName: actor.name } : {}) } });
+      if (dto.kind === 'NON_CONFORMITY' && fatCase.parentCaseId) await this.invalidateParent(tx, fatCase, actor, 'Se registró una no conformidad en un subpunto');
       await this.bumpExecution(tx, fatCase);
       await this.audit(tx, tenantId, orderId, deviation.id, 'FAT_DEVIATION_CREATED', `${deviation.deviationCode}: ${title}`, actor, { title, description, kind: dto.kind, severity: dto.severity, location: dto.location, ...assignment });
     }, { isolationLevel: 'Serializable' });
@@ -234,20 +309,45 @@ export class ManufacturingFatService {
     if (!deviation) throw new NotFoundException('Novedad no encontrada');
     return this.addEvidence(deviation.fatCaseId, dto, deviationId);
   }
-  async addEvidence(caseId: string, dto: CreateManufacturingFatEvidenceDto, deviationId?: string) {
+  async uploadEvidence(id: string, dto: CreateManufacturingFatEvidenceDto, file: FatMediaFile | undefined, forDeviation = false) {
+    validateFatMedia(file);
+    let caseId = id;
+    if (forDeviation) {
+      const deviation = await this.prisma.manufacturingFatDeviation.findFirst({ where: { id, tenantId: this.context().tenantId }, select: { fatCaseId: true } });
+      if (!deviation) throw new NotFoundException('Novedad no encontrada');
+      caseId = deviation.fatCaseId;
+    }
+    return this.addEvidence(caseId, dto, forDeviation ? id : undefined, file);
+  }
+
+  async evidenceFile(id: string) {
+    const { tenantId, userId } = this.context();
+    const actor = await this.actor(this.prisma, tenantId, userId);
+    const evidence = await this.prisma.manufacturingFatEvidence.findFirst({ where: { id, tenantId }, include: { fatCase: { include: { execution: true } } } });
+    if (!evidence?.storageKey) throw new NotFoundException('Archivo no encontrado');
+    await this.visibleOrder(this.prisma, tenantId, evidence.fatCase.execution.manufacturingOrderId, actor);
+    const path = fatMediaPath(evidence.storageKey);
+    try { await fs.access(path); } catch { throw new NotFoundException('Archivo no disponible en almacenamiento'); }
+    return { path, filename: evidence.filename!, mimeType: evidence.mimeType!, size: evidence.size! };
+  }
+
+  async addEvidence(caseId: string, dto: CreateManufacturingFatEvidenceDto, deviationId?: string, file?: FatMediaFile) {
     const { tenantId, userId } = this.context(); let orderId = '';
-    await this.prisma.$transaction(async (tx: any) => {
+    let media: FatMediaMetadata | undefined;
+    try { await this.prisma.$transaction(async (tx: any) => {
       const actor = await this.actor(tx, tenantId, userId);
       const deviation = deviationId ? await tx.manufacturingFatDeviation.findFirst({ where: { id: deviationId, tenantId, fatCaseId: caseId } }) : null;
       if (deviationId && !deviation) throw new NotFoundException('Novedad no encontrada');
       const fatCase = await this.lockedCase(tx, tenantId, caseId, actor, deviation?.kind === 'OBSERVATION'); orderId = fatCase.execution.manufacturingOrderId;
       if (fatCase.execution.status !== 'IN_PROGRESS' && !(deviation?.kind === 'OBSERVATION' && fatCase.execution.status === 'APPROVED')) throw new ConflictException('La evidencia no puede agregarse en este estado del FAT');
       const title = this.text(dto?.title); if (!title) throw new BadRequestException('El título es obligatorio');
-      if (!this.text(dto?.reference) && !this.text(dto?.url) && !this.text(dto?.notes)) throw new BadRequestException('Incluye una referencia, URL o nota');
-      const evidence = await tx.manufacturingFatEvidence.create({ data: { tenantId, fatCaseId: caseId, deviationId: deviationId || null, title, reference: this.text(dto.reference), url: this.text(dto.url), notes: this.text(dto.notes), createdByUserId: actor.id, createdByName: actor.name } });
+      if (!file && !this.text(dto?.reference) && !this.text(dto?.url) && !this.text(dto?.notes)) throw new BadRequestException('Incluye un archivo, referencia, URL o nota');
+      if (file) media = await storeFatMedia(file);
+      const evidence = await tx.manufacturingFatEvidence.create({ data: { tenantId, fatCaseId: caseId, deviationId: deviationId || null, title, reference: this.text(dto.reference), url: this.text(dto.url), notes: this.text(dto.notes), ...media, createdByUserId: actor.id, createdByName: actor.name } });
       await this.bumpExecution(tx, fatCase);
-      await this.audit(tx, tenantId, orderId, deviationId || evidence.id, deviationId ? 'FAT_DEVIATION_EVIDENCE_ADDED' : 'FAT_EVIDENCE_ADDED', `${deviation?.deviationCode || fatCase.name}: evidencia agregada`, actor, { evidenceId: evidence.id, title, reference: evidence.reference, url: evidence.url });
-    }, { isolationLevel: 'Serializable' });
+      await this.audit(tx, tenantId, orderId, deviationId || evidence.id, deviationId ? 'FAT_DEVIATION_EVIDENCE_ADDED' : 'FAT_EVIDENCE_ADDED', `${deviation?.deviationCode || fatCase.name}: evidencia agregada`, actor, { evidenceId: evidence.id, title, reference: evidence.reference, url: evidence.url, filename: media?.filename, mimeType: media?.mimeType, size: media?.size });
+    }, { isolationLevel: 'Serializable' }); }
+    catch (error) { if (media) await fs.unlink(fatMediaPath(media.storageKey)).catch(() => undefined); throw error; }
     return this.list(orderId);
   }
 
@@ -294,6 +394,7 @@ export class ManufacturingFatService {
         resolvedAt: terminal ? new Date() : null, resolvedByUserId: terminal ? actor.id : null, resolvedByName: terminal ? actor.name : null,
       } });
       await tx.manufacturingFatCase.update({ where: { id: fatCase.id }, data: { lockVersion: { increment: 1 }, ...(deviation.kind === 'NON_CONFORMITY' && changed && status === 'OPEN' ? { result: 'FAIL' } : {}) } });
+      if (fatCase.parentCaseId && deviation.kind === 'NON_CONFORMITY' && changed && status === 'OPEN') await this.invalidateParent(tx, fatCase, actor, 'Se reabrió una no conformidad del subpunto');
       await this.bumpExecution(tx, fatCase);
       await this.audit(tx, tenantId, orderId, deviationId, 'FAT_DEVIATION_UPDATED', `${deviation.deviationCode}: ${status}`, actor, { previousStatus: deviation.status, status, correctiveAction, resolutionNotes, verificationNotes, ...assignment, approvalExceptionReason: dto.approvalExceptionReason });
     }, { isolationLevel: 'Serializable' });
@@ -348,13 +449,18 @@ export class ManufacturingFatService {
     await tx.$queryRaw`SELECT "id" FROM "ManufacturingFatCase" WHERE "id" = ${caseId} FOR UPDATE`;
     const fatCase = await tx.manufacturingFatCase.findFirst({ where: { id: caseId, tenantId }, include: { execution: { include: { manufacturingOrder: { include: { members: { where: { userId: actor.id } } } } } } } });
     if (!fatCase) throw new NotFoundException('Caso FAT no encontrado'); const order = fatCase.execution.manufacturingOrder;
+    if (fatCase.voidedAt) throw new ConflictException('El subpunto está anulado; su información se conserva para consulta');
     if (!this.permissions(order, actor).canOperate) throw new ForbiddenException('No tienes una función operativa en esta orden');
     if (['CANCELED', 'ON_HOLD'].includes(order.status) || (order.status === 'COMPLETED' && !(allowApprovedObservation && fatCase.execution.status === 'APPROVED'))) throw new ConflictException('La orden no permite ejecutar FAT'); return fatCase;
   }
   private serialize(execution: any) {
-    const cases = execution.cases.map((fatCase: any) => ({ ...fatCase, minimumValue: fatCase.minimumValue === null ? null : Number(fatCase.minimumValue), maximumValue: fatCase.maximumValue === null ? null : Number(fatCase.maximumValue), measuredValue: fatCase.measuredValue === null ? null : Number(fatCase.measuredValue) }));
+    const publicEvidence = ({ storageKey, ...evidence }: any) => ({ ...evidence, hasFile: !!storageKey });
+    execution = { ...execution, cases: execution.cases.map((c: any) => ({ ...c, evidence: c.evidence.map(publicEvidence), deviations: c.deviations.map((d: any) => ({ ...d, evidence: d.evidence.map(publicEvidence) })) })) };
+    const allCases = execution.cases.map((fatCase: any) => ({ ...fatCase, minimumValue: fatCase.minimumValue === null ? null : Number(fatCase.minimumValue), maximumValue: fatCase.maximumValue === null ? null : Number(fatCase.maximumValue), measuredValue: fatCase.measuredValue === null ? null : Number(fatCase.measuredValue) }));
+    const cases = allCases.filter((c: any) => !c.voidedAt);
     const deviations = cases.flatMap((fatCase: any) => fatCase.deviations);
-    return { ...execution, cases, summary: { caseCount: cases.length, passedCount: cases.filter((item: any) => item.result === 'PASS').length, failedCount: cases.filter((item: any) => item.result === 'FAIL').length, pendingCount: cases.filter((item: any) => item.result === 'PENDING').length, openDeviationCount: deviations.filter((item: any) => FAT_OPEN_FINDING_STATUSES.includes(item.status)).length, blockingDeviationCount: deviations.filter(isBlockingFatFinding).length, observationCount: deviations.filter((d: any) => d.kind === 'OBSERVATION').length, closedDeviationCount: deviations.filter((d: any) => !FAT_OPEN_FINDING_STATUSES.includes(d.status)).length, progressPercent: cases.length ? Math.round(cases.filter((item: any) => item.result !== 'PENDING').length * 100 / cases.length) : 0, dispatchReady: execution.status === 'APPROVED' } };
+    const requiredWork = cases.filter((c: any) => !c.parentCaseId || c.required || c.result !== 'PENDING');
+    return { ...execution, cases: allCases, summary: { caseCount: cases.length, rootCaseCount: cases.filter((c: any) => !c.parentCaseId).length, subpointCount: cases.filter((c: any) => c.parentCaseId).length, voidedCount: allCases.length - cases.length, passedCount: cases.filter((item: any) => item.result === 'PASS').length, failedCount: cases.filter((item: any) => item.result === 'FAIL').length, pendingCount: requiredWork.filter((item: any) => item.result === 'PENDING').length, openDeviationCount: deviations.filter((item: any) => FAT_OPEN_FINDING_STATUSES.includes(item.status)).length, blockingDeviationCount: deviations.filter(isBlockingFatFinding).length, observationCount: deviations.filter((d: any) => d.kind === 'OBSERVATION').length, closedDeviationCount: deviations.filter((d: any) => !FAT_OPEN_FINDING_STATUSES.includes(d.status)).length, progressPercent: requiredWork.length ? Math.round(requiredWork.filter((item: any) => item.result !== 'PENDING').length * 100 / requiredWork.length) : 0, dispatchReady: execution.status === 'APPROVED' } };
   }
   private async audit(tx: any, tenantId: string, orderId: string, entityId: string, action: string, summary: string, actor: Actor, afterData: unknown) {
     await tx.manufacturingAuditEvent.create({ data: { tenantId, manufacturingOrderId: orderId, entityType: action.includes('CASE') ? 'ManufacturingFatCase' : action.includes('DEVIATION') ? 'ManufacturingFatDeviation' : action.includes('EVIDENCE') ? 'ManufacturingFatEvidence' : 'ManufacturingFatExecution', entityId, action, summary, actorUserId: actor.id, actorName: actor.name, afterData: JSON.parse(JSON.stringify(afterData)) } });

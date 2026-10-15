@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { verifySiteLifecycle } from './manufacturing-site-lifecycle.integration';
 import { verifyFatFindings, verifyApprovedObservation } from './manufacturing-fat-findings.integration';
+import { verifyFatSubpoints } from './manufacturing-fat-subpoints.integration';
+import { previewFatProtocol } from '../src/modules/manufacturing/manufacturing-fat-import';
 import { PrismaService } from '../src/prisma.service';
 import { tenantStorage } from '../src/common/tenant-context';
 import { ManufacturingSupplyService } from '../src/modules/manufacturing/manufacturing-supply.service';
@@ -331,11 +333,13 @@ async function main() {
     const fatTemplate = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => fatService.createTemplate({
       code: `FAT-${stamp}`,
       name: 'Protocolo FAT temporal',
-      cases: [
-        { position: 10, section: 'Seguridad', name: 'Paro de emergencia', acceptanceCriteria: 'Detención segura', resultType: 'BOOLEAN', evidenceRequired: true },
-        { position: 20, section: 'Rendimiento', name: 'Corriente de operación', acceptanceCriteria: 'Entre 10 y 20 A', resultType: 'NUMERIC', minimumValue: 10, maximumValue: 20, unit: 'A' },
-        { position: 30, section: 'Documentación', name: 'Observación del cliente', acceptanceCriteria: 'Registro cuando aplique', resultType: 'TEXT', required: false },
-      ],
+      cases: previewFatProtocol({ originalname: 'protocolo-jerarquico.csv', buffer: Buffer.from([
+        'posicion;punto_padre;seccion;nombre;criterio;tipo;minimo;maximo;unidad;obligatorio;evidencia',
+        '10;;Seguridad;Paro de emergencia;Detención segura;BOOLEAN;;;;sí;sí',
+        '31;10;;Revisión complementaria;Entre 1 y 2;NUMERIC;1;2;;no;no',
+        '20;;Rendimiento;Corriente de operación;Entre 10 y 20 A;NUMERIC;10;20;A;sí;no',
+        '30;;Documentación;Observación del cliente;Registro cuando aplique;TEXT;;;;no;no',
+      ].join('\n')) }).cases,
     }));
     fatTemplateId = fatTemplate.id;
     await assert.rejects(
@@ -346,7 +350,7 @@ async function main() {
     let fatExecutions = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => fatService.createExecution(kits[0].manufacturedUnitId, { templateId: fatTemplate.id }));
     let fat = fatExecutions[0];
     assert.equal(fat.status, 'DRAFT');
-    assert.equal(fat.cases.length, 3);
+    assert.equal(fat.cases.length, 4);
     fatExecutions = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => fatService.start(fat.id, { lockVersion: fat.lockVersion }));
     fat = fatExecutions[0];
     let [safetyCase, numericCase, optionalCase] = fat.cases;
@@ -391,6 +395,7 @@ async function main() {
     fatExecutions = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => fatService.start(fat.id, { lockVersion: fat.lockVersion }));
     fat = fatExecutions.find((item: any) => item.sequence === 2); [safetyCase, numericCase, optionalCase] = fat.cases;
     const observationId = await verifyFatFindings(prisma, fatService, admin, reviewer, fat);
+    await verifyFatSubpoints(prisma, fatService, admin, fat);
     fatExecutions = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => fatService.list(order.id));
     fat = fatExecutions.find((item: any) => item.sequence === 2); [safetyCase, numericCase, optionalCase] = fat.cases;
     fatExecutions = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => fatService.recordCase(safetyCase.id, { lockVersion: safetyCase.lockVersion, result: 'PASS' }));

@@ -1,5 +1,5 @@
 import { Type, Transform } from 'class-transformer';
-import { IsString, IsOptional, IsIn, IsInt, Min, MaxLength, IsNotEmpty, IsDateString, IsNumber, ValidateNested, IsBoolean, IsDefined, Matches } from 'class-validator';
+import { IsString, IsOptional, IsIn, IsInt, Min, Max, MaxLength, IsNotEmpty, IsDateString, IsNumber, ValidateNested, IsBoolean, IsDefined, Matches } from 'class-validator';
 import { PickType } from '@nestjs/mapped-types';
 
 const trim = ({ value }: { value: unknown }) => typeof value === 'string' ? value.trim() : value;
@@ -54,6 +54,15 @@ export class EngineeringActionDto extends VersionDto {
 }
 export class LinkEngineeringOrderDto extends VersionDto {
   @IsString() @IsNotEmpty() workOrderId!: string;
+}
+export class CreateEngineeringManufacturingDto extends VersionDto {
+  @IsString() @IsNotEmpty() inventoryItemId!: string;
+  @IsInt() @Min(1) @Max(1000) quantity!: number;
+  @IsString() @IsNotEmpty() responsibleUserId!: string;
+  @IsOptional() @IsDateString() requestedDeliveryAt?: string;
+}
+export class LinkEngineeringManufacturingDto extends VersionDto {
+  @IsString() @IsNotEmpty() manufacturingOrderId!: string;
 }
 export class EngineeringCommentDto extends VersionDto {
   @Transform(trim) @IsString() @IsNotEmpty() @MaxLength(10000) note!: string;

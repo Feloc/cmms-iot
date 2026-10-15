@@ -74,6 +74,7 @@ export type ManufacturingMetrics = {
 };
 
 export type ManufacturingOrder = {
+  engineeringRequestLink?: { request: { id: string; number: string; title: string; assetId: string }; revision: { revision: number; snapshot: { proposal: import('./engineering').Proposal } } } | null;
   id: string;
   number: string;
   orderType: ManufacturingOrderType;
@@ -479,6 +480,7 @@ export type ManufacturingAssemblyExecution = {
 
 export type ManufacturingFatTemplateCase = {
   id: string;
+  subpoints?: Array<Omit<ManufacturingFatTemplateCase, 'id' | 'position' | 'subpoints'>>;
   position: number;
   section?: string | null;
   name: string;
@@ -504,6 +506,10 @@ export type ManufacturingFatTemplate = {
 
 export type ManufacturingFatEvidence = {
   id: string;
+  hasFile?: boolean;
+  filename?: string | null;
+  mimeType?: string | null;
+  size?: number | null;
   title: string;
   reference?: string | null;
   url?: string | null;
@@ -541,6 +547,15 @@ export type ManufacturingFatDeviation = {
 
 export type ManufacturingFatCase = {
   id: string;
+  parentCaseId?: string | null;
+  origin?: 'PROTOCOL' | 'EXECUTION';
+  addedByName?: string | null;
+  additionReason?: string | null;
+  createdAt?: string;
+  voidedAt?: string | null;
+  voidedByName?: string | null;
+  voidReason?: string | null;
+  history?: Array<{ id: string; createdAt: string; actorName: string; summary: string; afterData?: Record<string, unknown> }>;
   executionId: string;
   position: number;
   section?: string | null;

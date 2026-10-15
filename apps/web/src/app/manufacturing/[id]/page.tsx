@@ -90,7 +90,7 @@ export default function ManufacturingDetailPage() {
   return (
     <div className="p-4 md:p-6 max-w-7xl mx-auto space-y-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div><Link href="/manufacturing" className="text-sm text-gray-600 hover:underline">← Manufactura</Link><h1 className="text-2xl font-semibold mt-1">{data.number} · {data.projectName}</h1><p className="text-sm text-gray-600">{[data.productCode, data.productName, data.model].filter(Boolean).join(' · ')}</p>{data.orderType === 'SPARE_PART' ? <div className="mt-2 flex flex-wrap items-center gap-2 text-xs"><span className="rounded bg-violet-100 px-2 py-1 text-violet-800">OF de repuesto posventa</span>{data.fulfillingAfterSalesDemands?.map((demand) => <a key={demand.id} className="underline text-violet-700" href={`/service-orders/${demand.serviceOrderId}`}>OS · {demand.asset.code}</a>)}</div> : null}</div>
+        <div><Link href="/manufacturing" className="text-sm text-gray-600 hover:underline">← Manufactura</Link><h1 className="text-2xl font-semibold mt-1">{data.number} · {data.projectName}</h1><p className="text-sm text-gray-600">{[data.productCode, data.productName, data.model].filter(Boolean).join(' · ')}</p>{data.orderType === 'SPARE_PART' ? <div className="mt-2 flex flex-wrap items-center gap-2 text-xs"><span className="rounded bg-violet-100 px-2 py-1 text-violet-800">{data.engineeringRequestLink ? 'OF de componente - Ingeniería' : 'OF de repuesto posventa'}</span>{data.fulfillingAfterSalesDemands?.map((demand) => <a key={demand.id} className="underline text-violet-700" href={`/service-orders/${demand.serviceOrderId}`}>OS · {demand.asset.code}</a>)}</div> : null}</div>
         <div className="flex flex-wrap items-center gap-2">
           <span className={`rounded-full px-3 py-1 text-sm ${manufacturingStatusClass[data.status]}`}>{manufacturingStatusLabel[data.status]}</span>
           {isAdmin && !['CANCELED', 'COMPLETED'].includes(data.status) ? data.status === 'ON_HOLD' ? <button disabled={busy} className="border rounded px-3 py-2 text-sm" onClick={() => orderAction('resume')}>Reanudar</button> : <button disabled={busy} className="border rounded px-3 py-2 text-sm" onClick={() => orderAction('hold')}>Pausar</button> : null}
@@ -98,6 +98,12 @@ export default function ManufacturingDetailPage() {
         </div>
       </div>
 
+      {data.engineeringRequestLink && <section className="border-y py-4 text-sm space-y-2">
+        <h2 className="font-semibold">Solicitud de ingeniería</h2>
+        <Link className="text-emerald-700 underline break-words" href={'/engineering-requests/' + data.engineeringRequestLink.request.id}>{data.engineeringRequestLink.request.number} · {data.engineeringRequestLink.request.title}</Link>
+        <p>Revisión aprobada {data.engineeringRequestLink.revision.revision} · <Link className="underline" href={'/assets/' + data.engineeringRequestLink.request.assetId}>Equipo intervenido</Link></p>
+        <details><summary className="cursor-pointer">Propuesta aprobada</summary><dl className="mt-3 grid gap-3 sm:grid-cols-2">{([['Solución', 'solution'], ['Alcance', 'scope'], ['Materiales', 'materials'], ['Criterios de aceptación', 'acceptanceCriteria'], ['Documentación', 'documentImpact']] as const).map(([label, key]) => <div key={key}><dt className="font-medium">{label}</dt><dd className="whitespace-pre-wrap break-words">{data.engineeringRequestLink?.revision.snapshot.proposal[key]}</dd></div>)}</dl></details>
+      </section>}
       {message ? <div className="border border-red-200 bg-red-50 text-red-700 rounded p-3 text-sm whitespace-pre-wrap">{message}</div> : null}
       {data.status === 'ON_HOLD' ? <div className="border border-amber-200 bg-amber-50 text-amber-900 rounded p-3 text-sm"><strong>Orden en pausa:</strong> {data.holdReason}</div> : null}
       {data.status === 'CANCELED' ? <div className="border border-red-200 bg-red-50 text-red-800 rounded p-3 text-sm"><strong>Orden cancelada:</strong> {data.canceledReason}</div> : null}

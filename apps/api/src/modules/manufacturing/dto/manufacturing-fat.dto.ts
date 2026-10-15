@@ -1,3 +1,22 @@
+export class ManufacturingFatSubpointDefinitionDto {
+  name!: string;
+  instructions?: string | null;
+  acceptanceCriteria!: string;
+  resultType?: 'BOOLEAN' | 'NUMERIC' | 'TEXT';
+  minimumValue?: number | string | null;
+  maximumValue?: number | string | null;
+  unit?: string | null;
+  required?: boolean;
+  evidenceRequired?: boolean;
+}
+export class CreateManufacturingFatSubpointDto extends ManufacturingFatSubpointDefinitionDto {
+  lockVersion!: number;
+  reason!: string;
+}
+export class VoidManufacturingFatSubpointDto {
+  lockVersion!: number;
+  reason!: string;
+}
 export class CreateManufacturingFatTemplateDto {
   code!: string;
   name!: string;
@@ -14,6 +33,7 @@ export class CreateManufacturingFatTemplateDto {
     unit?: string | null;
     required?: boolean;
     evidenceRequired?: boolean;
+    subpoints?: ManufacturingFatSubpointDefinitionDto[];
   }>;
 }
 

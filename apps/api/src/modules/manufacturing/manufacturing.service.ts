@@ -193,6 +193,7 @@ export class ManufacturingService {
 
   private includeDetail() {
     return {
+      engineeringRequestLink: { include: { request: { select: { id: true, number: true, title: true, assetId: true } }, revision: { select: { revision: true, snapshot: true } } } },
       responsibleUser: { select: { id: true, name: true, email: true, role: true } },
       createdByUser: { select: { id: true, name: true } },
       units: { orderBy: { unitNumber: 'asc' } },
@@ -338,54 +339,61 @@ export class ManufacturingService {
   }
 
   async createOrder(dto: CreateManufacturingOrderDto) {
+    const created = await this.prisma.$transaction((tx) => this.createOrderInTransaction(tx, dto));
+    return this.getOrder(created.id);
+  }
+
+  async createOrderInTransaction(tx: any, dto: CreateManufacturingOrderDto, outputInventoryItemId?: string) {
     const { tenantId, userId } = this.context();
     const projectName = this.text(dto?.projectName, 'projectName', true)!;
     const productName = this.text(dto?.productName, 'productName', true)!;
     const quantity = this.quantity(dto?.quantity);
     const dates = this.dates(dto || {});
 
-    const created = await this.prisma.$transaction(async (tx: any) => {
-      const actor = await this.requireAdmin(tx, tenantId, userId);
-      const responsible = await this.requireTenantUser(tx, tenantId, dto?.responsibleUserId);
-      const members = this.normalizeMembers(dto?.members, responsible.id);
-      await this.validateMemberUsers(tx, tenantId, members);
+    if (outputInventoryItemId) {
+      const item = await tx.inventoryItem.findFirst({ where: { id: outputInventoryItemId, tenantId, status: 'ACTIVE' } });
+      if (!item) throw new BadRequestException('El componente no existe o no está activo');
+    }
+    const actor = await this.requireAdmin(tx, tenantId, userId);
+    const responsible = await this.requireTenantUser(tx, tenantId, dto?.responsibleUserId);
+    const members = this.normalizeMembers(dto?.members, responsible.id);
+    await this.validateMemberUsers(tx, tenantId, members);
 
-      const year = Number(new Intl.DateTimeFormat('en-US', { timeZone: 'America/Bogota', year: 'numeric' }).format(new Date()));
-      const sequence = await tx.manufacturingNumberSequence.upsert({
-        where: { tenantId_year: { tenantId, year } },
-        create: { tenantId, year, lastValue: 1 },
-        update: { lastValue: { increment: 1 } },
-      });
-      const number = formatManufacturingOrderNumber(year, sequence.lastValue);
-      const order = await tx.manufacturingOrder.create({
-        data: {
-          tenantId,
-          number,
-          projectName,
-          productCode: this.text(dto.productCode, 'productCode'),
-          productName,
-          model: this.text(dto.model, 'model'),
-          quantity,
-          priority: this.priority(dto.priority),
-          customerName: this.text(dto.customerName, 'customerName'),
-          customerReference: this.text(dto.customerReference, 'customerReference'),
-          commercialReference: this.text(dto.commercialReference, 'commercialReference'),
-          destination: this.text(dto.destination, 'destination'),
-          description: this.text(dto.description, 'description'),
-          ...dates,
-          responsibleUserId: responsible.id,
-          createdByUserId: actor.id,
-          units: { create: Array.from({ length: quantity }, (_, index) => ({ tenantId, unitNumber: index + 1 })) },
-          members: { create: members.map((member) => ({ tenantId, userId: member.userId, function: member.function })) },
-        },
-      });
-      await this.audit(tx, {
-        tenantId, orderId: order.id, action: 'ORDER_CREATED',
-        summary: `Orden ${number} creada`, actor, afterData: this.orderSnapshot(order),
-      });
-      return order;
+    const year = Number(new Intl.DateTimeFormat('en-US', { timeZone: 'America/Bogota', year: 'numeric' }).format(new Date()));
+    const sequence = await tx.manufacturingNumberSequence.upsert({
+      where: { tenantId_year: { tenantId, year } },
+      create: { tenantId, year, lastValue: 1 },
+      update: { lastValue: { increment: 1 } },
     });
-    return this.getOrder(created.id);
+    const number = formatManufacturingOrderNumber(year, sequence.lastValue);
+    const order = await tx.manufacturingOrder.create({
+      data: {
+        tenantId,
+        number,
+        projectName,
+        ...(outputInventoryItemId ? { orderType: 'SPARE_PART', outputInventoryItemId } : {}),
+        productCode: this.text(dto.productCode, 'productCode'),
+        productName,
+        model: this.text(dto.model, 'model'),
+        quantity,
+        priority: this.priority(dto.priority),
+        customerName: this.text(dto.customerName, 'customerName'),
+        customerReference: this.text(dto.customerReference, 'customerReference'),
+        commercialReference: this.text(dto.commercialReference, 'commercialReference'),
+        destination: this.text(dto.destination, 'destination'),
+        description: this.text(dto.description, 'description'),
+        ...dates,
+        responsibleUserId: responsible.id,
+        createdByUserId: actor.id,
+        units: { create: Array.from({ length: quantity }, (_, index) => ({ tenantId, unitNumber: index + 1 })) },
+        members: { create: members.map((member) => ({ tenantId, userId: member.userId, function: member.function })) },
+      },
+    });
+    await this.audit(tx, {
+      tenantId, orderId: order.id, action: 'ORDER_CREATED',
+      summary: `Orden ${number} creada`, actor, afterData: this.orderSnapshot(order),
+    });
+    return order;
   }
 
   async getOrder(id: string) {

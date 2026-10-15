@@ -5,13 +5,15 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { AttachmentsService } from '../src/modules/attachments/attachments.service';
 import { PrismaService } from '../src/prisma.service';
+import { ManufacturingService } from '../src/modules/manufacturing/manufacturing.service';
 import { EngineeringService } from '../src/modules/engineering/engineering.service';
 import { tenantStorage } from '../src/common/tenant-context';
 
 async function main() {
   const prisma = new PrismaService();
   const db = prisma as any;
-  const service = new EngineeringService(prisma);
+  const manufacturing = new ManufacturingService(prisma, {} as any);
+  const service = new EngineeringService(prisma, manufacturing);
   const suffix = randomUUID();
   const tenantId = 'engineering-test-' + suffix;
   const otherTenantId = tenantId + '-other';
@@ -59,6 +61,49 @@ async function main() {
     assert.equal(row.revisions.find((r: any) => r.revision === 1).snapshot.attachments[0].filename, 'evidence.txt'); checks++;
     await assert.rejects(act(engineer.id, () => service.proposal(row.id, row.version, proposal))); checks++;
     await assert.rejects(act(engineer.id, () => service.action(row.id, { version: row.version, action: 'start' }))); checks++;
+    const item = await prisma.inventoryItem.create({ data: { tenantId, sku: 'GUIDE-TEST', name: 'Guía' } });
+    const otherItem = await prisma.inventoryItem.create({ data: { tenantId: otherTenantId, sku: 'GUIDE-OTHER', name: 'Otra guía' } });
+    const createOf = () => ({ version: row.version, inventoryItemId: item.id, quantity: 2, responsibleUserId: engineer.id });
+    await assert.rejects(act(engineer.id, () => service.createManufacturingOrder(row.id, createOf())), /administración/); checks++;
+    await assert.rejects(act(viewer.id, () => service.createManufacturingOrder(row.id, createOf())), /Solo lectura/); checks++;
+    await assert.rejects(act(otherUser.id, () => service.createManufacturingOrder(row.id, createOf()), otherTenantId), /no encontrada/); checks++;
+    await assert.rejects(act(admin.id, () => service.createManufacturingOrder(row.id, { ...createOf(), inventoryItemId: otherItem.id })), /Componente/); checks++;
+    await assert.rejects(act(admin.id, () => service.createManufacturingOrder(row.id, { ...createOf(), responsibleUserId: viewer.id })), /Responsable/); checks++;
+    await assert.rejects(act(admin.id, () => service.createManufacturingOrder(row.id, { ...createOf(), quantity: 0 }))); checks++;
+    assert.equal(await db.manufacturingOrder.count({ where: { tenantId } }), 0);
+    assert.equal((await act(admin.id, () => service.detail(row.id))).version, row.version); checks++;
+    const stale = row.version;
+    row = await act(admin.id, () => service.createManufacturingOrder(row.id, createOf()));
+    const ofId = row.manufacturingOrders[0].manufacturingOrder.id;
+    const of = await act(engineer.id, () => manufacturing.getOrder(ofId));
+    assert.equal(of.orderType, 'SPARE_PART');
+    assert.equal(of.outputInventoryItemId, item.id);
+    assert.equal(of.units.length, 2);
+    assert.equal(of.engineeringRequestLink.revision.revision, 2);
+    assert.equal(of.engineeringRequestLink.revision.snapshot.proposal.downtimeHours, 1); checks++;
+    await assert.rejects(act(admin.id, () => service.createManufacturingOrder(row.id, { ...createOf(), version: stale })), /Recarga/); checks++;
+    assert.equal(await db.manufacturingOrder.count({ where: { tenantId } }), 1);
+    await assert.rejects(act(admin.id, () => service.linkManufacturingOrder(row.id, row.version, ofId)), /Selecciona/); checks++;
+    await assert.rejects(act(admin.id, () => service.action(row.id, { version: row.version, action: 'cancel', note: 'Cancelar' })), /OF vinculadas/); checks++;
+    row = await act(admin.id, () => service.unlinkManufacturingOrder(row.id, row.version, row.manufacturingOrders[0].id, 'Revisar vínculo'));
+    assert.equal(row.manufacturingOrders.length, 0);
+    assert.ok((await act(admin.id, () => service.eligibleManufacturingOrders(row.id))).some((o: any) => o.id === ofId)); checks++;
+    const relinkVersion = row.version;
+    const concurrent = await Promise.allSettled([
+      act(admin.id, () => service.linkManufacturingOrder(row.id, relinkVersion, ofId)),
+      act(admin.id, () => service.linkManufacturingOrder(row.id, relinkVersion, ofId)),
+    ]);
+    assert.equal(concurrent.filter(result => result.status === 'fulfilled').length, 1);
+    assert.equal(concurrent.filter(result => result.status === 'rejected').length, 1);
+    row = await act(admin.id, () => service.detail(row.id));
+    assert.equal(row.manufacturingOrders.length, 1); checks++;
+    await db.manufacturingOrder.update({ where: { id: ofId }, data: { status: 'ENGINEERING' } });
+    await assert.rejects(act(admin.id, () => service.unlinkManufacturingOrder(row.id, row.version, row.manufacturingOrders[0].id, 'No permitido')), /Solo se desvinculan/); checks++;
+    // Completion is simulated here; manufacturing lifecycle has its own integration tests.
+    const ordinary = await act(admin.id, () => manufacturing.createOrder({ projectName: 'Normal', productName: 'Equipo', quantity: 1, responsibleUserId: engineer.id }));
+    assert.equal(ordinary.orderType, 'EQUIPMENT');
+    assert.equal(ordinary.engineeringRequestLink, null);
+    assert.equal(ordinary.units.length, 1); checks++;
     const execution = await prisma.workOrder.create({ data: { tenantId, assetCode: asset.code, title: 'Instalar guía', kind: 'SERVICE_ORDER', status: 'OPEN' } });
     row = await act(engineer.id, () => service.linkOrder(row.id, row.version, execution.id));
     await apply(engineer.id, 'start');
@@ -69,6 +114,10 @@ async function main() {
     const closure = { action: 'close', criteriaMet: true, validationResult: 'Dos horas sin atascos', documentUpdates: 'Plano y manual rev. B' };
     await assert.rejects(act(reviewer.id, () => service.action(row.id, { version: row.version, ...closure }))); checks++;
     await prisma.workOrder.update({ where: { id: execution.id }, data: { status: 'COMPLETED' } });
+    await assert.rejects(act(reviewer.id, () => service.action(row.id, { version: row.version, ...closure })), /OF vinculadas/); checks++;
+    await db.manufacturingOrder.update({ where: { id: ofId }, data: { status: 'CANCELED' } });
+    await assert.rejects(act(reviewer.id, () => service.action(row.id, { version: row.version, ...closure })), /OF vinculadas/); checks++;
+    await db.manufacturingOrder.update({ where: { id: ofId }, data: { status: 'COMPLETED' } });
     await apply(reviewer.id, 'close', closure);
     assert.equal(row.status, 'CLOSED');
     assert.equal(row.events.at(-1).details.criteriaMet, true);
@@ -77,6 +126,10 @@ async function main() {
   } finally {
     const where = { tenantId: { in: [tenantId, otherTenantId] } };
     await prisma.attachment.deleteMany({ where });
+    await db.engineeringManufacturingOrder.deleteMany({ where });
+    await db.manufacturingOrder.deleteMany({ where });
+    await db.manufacturingNumberSequence.deleteMany({ where });
+    await prisma.inventoryItem.deleteMany({ where });
     await db.engineeringRequestOrder.deleteMany({ where });
     await db.engineeringRequestEvent.deleteMany({ where });
     await db.engineeringRequestRevision.deleteMany({ where });

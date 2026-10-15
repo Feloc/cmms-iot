@@ -10,6 +10,7 @@ import { apiBase, apiFetch } from '@/lib/api';
 import { useApiSWR } from '@/lib/swr';
 import { getAuthFromSession } from '@/lib/auth';
 import { EngineeringRequest, EngineeringUser, EngineeringOrder, Proposal, RequestFields as Fields, engineeringInput as input, engineeringError, engineeringDate, engineeringStatuses, priorities, requestTypes, disciplines, actionLabels, emptyProposal } from '@/lib/engineering';
+import ManufacturingOrders from '@/components/engineering/ManufacturingOrders';
 import RequestFields from '@/components/engineering/RequestFields';
 
 const actionStates: Record<string, string[]> = {
@@ -137,6 +138,7 @@ export default function EngineeringDetail() {
         <Link className="text-sm underline" href="/service-orders/new" target="_blank">Crear OS</Link>
       </form>}
     </section>}
+    {tab === 'Ejecución' && <ManufacturingOrders row={row} auth={auth} users={users || []} admin={admin} busy={busy} error={error} change={change} />}
     {tab === 'Archivos' && <section className="space-y-4">
       {open && participant && <label className="grid gap-2 text-sm"><span className="inline-flex items-center gap-2"><Paperclip className="h-4 w-4" />Adjuntar evidencia o documento</span><input type="file" disabled={busy} onChange={(e) => { upload(e.target.files?.[0]); e.target.value = ''; }} /></label>}
       {busy && <p role="status" className="text-sm">Procesando...</p>}

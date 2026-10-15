@@ -5,6 +5,8 @@ import { PrismaService } from '../../prisma.service';
 import { tenantStorage } from '../../common/tenant-context';
 import { MulterFile } from '../../common/multer-file';
 import { CreateEngineeringRequestDto, EngineeringActionDto, ProposalDto, UpdateEngineeringRequestDto } from './engineering.dto';
+import { ManufacturingService } from '../manufacturing/manufacturing.service';
+import { CreateEngineeringManufacturingDto } from './engineering.dto';
 import { assertPermission, nextStatus } from './engineering.domain';
 
 const assetSelect = { id: true, code: true, name: true, serialNumber: true, customer: true };
@@ -14,11 +16,15 @@ const detailInclude = {
   revisions: { orderBy: { revision: 'desc' } },
   events: { orderBy: { createdAt: 'asc' } },
   orders: { include: { workOrder: { select: { id: true, title: true, status: true, kind: true, assetCode: true } } } },
+  manufacturingOrders: { include: {
+    revision: { select: { revision: true } },
+    manufacturingOrder: { select: { id: true, number: true, productName: true, status: true, quantity: true, outputReceipts: { select: { quantity: true } } } },
+  }, orderBy: { createdAt: 'asc' } },
   attachments: { select: fileSelect, orderBy: { createdAt: 'desc' } },
 };
 @Injectable()
 export class EngineeringService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService, private readonly manufacturing: ManufacturingService) {}
   private async actor() {
     const { tenantId, userId } = tenantStorage.getStore() || {};
     if (!tenantId || !userId) throw new ForbiddenException('Inicia sesión');
@@ -177,7 +183,15 @@ export class EngineeringService {
         if (!orders.length || orders.some((o: any) => !['COMPLETED','CLOSED'].includes(o.workOrder.status))) {
           throw new ConflictException('Todas las órdenes vinculadas deben estar completadas o cerradas');
         }
+        const manufacturing = await tx.engineeringManufacturingOrder.findMany({ where: { requestId: id, tenantId: actor.tenantId }, include: { manufacturingOrder: true } });
+        if (manufacturing.some((link: any) => link.manufacturingOrder.status !== 'COMPLETED')) {
+          throw new ConflictException('Todas las OF vinculadas deben estar completadas');
+        }
         data.closedAt = new Date();
+      }
+      if (dto.action === 'cancel') {
+        const pending = await tx.engineeringManufacturingOrder.count({ where: { requestId: id, tenantId: actor.tenantId, manufacturingOrder: { status: { notIn: ['CANCELED', 'COMPLETED'] } } } });
+        if (pending) throw new ConflictException('Cancela o completa las OF vinculadas antes de cancelar la solicitud');
       }
       if (dto.action === 'hold') data.previousStatus = row.status;
       if (dto.action === 'resume') data.previousStatus = null;
@@ -199,6 +213,77 @@ export class EngineeringService {
       if (existing) throw new ConflictException('La orden ya está vinculada');
       await tx.engineeringRequestOrder.create({ data: { tenantId: actor.tenantId, requestId: id, workOrderId } });
       await this.event(tx, row, actor, 'order-linked', order.title, { workOrderId });
+    });
+  }
+  private async manufacturingRevision(tx: any, row: any, actor: any) {
+    if (actor.role !== 'ADMIN') throw new ForbiddenException('Solo administración gestiona vínculos de fabricación');
+    if (!['APPROVED', 'EXECUTION'].includes(row.status) || !row.approvedRevision) throw new ConflictException('Se requiere una solicitud aprobada o en ejecución');
+    const revision = await tx.engineeringRequestRevision.findFirst({ where: { tenantId: actor.tenantId, requestId: row.id, revision: row.approvedRevision } });
+    if (!revision) throw new ConflictException('No existe la revisión aprobada');
+    return revision;
+  }
+  async eligibleManufacturingOrders(id: string) {
+    const actor = await this.actor();
+    const row = await this.find(this.db(), actor.tenantId, id);
+    await this.manufacturingRevision(this.db(), row, actor);
+    return this.db().manufacturingOrder.findMany({
+      where: { tenantId: actor.tenantId, status: 'DRAFT', orderType: 'SPARE_PART', outputInventoryItemId: { not: null }, engineeringRequestLink: null, fulfillingAfterSalesDemands: { none: {} } },
+      select: { id: true, number: true, productName: true, quantity: true }, orderBy: { createdAt: 'desc' }, take: 200,
+    });
+  }
+  private async manufacturingEvent(tx: any, row: any, actor: any, order: any, revision: any, action: string, note?: string) {
+    const details = { manufacturingOrderId: order.id, revisionId: revision.id, revision: revision.revision };
+    await this.event(tx, row, actor, action, note || order.number, details);
+    await tx.manufacturingAuditEvent.create({ data: {
+      tenantId: actor.tenantId, manufacturingOrderId: order.id, entityType: 'EngineeringRequest', entityId: row.id, action: action.toUpperCase().replace(/-/g, '_'),
+      summary: row.number + ' / revisión ' + revision.revision, actorUserId: actor.id, actorName: actor.name || actor.id,
+      afterData: { requestId: row.id, ...details, ...(note ? { note } : {}) },
+    } });
+  }
+  async createManufacturingOrder(id: string, dto: CreateEngineeringManufacturingDto) {
+    return this.mutate(id, dto.version, async (tx, row, actor) => {
+      const revision = await this.manufacturingRevision(tx, row, actor);
+      const item = await tx.inventoryItem.findFirst({ where: { id: dto.inventoryItemId, tenantId: actor.tenantId, status: 'ACTIVE' } });
+      if (!item) throw new BadRequestException('Componente no encontrado o inactivo');
+      if (!await tx.user.findFirst({ where: { id: dto.responsibleUserId, tenantId: actor.tenantId, role: { in: ['ADMIN', 'TECH'] } } })) throw new BadRequestException('Responsable no válido');
+      const proposal = revision.snapshot.proposal;
+      const order = await this.manufacturing.createOrderInTransaction(tx, {
+        projectName: row.number + ' - ' + row.title, productName: item.name, productCode: item.sku,
+        quantity: dto.quantity, responsibleUserId: dto.responsibleUserId, priority: row.priority,
+        customerName: row.assetSnapshot?.customer, requestedDeliveryAt: dto.requestedDeliveryAt,
+        description: proposal.solution + '\n\n' + proposal.scope,
+        members: [
+          { userId: row.responsibleUserId, function: 'ENGINEERING' as const },
+          { userId: row.reviewerUserId, function: 'REVIEWER' as const },
+        ].filter(member => member.userId !== dto.responsibleUserId),
+      }, item.id);
+      await tx.engineeringManufacturingOrder.create({ data: { tenantId: actor.tenantId, requestId: id, revisionId: revision.id, manufacturingOrderId: order.id, createdByUserId: actor.id } });
+      await this.manufacturingEvent(tx, row, actor, order, revision, 'manufacturing-created');
+    });
+  }
+  async linkManufacturingOrder(id: string, version: number, manufacturingOrderId: string) {
+    return this.mutate(id, version, async (tx, row, actor) => {
+      const revision = await this.manufacturingRevision(tx, row, actor);
+      await tx.$queryRaw`SELECT "id" FROM "ManufacturingOrder" WHERE "id" = ${manufacturingOrderId} AND "tenantId" = ${actor.tenantId} FOR UPDATE`;
+      const order = await tx.manufacturingOrder.findFirst({
+        where: { id: manufacturingOrderId, tenantId: actor.tenantId, status: 'DRAFT', orderType: 'SPARE_PART', outputInventoryItemId: { not: null }, engineeringRequestLink: null, fulfillingAfterSalesDemands: { none: {} } },
+      });
+      if (!order) throw new ConflictException('Selecciona una OF de componente en borrador, sin otra solicitud o demanda vinculada');
+      await tx.engineeringManufacturingOrder.create({ data: { tenantId: actor.tenantId, requestId: id, revisionId: revision.id, manufacturingOrderId, createdByUserId: actor.id } });
+      await this.manufacturingEvent(tx, row, actor, order, revision, 'manufacturing-linked');
+    });
+  }
+  async unlinkManufacturingOrder(id: string, version: number, linkId: string, note: string) {
+    return this.mutate(id, version, async (tx, row, actor) => {
+      await this.manufacturingRevision(tx, row, actor);
+      if (!note?.trim()) throw new BadRequestException('Indica el motivo');
+      const link = await tx.engineeringManufacturingOrder.findFirst({ where: { id: linkId, requestId: id, tenantId: actor.tenantId }, include: { revision: true } });
+      if (!link) throw new NotFoundException('Vínculo no encontrado');
+      await tx.$queryRaw`SELECT "id" FROM "ManufacturingOrder" WHERE "id" = ${link.manufacturingOrderId} AND "tenantId" = ${actor.tenantId} FOR UPDATE`;
+      const order = await tx.manufacturingOrder.findFirst({ where: { id: link.manufacturingOrderId, tenantId: actor.tenantId } });
+      if (!order || !['DRAFT', 'CANCELED'].includes(order.status)) throw new ConflictException('Solo se desvinculan OF en borrador o canceladas');
+      await tx.engineeringManufacturingOrder.delete({ where: { id: link.id } });
+      await this.manufacturingEvent(tx, row, actor, order, link.revision, 'manufacturing-unlinked', note);
     });
   }
   async comment(id: string, version: number, note: string) {

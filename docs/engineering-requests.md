@@ -1,5 +1,7 @@
 # Solicitudes de ingeniería
 
+Manual paso a paso para usuarios: [Solicitudes de ingeniería](manuals/solicitudes-de-ingenieria.md).
+
 La primera versión gestiona un equipo por solicitud, enlazado por assetId.
 El código, nombre, serie y cliente originales se conservan en assetSnapshot.
 Entradas: menú Ingeniería, pestaña Ingeniería del activo, acción del activo, de la OS y del aviso.
@@ -25,9 +27,28 @@ Cada carga registra una huella SHA-256. Las propuestas aprobadas referencian una
 Las órdenes se vinculan/desvinculan en Aprobada o En ejecución, con registro en historial.
 Crear una OS y gestionar consumos utiliza las pantallas existentes.
 
+## Fabricación de componentes
+
+En la pestaña Ejecución, ADMIN puede crear una OF de componente del catálogo activo
+o vincular una OF SPARE_PART en borrador sin otra solicitud ni demanda posventa.
+La solicitud debe estar Aprobada o En ejecución. Una OF pertenece a una sola solicitud;
+una solicitud puede tener varias OF. TECH y VIEWER consultan el avance sin modificar vínculos.
+
+Cada vínculo conserva la revisión aprobada exacta, visible también desde la OF.
+Crear OF, asignar equipo, numerar, vincular e historizar ocurre en una transacción.
+La propuesta no reemplaza la aprobación de documentos, BOM o liberaciones de fabricación.
+La producción, calidad y recepción al inventario siguen el flujo existente.
+La recepción no instala el componente ni registra automáticamente su consumo en la OT/OS.
+
+La desvinculación exige motivo y OF en borrador o cancelada. No elimina la OF ni su historial.
+El cierre exige todas las OF vinculadas COMPLETED, además de OT/OS completadas/cerradas.
+Una OF cancelada debe desvincularse en Aprobada/En ejecución; desde Validación,
+primero se devuelve la solicitud a ejecución. No se cierra una reforma automáticamente.
+Para cancelar una solicitud deben estar canceladas o completadas todas sus OF.
+
 ## Instalación y pruebas
 
-Aplicar db/migrations/52_engineering_requests.sql con el ejecutor habitual de migraciones.
+Aplicar db/migrations/52_engineering_requests.sql y db/migrations/57_engineering_manufacturing.sql con el ejecutor habitual de migraciones.
 Regenerar Prisma (npx prisma generate) y reiniciar la API.
 No requiere nuevas variables de entorno.
 
@@ -44,5 +65,5 @@ exclusivamente sus datos al terminar.
 Esta versión no modifica la configuración del equipo ni documentos automáticamente:
 el cierre registra qué se actualizó y permite adjuntar el resultado.
 La ingeniería documental de fabricación mantiene su estructura actual.
-Liberaciones documentales independientes, integración directa con OF, cambios de
+Liberaciones documentales independientes, fabricación fuera del catálogo, cambios de
 alcance después de aprobar y campañas para varios equipos requieren una ampliación.

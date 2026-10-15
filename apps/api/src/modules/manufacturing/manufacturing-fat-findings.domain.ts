@@ -14,11 +14,12 @@ export function assertFatFindingTransition(current: string, target: string) {
   if (current !== target && !transitions[current]?.includes(target)) throw new ConflictException(`Transición no permitida: ${current} → ${target}`);
 }
 
-export function assertFatReady(cases: Array<{ result: string; required: boolean; evidenceRequired: boolean; evidence: unknown[]; deviations: Finding[] }>) {
-  if (cases.some(c => c.result === 'PENDING')) throw new ConflictException('Registra el resultado de todos los casos');
+export function assertFatReady(rows: Array<{ parentCaseId?: string | null; voidedAt?: unknown; result: string; required: boolean; evidenceRequired: boolean; evidence: unknown[]; deviations: Finding[] }>) {
+  const cases = rows.filter(c => !c.voidedAt);
+  if (cases.some(c => c.result === 'PENDING' && (!c.parentCaseId || c.required))) throw new ConflictException('Registra el resultado de todos los casos y subpuntos obligatorios');
   if (cases.some(c => c.required && c.result === 'NOT_APPLICABLE')) throw new ConflictException('Todos los casos obligatorios deben ejecutarse');
-  if (cases.some(c => c.evidenceRequired && !c.evidence.length)) throw new ConflictException('Falta evidencia en uno o más casos obligatorios');
-  if (cases.some(c => c.deviations.some(isBlockingFatFinding))) throw new ConflictException('Resuelve y verifica las no conformidades abiertas antes de enviar a aprobación');
+  if (cases.some(c => c.evidenceRequired && !c.evidence.length && (!c.parentCaseId || !['PENDING', 'NOT_APPLICABLE'].includes(c.result)))) throw new ConflictException('Falta evidencia en uno o más casos o subpuntos');
+  if (rows.some(c => c.deviations.some(isBlockingFatFinding))) throw new ConflictException('Resuelve y verifica las no conformidades abiertas antes de enviar a aprobación');
   if (cases.some(c => {
     const findings = c.deviations.filter(d => d.kind !== 'OBSERVATION');
     return c.result === 'FAIL' && (!findings.length || findings.some(d => d.status !== 'ACCEPTED_AS_IS'));

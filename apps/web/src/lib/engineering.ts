@@ -11,6 +11,7 @@ export const actionLabels: Record<string, string> = {
   'submit-review': 'Enviar a revisión', approve: 'Aprobar ejecución', revise: 'Devolver a estudio', reject: 'Rechazar',
   start: 'Iniciar ejecución', validate: 'Enviar a validación', close: 'Validar y cerrar', rework: 'Solicitar corrección',
   hold: 'Poner en espera', resume: 'Retomar', cancel: 'Cancelar solicitud',
+  'manufacturing-created': 'OF creada', 'manufacturing-linked': 'OF vinculada', 'manufacturing-unlinked': 'OF desvinculada',
   created: 'Solicitud creada', 'proposal-saved': 'Propuesta guardada', 'request-updated': 'Solicitud actualizada',
   'order-linked': 'Orden vinculada', 'order-unlinked': 'Orden desvinculada', 'file-added': 'Archivo adjunto', comment: 'Comentario',
 };
@@ -29,6 +30,7 @@ export type EngineeringRequest = RequestFields & {
   revisions: { id: string; revision: number; createdAt: string; snapshot: { proposal: Proposal; attachments: EngineeringFile[] } }[];
   events: { id: string; action: string; actorName: string; note?: string; createdAt: string; toStatus: string; details?: Record<string, any> }[];
   orders: { id: string; workOrder: EngineeringOrder }[];
+  manufacturingOrders: { id: string; revision: { revision: number }; manufacturingOrder: { id: string; number: string; productName: string; status: string; quantity: number; outputReceipts: { quantity: number }[] } }[];
   attachments: EngineeringFile[];
 };
 export const engineeringInput = 'w-full min-w-0 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-emerald-600';
