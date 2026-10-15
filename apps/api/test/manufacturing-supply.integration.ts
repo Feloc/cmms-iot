@@ -413,6 +413,17 @@ async function main() {
     assert.equal(fat.status, 'APPROVED');
     assert.equal(fat.summary.dispatchReady, true);
     await verifyApprovedObservation(fatService, admin, reviewer, order.id, fat.id, observationId);
+    await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, async () => {
+      const report = await fatService.reportSnapshot(fat.id);
+      assert.equal(report.execution.status, 'APPROVED');
+      assert.equal(report.execution.approvals.length, 1);
+      assert.ok(report.execution.cases.some((c: any) => c.parentCaseId && c.voidedAt));
+      assert.equal(report.order.id, order.id);
+      assert.ok(report.events.some((e: any) => e.summary.includes('subpunto anulado')));
+      const outsider = await prisma.user.findFirst({ where: { tenantId: admin.tenantId, email: 'fat-outsider@test.invalid' } });
+      await tenantStorage.run({ tenantId: admin.tenantId, userId: outsider.id }, async () => { await assert.rejects(() => fatService.reportSnapshot(fat.id), /no encontrada/); });
+      await tenantStorage.run({ tenantId: 'foreign-tenant', userId: admin.id }, async () => { await assert.rejects(() => fatService.reportSnapshot(fat.id), /no encontrado/); });
+    });
     readiness = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => fatService.dispatchReadiness(kits[0].manufacturedUnitId));
     assert.equal(readiness.ready, true);
     assert.deepEqual(readiness.reasons, []);

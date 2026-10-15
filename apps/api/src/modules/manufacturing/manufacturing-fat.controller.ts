@@ -18,6 +18,13 @@ import { CreateManufacturingFatEvidenceDto, CreateManufacturingFatExecutionDto, 
 @Controller('manufacturing')
 export class ManufacturingFatController {
   constructor(private readonly service: ManufacturingFatService) {}
+  @Get('fat-executions/:executionId/report.pdf')
+  async report(@Param('executionId') id: string, @Res({ passthrough: true }) response: Response) {
+    const file = await this.service.reportPdf(id);
+    response.setHeader('Cache-Control', 'private, no-store');
+    response.setHeader('X-Content-Type-Options', 'nosniff');
+    return new StreamableFile(file.buffer, { type: 'application/pdf', length: file.buffer.length, disposition: `attachment; filename="${file.filename}"` });
+  }
   @Post('fat-cases/:caseId/subpoints') createSubpoint(@Param('caseId') id: string, @Body() dto: CreateManufacturingFatSubpointDto) { return this.service.createSubpoint(id, dto); }
   @Post('fat-cases/:caseId/void') voidSubpoint(@Param('caseId') id: string, @Body() dto: VoidManufacturingFatSubpointDto) { return this.service.voidSubpoint(id, dto); }
   @Post('fat-cases/:caseId/evidence/file')

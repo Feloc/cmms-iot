@@ -4,6 +4,7 @@ import { tenantStorage } from '../../common/tenant-context';
 import { assertFatFindingTransition, assertFatReady, FAT_OPEN_FINDING_STATUSES, isBlockingFatFinding } from './manufacturing-fat-findings.domain';
 import { assertIndependentApproval } from './manufacturing-approval';
 import { normalizeFatSubpoint } from './manufacturing-fat-subpoints.domain';
+import { fatReportHtml, fatReportPictures, renderFatPdf, FatReportSnapshot } from './manufacturing-fat-report';
 import { CreateManufacturingFatSubpointDto, VoidManufacturingFatSubpointDto } from './dto/manufacturing-fat.dto';
 import { promises as fs } from 'fs';
 import { fatMediaPath, FatMediaFile, FatMediaMetadata, storeFatMedia, validateFatMedia } from './manufacturing-fat-media';
@@ -43,6 +44,28 @@ export class ManufacturingFatService {
       cases: { include: { evidence: { where: { deviationId: null }, orderBy: { createdAt: 'desc' } }, deviations: { include: { evidence: { orderBy: { createdAt: 'desc' } } }, orderBy: { sequence: 'asc' } } }, orderBy: { position: 'asc' } },
       approvals: { orderBy: { signedAt: 'desc' } },
     };
+  }
+
+  async reportSnapshot(executionId: string): Promise<FatReportSnapshot> {
+    const { tenantId, userId } = this.context();
+    return this.prisma.$transaction(async (tx: any) => {
+      const actor = await this.actor(tx, tenantId, userId);
+      const execution = await tx.manufacturingFatExecution.findFirst({ where: { id: executionId, tenantId }, include: this.include() });
+      if (!execution) throw new NotFoundException('Ejecución FAT no encontrada');
+      const order = await this.visibleOrder(tx, tenantId, execution.manufacturingOrderId, actor);
+      const company = await tx.tenant.findUnique({ where: { id: tenantId }, select: { name: true, legalName: true, taxId: true } });
+      const ids = [execution.id, ...execution.cases.flatMap((c: any) => [c.id, ...c.deviations.map((d: any) => d.id)])];
+      const events = await tx.manufacturingAuditEvent.findMany({ where: { tenantId, manufacturingOrderId: order.id, entityId: { in: ids } }, select: { entityId: true, actorName: true, createdAt: true, summary: true, afterData: true }, orderBy: { createdAt: 'asc' } });
+      return { execution, order, company, events, generatedAt: new Date(), generatedBy: actor.name };
+    }, { isolationLevel: 'RepeatableRead' });
+  }
+
+  async reportPdf(executionId: string) {
+    const snapshot = await this.reportSnapshot(executionId);
+    const pictures = await fatReportPictures(snapshot);
+    const buffer = await renderFatPdf(fatReportHtml(snapshot, pictures));
+    const code = snapshot.execution.executionCode.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 100);
+    return { buffer, filename: `FAT-${code}-v${snapshot.execution.lockVersion}.pdf` };
   }
 
   async listTemplates(rawActive?: string) {
