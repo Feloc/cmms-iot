@@ -22,6 +22,10 @@ export class UpdateManufacturingDispatchChecklistDto {
   evidenceReference?: string | null;
   notes?: string | null;
 }
+export class CreateManufacturingDispatchChecklistEvidenceDto {
+  title!: string;
+  notes?: string | null;
+}
 export class CreateManufacturingDispatchPackageDto {
   packageType!: 'CRATE' | 'PALLET' | 'BOX' | 'LOOSE' | 'OTHER';
   description!: string;

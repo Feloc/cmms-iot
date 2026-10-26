@@ -2,15 +2,15 @@ import { Res, UseGuards, UsePipes } from '@nestjs/common';
 import { createReadStream } from 'fs';
 import type { Response } from 'express';
 import { FAT_MEDIA_MAX_BYTES, FatMediaFile } from './manufacturing-fat-media';
-import { ManufacturingAccessGuard } from './manufacturing-access.guard';
+import { ManufacturingAccessGuard, ManufacturingReadOnly } from './manufacturing-access.guard';
 import { ManufacturingValidationPipe } from './manufacturing-validation.pipe';
-import { Body, Controller, Get, Param, Post, Patch, Query, StreamableFile, UploadedFile, UseInterceptors } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Param, Post, Patch, Query, StreamableFile, UploadedFile, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { FAT_IMPORT_MAX_BYTES, fatProtocolExample, previewFatProtocol } from './manufacturing-fat-import';
 import { ManufacturingFatService } from './manufacturing-fat.service';
 import { CreateManufacturingFatDeviationDto } from './dto/manufacturing-fat.dto';
-import { CreateManufacturingFatSubpointDto, VoidManufacturingFatSubpointDto } from './dto/manufacturing-fat.dto';
+import { CreateManufacturingFatSubpointDto, GenerateManufacturingFatReportDto, VoidManufacturingFatSubpointDto } from './dto/manufacturing-fat.dto';
 import { CreateManufacturingFatEvidenceDto, CreateManufacturingFatExecutionDto, CreateManufacturingFatTemplateDto, DecideManufacturingFatDto, ManufacturingFatVersionDto, RecordManufacturingFatCaseDto, UpdateManufacturingFatDeviationDto } from './dto/manufacturing-fat.dto';
 
 @UseGuards(ManufacturingAccessGuard)
@@ -21,6 +21,15 @@ export class ManufacturingFatController {
   @Get('fat-executions/:executionId/report.pdf')
   async report(@Param('executionId') id: string, @Res({ passthrough: true }) response: Response) {
     const file = await this.service.reportPdf(id);
+    response.setHeader('Cache-Control', 'private, no-store');
+    response.setHeader('X-Content-Type-Options', 'nosniff');
+    return new StreamableFile(file.buffer, { type: 'application/pdf', length: file.buffer.length, disposition: `attachment; filename="${file.filename}"` });
+  }
+  @Post('fat-executions/:executionId/report.pdf')
+  @HttpCode(200)
+  @ManufacturingReadOnly()
+  async selectedReport(@Param('executionId') id: string, @Body() dto: GenerateManufacturingFatReportDto, @Res({ passthrough: true }) response: Response) {
+    const file = await this.service.reportPdf(id, dto.caseIds);
     response.setHeader('Cache-Control', 'private, no-store');
     response.setHeader('X-Content-Type-Options', 'nosniff');
     return new StreamableFile(file.buffer, { type: 'application/pdf', length: file.buffer.length, disposition: `attachment; filename="${file.filename}"` });

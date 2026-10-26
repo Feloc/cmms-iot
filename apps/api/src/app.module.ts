@@ -1,4 +1,5 @@
 import { TasksModule } from './modules/tasks/tasks.module';
+import { ToolsModule } from './modules/tools/tools.module';
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { AuthModule } from './modules/auth/auth.module';
@@ -53,6 +54,7 @@ import { EngineeringModule } from './modules/engineering/engineering.module';
     ManufacturingModule,
     EngineeringModule,
     TasksModule,
+    ToolsModule,
   ],
 })
 export class AppModule {}

@@ -40,7 +40,7 @@ export class AttachmentsService {
     const skip = (page - 1) * size;
 
     // Resolver filtro según tu modelo actual (scalar FKs workOrderId/assetId)
-    const where: any = { tenantId };
+    const where: any = { tenantId, expenseId: null };
     if (q.assemblyActivityId) {
       where.assemblyActivityId = q.assemblyActivityId;
     } else if (q.entityType && q.entityId) {
@@ -63,7 +63,7 @@ export class AttachmentsService {
 
   async findOne(id: string) {
     const tenantId = this.getTenantId();
-    const item = await this.prisma.attachment.findFirst({ where: { id, tenantId } });
+    const item = await this.prisma.attachment.findFirst({ where: { id, tenantId, expenseId: null } });
     if (!item) throw new NotFoundException('Attachment not found');
     return item;
   }
@@ -119,6 +119,7 @@ export class AttachmentsService {
     if (!userId) throw new ForbiddenException('Usuario no autenticado');
     const item = await this.prisma.attachment.findFirst({ where: { id, tenantId } });
     if (!item) throw new NotFoundException('Attachment not found');
+    if (item.expenseId) throw new ConflictException('Los soportes de gastos se gestionan desde el gasto del servicio');
     if ((item as any).manufacturingOrderId || (item as any).engineeringRequestId) {
       throw new ConflictException('Los archivos de Ingeniería se gestionan desde su revisión documental');
     }

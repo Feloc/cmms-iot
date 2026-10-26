@@ -1,0 +1,3 @@
+codigo,nombre,categoria,control,cantidad,marca,modelo,serial,ubicacion,responsable_email,fecha_compra,observaciones
+HER-00001,Taladro eléctrico,Eléctrica,INDIVIDUAL,1,,,,Bodega principal,,,Herramienta de ejemplo
+HER-00002,Llave de 13 mm,Manual,CANTIDAD,10,,,,Taller principal,,,Grupo de herramientas iguales

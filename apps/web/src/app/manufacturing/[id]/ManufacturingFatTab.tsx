@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { ApprovalException } from '../ApprovalException';
 import { ManufacturingFatFindings, type FatFindingCall } from './ManufacturingFatFindings';
 import { ManufacturingFatImport } from './ManufacturingFatImport';
+import { ManufacturingFatReport } from './ManufacturingFatReport';
 import { FatProtocolSubpoints, FatExecutionSubpointForm, type FatSubpointDraft } from './ManufacturingFatSubpoints';
 import { apiBase, apiFetch } from '@/lib/api';
 import { FatMediaAuth, FatMediaUpload, FatEvidenceList, fatMediaResponse } from './ManufacturingFatMedia';
@@ -70,16 +71,24 @@ function ExecutionCreator({ units, templates, auth, onChanged, onError }: { unit
 function ExecutionCard({ execution, assignees, role, auth, onChanged, onError }: { execution: ManufacturingFatExecution; assignees: Array<{ id: string; name: string }>; role: string; auth: Auth; onChanged: (items: ManufacturingFatExecution[]) => void | Promise<void>; onError: (value: string) => void }) {
   const [approvalExceptionReason, setApprovalExceptionReason] = useState('');
   const [open, setOpen] = useState(execution.status !== 'APPROVED'); const [busy, setBusy] = useState('');
-  async function downloadReport() {
-    if (!auth.token || !auth.tenantSlug || busy) return;
+  async function downloadReport(caseIds: string[]): Promise<string | undefined> {
+    if (!auth.token || !auth.tenantSlug) return 'Sesión no disponible. Inicia sesión de nuevo.';
+    if (busy || !caseIds.length) return 'Selecciona al menos un punto y espera a que termine la operación actual.';
     setBusy('report'); onError('');
     try {
-      const response = await fetch(`${apiBase}/manufacturing/fat-executions/${execution.id}/report.pdf`, { headers: { Authorization: `Bearer ${auth.token}`, 'x-tenant': auth.tenantSlug } });
+      const partial = caseIds.length < execution.cases.length;
+      const response = await fetch(`${apiBase}/manufacturing/fat-executions/${execution.id}/report.pdf`, {
+        method: partial ? 'POST' : 'GET',
+        headers: { Authorization: `Bearer ${auth.token}`, 'x-tenant': auth.tenantSlug, ...(partial ? { 'Content-Type': 'application/json' } : {}) },
+        ...(partial ? { body: JSON.stringify({ caseIds }) } : {}),
+      });
       await fatMediaResponse(response);
       const url = URL.createObjectURL(await response.blob());
-      const link = document.createElement('a'); link.href = url; link.download = `FAT-${execution.executionCode.replace(/[^a-zA-Z0-9_-]/g, '-')}.pdf`; link.click();
+      const filename = response.headers.get('Content-Disposition')?.match(/filename="([^"]+)"/)?.[1];
+      const link = document.createElement('a'); link.href = url; link.download = filename || `FAT-${execution.executionCode.replace(/[^a-zA-Z0-9_-]/g, '-')}${partial ? '-parcial' : ''}.pdf`; document.body.appendChild(link); link.click(); link.remove();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
-    } catch (error: any) { onError(apiError(error, 'No se pudo generar el reporte FAT')); } finally { setBusy(''); }
+      return undefined;
+    } catch (error: any) { const message = apiError(error, 'No se pudo generar el reporte FAT'); onError(message); return message; } finally { setBusy(''); }
   }
   async function call(path: string, body: any, method = 'POST', action = path) {
     if (!auth.token || !auth.tenantSlug || busy) return;
@@ -96,7 +105,7 @@ function ExecutionCard({ execution, assignees, role, auth, onChanged, onError }:
   async function decide(decision: 'APPROVED' | 'REJECTED') { const comments = window.prompt(decision === 'APPROVED' ? 'Comentarios de aprobación (opcional):' : 'Motivo del rechazo:'); if (decision === 'REJECTED' && !comments) return; await call(`fat-executions/${execution.id}/decision`, { lockVersion: execution.lockVersion, decision, comments, approvalExceptionReason: approvalExceptionReason || undefined }, 'POST', decision); }
   return <div className={`rounded-lg border ${execution.summary.dispatchReady ? 'border-emerald-300' : ''}`}><button className="flex w-full flex-wrap items-center justify-between gap-3 p-4 text-left" onClick={() => setOpen((value) => !value)}><div><div className="flex items-center gap-2"><strong>{execution.executionCode}</strong><span className={`rounded-full px-2 py-0.5 text-xs ${statusClass(execution.status)}`}>{statusLabel(execution.status)}</span>{execution.summary.dispatchReady ? <span className="rounded bg-emerald-700 px-2 py-0.5 text-xs text-white">Listo para despacho</span> : null}</div><div className="text-xs text-gray-500">Unidad {execution.manufacturedUnit.unitNumber} · {execution.templateName} v{execution.templateVersion} · Ensamble {execution.assemblyExecution.executionCode}</div></div><div className="text-right"><strong>{execution.summary.progressPercent}%</strong><div className="text-xs text-gray-500">{execution.summary.passedCount} conformes · {execution.summary.failedCount} no conformes · {execution.summary.openDeviationCount} novedades pendientes · {execution.summary.blockingDeviationCount} bloqueantes</div></div></button>
     {open ? <div className="space-y-3 border-t p-4">{execution.status === 'DRAFT' ? <button disabled={!!busy} className="rounded bg-black px-3 py-2 text-sm text-white" onClick={() => call(`fat-executions/${execution.id}/start`, { lockVersion: execution.lockVersion }, 'POST', 'start')}>Iniciar FAT</button> : null}{execution.status === 'IN_PROGRESS' ? <button disabled={!!busy} className="rounded bg-indigo-800 px-3 py-2 text-sm text-white" onClick={() => call(`fat-executions/${execution.id}/submit`, { lockVersion: execution.lockVersion }, 'POST', 'submit')}>Enviar a aprobación</button> : null}{execution.status === 'AWAITING_APPROVAL' && role === 'ADMIN' ? <div className="flex flex-wrap gap-2"><ApprovalException value={approvalExceptionReason} onChange={setApprovalExceptionReason} /><button disabled={!!busy} className="rounded bg-emerald-700 px-3 py-2 text-sm text-white" onClick={() => decide('APPROVED')}>Firmar aprobación</button><button disabled={!!busy} className="rounded border border-red-300 px-3 py-2 text-sm text-red-700" onClick={() => decide('REJECTED')}>Rechazar</button></div> : null}
-      <div className="flex flex-wrap items-center gap-2"><button type="button" disabled={!!busy} className="rounded border bg-white px-3 py-2 text-sm disabled:opacity-50" onClick={downloadReport}>{busy === 'report' ? 'Generando PDF…' : 'Descargar reporte FAT (PDF)'}</button><span className="text-xs text-gray-500">{execution.status === 'APPROVED' ? 'Incluye aprobaciones registradas y seguimiento actual.' : 'Se identificará como reporte no aprobado.'}</span></div>
+      <div className="flex flex-wrap items-center gap-2"><ManufacturingFatReport execution={execution} busy={busy} onDownload={downloadReport} /><span className="text-xs text-gray-500">{execution.status === 'APPROVED' ? 'Incluye aprobaciones registradas y seguimiento actual.' : 'Se identificará como reporte no aprobado.'}</span></div>
       <div className="space-y-2">{execution.cases.filter(c => !c.parentCaseId).map((fatCase) => <CaseRow key={fatCase.id} fatCase={fatCase} subpoints={execution.cases.filter(c => c.parentCaseId === fatCase.id)} executionStatus={execution.status} permissions={execution.permissions} assignees={assignees} role={role} busy={busy} call={call} />)}</div>
       {execution.approvals.length ? <div className="rounded bg-gray-50 p-3 text-sm"><strong>Firmas</strong>{execution.approvals.map((approval) => <div key={approval.id} className="mt-1 text-xs text-gray-600">{approval.decision === 'APPROVED' ? 'Aprobado' : 'Rechazado'} por {approval.signedByName} ({approval.signedByRole}) · {dateLabel(approval.signedAt, true)}{approval.comments ? ` · ${approval.comments}` : ''}</div>)}</div> : null}
     </div> : null}

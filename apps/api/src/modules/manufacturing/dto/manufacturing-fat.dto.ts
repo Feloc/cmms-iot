@@ -37,6 +37,7 @@ export class CreateManufacturingFatTemplateDto {
   }>;
 }
 
+export class GenerateManufacturingFatReportDto { caseIds!: string[]; }
 export class CreateManufacturingFatExecutionDto { templateId!: string; }
 export class ManufacturingFatVersionDto { lockVersion!: number; }
 export class RecordManufacturingFatCaseDto {

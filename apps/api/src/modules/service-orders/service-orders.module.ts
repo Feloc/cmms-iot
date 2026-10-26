@@ -9,11 +9,14 @@ import { NotificationsModule } from '../notifications/notifications.module';
 import { ServiceOrderCarryoverService } from './service-order-carryover.service';
 import { AfterSalesPartDemandsService } from './after-sales-part-demands.service';
 import { ManufacturingQuickService } from '../manufacturing/manufacturing-quick.service';
+import { ServiceOrderExpensesController } from './service-order-expenses.controller';
+import { ServiceOrderExpensesService } from './service-order-expenses.service';
+import { ServiceOrderExpenseUploadGuard } from './service-order-expense-upload.guard';
 
 @Module({
   imports: [InventoryModule, NotificationsModule],
-  controllers: [ServiceOrdersController],
-  providers: [ServiceOrdersService, ServiceOrderCarryoverService, AfterSalesPartDemandsService, ManufacturingQuickService, PrismaService],
+  controllers: [ServiceOrdersController, ServiceOrderExpensesController],
+  providers: [ServiceOrdersService, ServiceOrderExpensesService, ServiceOrderExpenseUploadGuard, ServiceOrderCarryoverService, AfterSalesPartDemandsService, ManufacturingQuickService, PrismaService],
   exports: [ServiceOrderCarryoverService],
 })
 export class ServiceOrdersModule implements OnModuleInit {

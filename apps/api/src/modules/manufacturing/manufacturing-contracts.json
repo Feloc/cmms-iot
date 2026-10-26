@@ -510,6 +510,24 @@
       }
     }
   },
+  "CreateManufacturingDispatchChecklistEvidenceDto": {
+    "object": {
+      "title": {
+        "type": "string"
+      },
+      "notes": {
+        "union": [
+          {
+            "type": "string"
+          },
+          {
+            "literal": null
+          }
+        ],
+        "optional": true
+      }
+    }
+  },
   "CreateManufacturingDispatchDocumentDto": {
     "object": {
       "documentType": {
@@ -2289,6 +2307,15 @@
           }
         ],
         "optional": true
+      }
+    }
+  },
+  "GenerateManufacturingFatReportDto": {
+    "object": {
+      "caseIds": {
+        "array": {
+          "type": "string"
+        }
       }
     }
   },

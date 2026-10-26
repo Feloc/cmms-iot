@@ -1,6 +1,10 @@
-import { CanActivate, ExecutionContext, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { CanActivate, ExecutionContext, ForbiddenException, Injectable, NotFoundException, SetMetadata } from '@nestjs/common';
 import { PrismaService } from '../../prisma.service';
 import { tenantStorage } from '../../common/tenant-context';
+
+const READ_ONLY = 'manufacturing:readOnly';
+// For POST exports with JSON options. The service still checks tenant/order visibility.
+export const ManufacturingReadOnly = () => SetMetadata(READ_ONLY, true);
 
 // Reads remain available to viewers; observers never gain write access merely
 // by belonging to an order. Services retain their action-specific permissions.
@@ -15,6 +19,8 @@ export class ManufacturingAccessGuard implements CanActivate {
     const actor = await this.prisma.user.findFirst({ where: { id: userId, tenantId }, select: { role: true } });
     if (!actor) throw new ForbiddenException('Usuario no encontrado');
     if (['GET', 'HEAD', 'OPTIONS'].includes(request.method)) return true;
+    const handler = context.getHandler?.();
+    if (handler && Reflect.getMetadata(READ_ONLY, handler) === true) return true;
     if (actor.role === 'ADMIN') return true;
     if (actor.role !== 'TECH') throw new ForbiddenException('Tu rol solo permite consultar manufactura');
 
@@ -35,6 +41,7 @@ export class ManufacturingAccessGuard implements CanActivate {
       'fat-deviations': ['manufacturingFatDeviation', 'execution.manufacturingOrder'],
       dispatches: ['manufacturingDispatch', 'manufacturingOrder'],
       'dispatch-checklist': ['manufacturingDispatchChecklistItem', 'dispatch.manufacturingOrder'],
+      'dispatch-checklist-evidence': ['manufacturingDispatchChecklistEvidence', 'checklistItem.dispatch.manufacturingOrder'],
       'dispatch-packages': ['manufacturingDispatchPackage', 'dispatch.manufacturingOrder'],
       'dispatch-documents': ['manufacturingDispatchDocument', 'dispatch.manufacturingOrder'],
       'site-deployments': ['manufacturingSiteDeployment', 'manufacturingOrder'],

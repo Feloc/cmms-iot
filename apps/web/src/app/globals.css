@@ -5,13 +5,13 @@
   --radius: 0.75rem;
 
   /* Colores base (ajústalos a tu paleta) */
-  --color-background: 255 255 255;
-  --color-foreground: 10 10 10;
+  --color-background: rgb(255 255 255);
+  --color-foreground: rgb(10 10 10);
 
-  --color-muted: 245 245 247;
-  --color-muted-foreground: 113 113 122;
+  --color-muted: rgb(245 245 247);
+  --color-muted-foreground: rgb(113 113 122);
 
-  --color-border: 228 228 231;
+  --color-border: rgb(228 228 231);
 }
 
 /* Reseteo y fondo/texto por defecto */

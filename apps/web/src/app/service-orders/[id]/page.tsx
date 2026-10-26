@@ -13,6 +13,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { SignatureCanvas } from '@/components/SignatureCanvas';
 import { ServiceOrderImagesGallery } from '@/components/ServiceOrderImagesGallery';
 import { ServiceOrderFilesSection } from '@/components/ServiceOrderFilesSection';
+import { ServiceOrderExpensesSection } from '@/components/ServiceOrderExpensesSection';
 import { ServiceOrderChecklistSection } from '@/components/ServiceOrderChecklistSection';
 import { AssetSearchSelect } from '@/components/AssetSearchSelect';
 import {
@@ -3271,6 +3272,8 @@ async function setTimestamp(key: TsKey, localValue: string) {
           </div>
         )}
       </section>
+
+      {(isAdmin || isAssignedTech) && <ServiceOrderExpensesSection serviceOrderId={id} />}
 
       {/* Adjuntos adicionales */}
       <ServiceOrderFilesSection serviceOrderId={id} type="VIDEO" title="Videos" />

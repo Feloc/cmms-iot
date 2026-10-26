@@ -22,6 +22,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: '/assemblies', label: 'Montajes' },
   { href: '/assets', label: 'Activos' },
   { href: '/inventory', label: 'Inventario', adminOnly: true },
+  { href: '/tools', label: 'Herramientas' },
   { href: '/tenant-branding', label: 'Branding', adminOnly: true },
   { href: '/pm-plans', label: 'PM Plans' },
   { href: '/users', label: 'Usuarios', adminOnly: true },
@@ -192,6 +193,8 @@ function iconFor(href: string) {
       return '🛠️';
     case '/inventory':
       return '📦';
+    case '/tools':
+      return '🔧';
     case '/tenant-branding':
       return '🎨';
     case '/pm-plans':

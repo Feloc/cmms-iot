@@ -360,6 +360,7 @@ enum InventoryMovementSource {
 }
 
 model Tenant {
+  tools                                  Tool[]
   id   String @id @default(cuid())
   slug String @unique
   name String
@@ -432,6 +433,7 @@ model Tenant {
   assetMeterReadings           AssetMeterReading[]
   serviceOrderIssues           ServiceOrderIssue[]
   serviceOrderCommercialNotes  ServiceOrderCommercialNote[]
+  serviceOrderExpenses         ServiceOrderExpense[]
   attachments                  Attachment[]
   workNotes                    WorkNote[]
   assetImportUploads           AssetImportUpload[]
@@ -484,6 +486,7 @@ model Tenant {
   manufacturingFatApprovals ManufacturingFatApproval[]
   manufacturingDispatches ManufacturingDispatch[]
   manufacturingDispatchChecklistItems ManufacturingDispatchChecklistItem[]
+  manufacturingDispatchChecklistEvidence ManufacturingDispatchChecklistEvidence[]
   manufacturingDispatchPackages ManufacturingDispatchPackage[]
   manufacturingDispatchDocuments ManufacturingDispatchDocument[]
   manufacturingSiteDeployments ManufacturingSiteDeployment[]
@@ -905,6 +908,7 @@ model WorkOrder {
   meterReadings                        AssetMeterReading[]
   serviceOrderIssue                    ServiceOrderIssue?
   commercialNotes                      ServiceOrderCommercialNote[]
+  expenses                             ServiceOrderExpense[]
   attachments                          Attachment[]
   workNotes                            WorkNote[]
   assemblyExecution                    AssemblyExecution?
@@ -912,6 +916,7 @@ model WorkOrder {
   engineeringRequestOrders             EngineeringRequestOrder[]
 
   @@index([tenantId, status])
+  @@unique([tenantId, id])
   @@index([tenantId, commercialStatus])
   @@index([tenantId, assetCode, status])
 }
@@ -1641,6 +1646,9 @@ model Attachment {
   engineeringRequestId String?
   engineeringRequest EngineeringRequest? @relation(fields: [engineeringRequestId], references: [id], onDelete: Restrict)
 
+  expenseId String?
+  expense   ServiceOrderExpense? @relation(fields: [tenantId, expenseId], references: [tenantId, id], onDelete: Restrict)
+
   type         AttachmentType
   filename     String
   mimeType     String
@@ -1655,6 +1663,61 @@ model Attachment {
   @@index([tenantId, assetId, isAssetPhoto])
   @@index([tenantId, assemblyActivityId, createdAt(sort: Desc)])
   @@index([tenantId, manufacturingOrderId, createdAt(sort: Desc)])
+  @@index([tenantId, expenseId, createdAt(sort: Desc)])
+}
+
+enum ServiceExpenseCategory {
+  TRANSPORT
+  MEALS
+  LODGING
+  TOLLS
+  PARKING
+  MATERIALS
+  OTHER
+}
+
+enum ServiceExpensePaidBy {
+  EMPLOYEE
+  COMPANY
+}
+
+model ServiceOrderExpense {
+  id              String @id @default(cuid())
+  tenantId        String
+  tenant          Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  workOrderId     String
+  workOrder       WorkOrder @relation(fields: [tenantId, workOrderId], references: [tenantId, id], onDelete: Restrict)
+  expenseDate     DateTime @db.Date
+  category        ServiceExpenseCategory
+  description     String
+  amount          Decimal @db.Decimal(14, 2)
+  currency        String @default("COP") @db.VarChar(3)
+  paidBy          ServiceExpensePaidBy
+  createdByUserId String
+  createdByName   String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  version         Int @default(1)
+  voidedAt        DateTime?
+  receipts        Attachment[]
+  events          ServiceOrderExpenseEvent[]
+
+  @@unique([tenantId, id])
+  @@index([tenantId, workOrderId, expenseDate(sort: Desc)])
+}
+
+model ServiceOrderExpenseEvent {
+  id          String @id @default(cuid())
+  tenantId    String
+  expenseId   String
+  expense     ServiceOrderExpense @relation(fields: [tenantId, expenseId], references: [tenantId, id], onDelete: Cascade)
+  action      String
+  actorUserId String
+  actorName   String
+  details     Json
+  createdAt   DateTime @default(now())
+
+  @@index([tenantId, expenseId, createdAt])
 }
 
 enum AttachmentType {
@@ -3211,8 +3274,8 @@ model ManufacturingDispatch {
   manufacturingOrder   ManufacturingOrder @relation(fields: [manufacturingOrderId], references: [id], onDelete: Cascade)
   manufacturedUnitId String @unique
   manufacturedUnit   ManufacturedUnit @relation(fields: [manufacturedUnitId], references: [id], onDelete: Restrict)
-  fatExecutionId String @unique
-  fatExecution   ManufacturingFatExecution @relation(fields: [fatExecutionId], references: [id], onDelete: Restrict)
+  fatExecutionId String? @unique
+  fatExecution   ManufacturingFatExecution? @relation(fields: [fatExecutionId], references: [id], onDelete: Restrict)
 
   dispatchCode String
   status       ManufacturingDispatchStatus @default(DRAFT)
@@ -3279,8 +3342,30 @@ model ManufacturingDispatchChecklistItem {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  evidence ManufacturingDispatchChecklistEvidence[]
+
+  @@unique([tenantId, id])
   @@unique([dispatchId, position])
   @@index([tenantId, dispatchId, status, position])
+}
+
+model ManufacturingDispatchChecklistEvidence {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  checklistItemId String
+  checklistItem ManufacturingDispatchChecklistItem @relation(fields: [tenantId, checklistItemId], references: [tenantId, id], onDelete: Cascade, map: "ManufacturingDispatchChecklistEvidence_tenant_item_fkey")
+  title      String
+  notes      String?
+  storageKey String @unique
+  filename   String
+  mimeType   String
+  size       Int
+  createdByUserId String
+  createdByName   String
+  createdAt DateTime @default(now())
+
+  @@index([tenantId, checklistItemId, createdAt(sort: Desc)], map: "ManufacturingDispatchChecklistEvidence_tenant_item_created_idx")
 }
 
 model ManufacturingDispatchPackage {
@@ -3322,6 +3407,10 @@ model ManufacturingDispatchDocument {
   reference    String?
   url          String?
   notes        String?
+  storageKey   String? @unique
+  filename     String?
+  mimeType     String?
+  size         Int?
   createdByUserId String
   createdByName   String
   createdAt DateTime @default(now())
@@ -3896,4 +3985,84 @@ model TaskAttachment {
   createdByUserId String
   createdAt DateTime @default(now())
   @@index([tenantId, taskId, createdAt])
+}
+
+model Tool {
+  id                String   @id @default(cuid())
+  tenantId          String
+  tenant            Tenant   @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  code              String
+  name              String
+  category          String?
+  tracking          String
+  quantity          Int
+  availableQty      Int
+  maintenanceQty    Int      @default(0)
+  damagedQty        Int      @default(0)
+  retiredQty        Int      @default(0)
+  brand             String?
+  model             String?
+  serialNumber      String?
+  location          String
+  responsibleUserId String?
+  acquiredOn        DateTime? @db.Date
+  notes             String?
+  version           Int      @default(1)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  loans             ToolLoan[]
+  events            ToolEvent[]
+  photo             ToolPhoto?
+
+  @@unique([tenantId, id])
+  @@unique([tenantId, code])
+  @@index([tenantId, name])
+}
+
+model ToolLoan {
+  id                String   @id @default(cuid())
+  tenantId          String
+  toolId            String
+  tool              Tool     @relation(fields: [tenantId, toolId], references: [tenantId, id], onDelete: Restrict)
+  recipientUserId   String
+  recipientName     String
+  quantity          Int
+  returnedQty       Int      @default(0)
+  destination       String
+  expectedReturnOn  DateTime? @db.Date
+  note              String?
+  deliveredById     String
+  deliveredByName   String
+  createdAt         DateTime @default(now())
+  returnedAt        DateTime?
+
+  @@index([tenantId, toolId, createdAt])
+  @@index([tenantId, recipientUserId])
+}
+
+model ToolEvent {
+  id        String   @id @default(cuid())
+  tenantId  String
+  toolId    String
+  tool      Tool     @relation(fields: [tenantId, toolId], references: [tenantId, id], onDelete: Restrict)
+  action    String
+  actorId   String
+  actorName String
+  note      String?
+  details   Json
+  createdAt DateTime @default(now())
+
+  @@index([tenantId, toolId, createdAt])
+}
+
+model ToolPhoto {
+  id        String   @id @default(cuid())
+  tenantId  String
+  toolId    String
+  tool      Tool     @relation(fields: [tenantId, toolId], references: [tenantId, id], onDelete: Restrict)
+  mimeType  String
+  data      Bytes
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, toolId])
 }

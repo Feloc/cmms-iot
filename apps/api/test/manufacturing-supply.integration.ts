@@ -427,10 +427,13 @@ async function main() {
     readiness = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => fatService.dispatchReadiness(kits[0].manufacturedUnitId));
     assert.equal(readiness.ready, true);
     assert.deepEqual(readiness.reasons, []);
-    await assert.rejects(
-      () => tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => dispatchService.create(kits[1].manufacturedUnitId, { destination: 'Cliente temporal' })),
-      /FAT aprobado/,
-    );
+    await tx.$executeRawUnsafe('SAVEPOINT early_dispatch_preparation');
+    const earlyDispatches = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => dispatchService.create(kits[1].manufacturedUnitId, { destination: 'Cliente temporal' }));
+    const earlyDispatch = earlyDispatches.find((item: any) => item.manufacturedUnitId === kits[1].manufacturedUnitId);
+    assert.equal(earlyDispatch.status, 'DRAFT');
+    assert.equal(earlyDispatch.summary.fatGateOpen, false);
+    await tx.$executeRawUnsafe('ROLLBACK TO SAVEPOINT early_dispatch_preparation');
+    await tx.$executeRawUnsafe('RELEASE SAVEPOINT early_dispatch_preparation');
     await prisma.manufacturedUnit.update({ where: { id: kits[0].manufacturedUnitId }, data: { serialNumber: `SER-${stamp}` } });
     let dispatches = await tenantStorage.run({ tenantId: admin.tenantId, userId: admin.id }, () => dispatchService.create(kits[0].manufacturedUnitId, { destination: 'Planta cliente', deliveryAddress: 'Zona industrial temporal', plannedDispatchAt: '2026-09-15T08:00:00-05:00' }));
     let dispatch = dispatches[0];

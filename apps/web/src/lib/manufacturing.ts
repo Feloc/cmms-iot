@@ -611,6 +611,17 @@ export type ManufacturingFatExecution = {
   summary: { caseCount: number; passedCount: number; failedCount: number; pendingCount: number; openDeviationCount: number; blockingDeviationCount: number; observationCount: number; closedDeviationCount: number; progressPercent: number; dispatchReady: boolean };
 };
 
+export type ManufacturingDispatchChecklistEvidence = {
+  id: string;
+  title: string;
+  notes?: string | null;
+  filename: string;
+  mimeType: string;
+  size: number;
+  createdByName: string;
+  createdAt: string;
+};
+
 export type ManufacturingDispatchChecklistItem = {
   id: string;
   position: number;
@@ -624,6 +635,7 @@ export type ManufacturingDispatchChecklistItem = {
   lockVersion: number;
   completedAt?: string | null;
   completedByName?: string | null;
+  evidence: ManufacturingDispatchChecklistEvidence[];
 };
 
 export type ManufacturingDispatchPackage = {
@@ -649,15 +661,20 @@ export type ManufacturingDispatchDocument = {
   reference?: string | null;
   url?: string | null;
   notes?: string | null;
+  storageKey?: string | null;
+  filename?: string | null;
+  mimeType?: string | null;
+  size?: number | null;
   createdByName: string;
   createdAt: string;
 };
 
 export type ManufacturingDispatch = {
   id: string;
+  permissions?: { canOperate: boolean };
   manufacturingOrderId: string;
   manufacturedUnitId: string;
-  fatExecutionId: string;
+  fatExecutionId: string | null;
   dispatchCode: string;
   status: ManufacturingDispatchStatus;
   lockVersion: number;
@@ -685,7 +702,7 @@ export type ManufacturingDispatch = {
   canceledReason?: string | null;
   notes?: string | null;
   manufacturedUnit: ManufacturedUnit;
-  fatExecution: { id: string; executionCode: string; sequence: number; status: ManufacturingFatExecutionStatus; decidedAt?: string | null };
+  fatExecution: { id: string; executionCode: string; sequence: number; status: ManufacturingFatExecutionStatus; decidedAt?: string | null } | null;
   checklistItems: ManufacturingDispatchChecklistItem[];
   packages: ManufacturingDispatchPackage[];
   documents: ManufacturingDispatchDocument[];
