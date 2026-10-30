@@ -21,7 +21,9 @@
     "test:manufacturing:integration": "ts-node --transpile-only test/manufacturing-supply.integration.ts && ts-node --transpile-only test/manufacturing-quick.integration.ts",
     "parts-manual:import": "ts-node prisma/import-parts-manual.ts",
     "test:tasks": "node --test -r ts-node/register/transpile-only test/tasks.spec.ts",
-    "test:tasks:integration": "node -r ts-node/register/transpile-only test/tasks.integration.ts"
+    "test:tasks:integration": "node -r ts-node/register/transpile-only test/tasks.integration.ts",
+    "test:quotations": "node --test -r ts-node/register/transpile-only test/quotations.spec.ts",
+    "test:quotations:integration": "node -r ts-node/register/transpile-only test/quotations.integration.ts"
   },
   "dependencies": {
     "@nestjs/common": "^10.0.0",

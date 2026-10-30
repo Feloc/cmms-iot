@@ -360,6 +360,7 @@ enum InventoryMovementSource {
 }
 
 model Tenant {
+  quotations                             Quotation[]
   tools                                  Tool[]
   id   String @id @default(cuid())
   slug String @unique
@@ -4065,4 +4066,184 @@ model ToolPhoto {
   updatedAt DateTime @updatedAt
 
   @@unique([tenantId, toolId])
+}
+
+// Commercial case: independent from the operational service/manufacturing orders.
+model Quotation {
+  id String @id @default(cuid())
+  tenantId String
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  code String
+  title String
+  customerName String
+  customerTaxId String?
+  contactName String
+  contactEmail String?
+  contactPhone String?
+  description String
+  currency String @default("COP")
+  status String @default("REQUESTED")
+  previousStatus String?
+  coordinatorId String
+  responsibleId String
+  area String @default("TECHNICAL")
+  dueAt DateTime?
+  assetId String?
+  currentRevision Int @default(0)
+  approvedRevision Int?
+  createdById String
+  version Int @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  lines QuotationLine[]
+  revisions QuotationRevision[]
+  offers QuotationOffer[]
+  documents QuotationDocument[]
+  attachments QuotationAttachment[]
+  events QuotationEvent[]
+  @@unique([tenantId, id])
+  @@unique([tenantId, code])
+  @@index([tenantId, status, dueAt])
+  @@index([tenantId, responsibleId, updatedAt])
+}
+
+model QuotationLine {
+  id String @id @default(cuid())
+  tenantId String
+  quotationId String
+  quotation Quotation @relation(fields: [tenantId, quotationId], references: [tenantId, id], onDelete: Restrict)
+  position Int
+  kind String
+  route String
+  description String
+  uom String @default("UND")
+  quantity Decimal @db.Decimal(18, 6)
+  unitPrice Decimal @default(0) @db.Decimal(18, 2)
+  taxPct Decimal @default(0) @db.Decimal(5, 2)
+  approvedQty Decimal @default(0) @db.Decimal(18, 6)
+  orderedQty Decimal @default(0) @db.Decimal(18, 6)
+  receivedQty Decimal @default(0) @db.Decimal(18, 6)
+  executedQty Decimal @default(0) @db.Decimal(18, 6)
+  invoicedQty Decimal @default(0) @db.Decimal(18, 6)
+  dispatchedQty Decimal @default(0) @db.Decimal(18, 6)
+  deliveredQty Decimal @default(0) @db.Decimal(18, 6)
+  inventoryItemId String?
+  serviceOrderId String?
+  manufacturingOrderId String?
+  offers QuotationOffer[]
+  @@unique([tenantId, quotationId, id])
+  @@unique([quotationId, position])
+}
+
+model QuotationRevision {
+  id String @id @default(cuid())
+  tenantId String
+  quotationId String
+  quotation Quotation @relation(fields: [tenantId, quotationId], references: [tenantId, id], onDelete: Restrict)
+  number Int
+  snapshot Json
+  total Decimal @db.Decimal(18, 2)
+  validUntil DateTime
+  terms String
+  sentTo String
+  evidenceId String
+  createdById String
+  createdAt DateTime @default(now())
+  @@unique([quotationId, number])
+  @@index([tenantId, quotationId])
+}
+
+model QuotationOffer {
+  id String @id @default(cuid())
+  tenantId String
+  quotationId String
+  quotation Quotation @relation(fields: [tenantId, quotationId], references: [tenantId, id], onDelete: Restrict)
+  lineId String
+  line QuotationLine @relation(fields: [tenantId, quotationId, lineId], references: [tenantId, quotationId, id], onDelete: Restrict)
+  supplier String
+  reference String
+  unitCost Decimal @db.Decimal(18, 2)
+  currency String
+  leadDays Int
+  validUntil DateTime
+  selected Boolean @default(false)
+  evidenceId String
+  createdById String
+  createdAt DateTime @default(now())
+  @@index([tenantId, quotationId, lineId])
+}
+
+model QuotationDocument {
+  id String @id @default(cuid())
+  tenantId String
+  quotationId String
+  quotation Quotation @relation(fields: [tenantId, quotationId], references: [tenantId, id], onDelete: Restrict)
+  kind String
+  reference String
+  revision Int
+  evidenceId String
+  date DateTime
+  note String
+  items Json
+  supplier String?
+  sourceDocumentId String?
+  amount Decimal? @db.Decimal(18, 2)
+  createdById String
+  createdAt DateTime @default(now())
+  @@unique([tenantId, quotationId, id])
+  @@unique([tenantId, quotationId, kind, reference])
+  @@index([tenantId, quotationId, createdAt])
+}
+
+model QuotationAttachment {
+  id String @id @default(cuid())
+  tenantId String
+  quotationId String
+  quotation Quotation @relation(fields: [tenantId, quotationId], references: [tenantId, id], onDelete: Restrict)
+  purpose String
+  revision Int?
+  filename String
+  mimeType String
+  size Int
+  storageKey String
+  sha256 String
+  createdById String
+  createdAt DateTime @default(now())
+  @@unique([tenantId, quotationId, id])
+  @@index([tenantId, quotationId, createdAt])
+}
+
+model QuotationEvent {
+  id String @id @default(cuid())
+  tenantId String
+  quotationId String
+  quotation Quotation @relation(fields: [tenantId, quotationId], references: [tenantId, id], onDelete: Restrict)
+  action String
+  actorId String
+  actorName String
+  note String
+  details Json
+  createdAt DateTime @default(now())
+  @@index([tenantId, quotationId, createdAt])
+}
+
+model QuotationAccess {
+  id String @id @default(cuid())
+  tenantId String
+  userId String
+  capabilities String[] @default([])
+  updatedAt DateTime @updatedAt
+  @@unique([tenantId, userId])
+}
+
+model QuotationAccessEvent {
+  id String @id @default(cuid())
+  tenantId String
+  userId String
+  actorId String
+  actorName String
+  before String[]
+  after String[]
+  createdAt DateTime @default(now())
+  @@index([tenantId, createdAt])
 }

@@ -144,6 +144,11 @@ export class InventoryLedgerService {
     });
   }
 
+  // Allows a commercial receipt and its inventory entry to share one transaction.
+  async receiveInventory(tx: Prisma.TransactionClient, input: Omit<ApplyInventoryDeltaInput, 'deltaSign' | 'movementType'>) {
+    return this.applyInventoryDelta(tx, { ...input, deltaSign: 1, movementType: 'ENTRY' });
+  }
+
   async returnInventory(
     tx: Prisma.TransactionClient,
     input: Omit<ApplyInventoryDeltaInput, 'deltaSign' | 'movementType'>,
